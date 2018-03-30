@@ -176,21 +176,15 @@ impl<T> ArcSwap<T> {
         let arc = unsafe {
             Arc::from_raw(ptr)
         };
-        // Bump the reference count by one, so we can return one into the shared ptr and another to
+        // Bump the reference count by one, so we can return one into the arc and another to
         // the caller.
         assert!(Arc::into_raw(Arc::clone(&arc)) == ptr);
         // Return the pointer and reference count back
-        let likely_null = self.ptr.compare_and_swap(
-            ptr::null_mut(), // Store it only if there's still NULL
-            ptr as *mut T,
-            // The relaxed ordering: we don't publish anything new, the data at the end of the
-            // pointer is still published by whatever put it into there in the first place. And we
-            // don't read the target of the returned pointer.
-            Ordering::Relaxed
-        );
-        if !likely_null.is_null() {
-            dispose(ptr);
-        }
+        //
+        // Release ordering ‒ while the target of the pointer has already been published before
+        // (when it got in us for the first time), we need to make sure that the reference count
+        // bump doesn't get below this.
+        assert!(self.ptr.swap(ptr as *mut T, Ordering::Release).is_null());
 
         arc
     }
@@ -199,37 +193,55 @@ impl<T> ArcSwap<T> {
     ///
     /// Further loads will yield the new value.
     pub fn store(&self, arc: Arc<T>) {
-        let ptr = strip(arc);
-        assert!(!ptr.is_null());
-        let orig = self.ptr.swap(ptr, Ordering::Release);
-        if !orig.is_null() {
-            // If there was something before (there might have been a temporary hole, but the one
-            // trying to plug it back will discover we replaced it in between), drop it properly.
-            dispose(orig);
-        }
+        self.swap(arc);
     }
 
     /// Exchanges the value inside this instance.
     pub fn swap(&self, arc: Arc<T>) -> Arc<T> {
-        let ptr = strip(arc);
-        assert!(!ptr.is_null());
-        loop {
-            let orig = self.ptr.load(Ordering::Relaxed);
-            if orig.is_null() {
-                continue;
-            }
-            let exchanged = self.ptr.compare_exchange_weak(
-                orig,
-                ptr,
-                Ordering::AcqRel,
-                Ordering::Relaxed
-            );
-            if let Ok(extracted) = exchanged {
-                assert_eq!(extracted, orig);
-                unsafe {
-                    return Arc::from_raw(extracted);
+        let new = strip(arc);
+        assert!(!new.is_null());
+        let old = self.get();
+        assert!(!old.is_null());
+        assert!(self.ptr.swap(new as *mut T, Ordering::Release).is_null());
+        unsafe {
+            Arc::from_raw(old)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate crossbeam_utils;
+
+    use super::*;
+    use self::crossbeam_utils::scoped as thread;
+
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn publish() {
+        for _ in 0..1000 {
+            let config = ArcSwap::from(Arc::new(String::default()));
+            let ended = AtomicUsize::new(0);
+            thread::scope(|scope| {
+                scope.spawn(|| {
+                    let new_conf = Arc::new("New configuration".to_owned());
+                    config.store(new_conf);
+                });
+                for _ in 0..10 {
+                    scope.spawn(|| {
+                        loop {
+                            let cfg = config.load();
+                            if !cfg.is_empty() {
+                                assert_eq!(*cfg, "New configuration");
+                                ended.fetch_add(1, Ordering::Relaxed);
+                                return;
+                            }
+                        }
+                    });
                 }
-            }
+            });
+            assert_eq!(10, ended.load(Ordering::Relaxed));
         }
     }
 }
