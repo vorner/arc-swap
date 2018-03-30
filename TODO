@@ -1,0 +1,7 @@
+* Tests
+  - It seems the top-level doc example sometimes deadlocks. The non-null value
+    somehow gets lost and all the reader threads keep reading forever.
+* Proofs
+* No-std support
+* Licencing, publishing
+* CI

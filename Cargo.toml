@@ -4,3 +4,6 @@ version = "0.1.0"
 authors = ["Michal 'vorner' Vaner <vorner@vorner.cz>"]
 
 [dependencies]
+
+[dev-dependencies]
+crossbeam-utils = "~0.3"
