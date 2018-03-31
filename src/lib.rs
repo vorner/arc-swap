@@ -65,9 +65,8 @@
 //! [`shared_ptr`]: http://en.cppreference.com/w/cpp/memory/shared_ptr
 
 use std::marker::PhantomData;
-use std::ptr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
 
 // TODO: Implementation notes/rationale/proofs
 
@@ -144,34 +143,19 @@ impl<T> Drop for ArcSwap<T> {
     }
 }
 
-impl<T> ArcSwap<T> {
-    /// Extracts the pointer from self, leaving NULL in its place temporarily.
-    fn get(&self) -> *const T {
-        loop {
-            // Get the content of the pointer.
-            //
-            // The ordering: We don't publish anything (that null points nowhere), so it's fine not
-            // to release.
-            //
-            // We do acquire, because incrementing an Arc's ref count doesn't and relies on
-            // something that provided the Arc in the first place to do so. In this case it is us
-            // that smuggles the pointer from one thread to another through this atomic.
-            let ptr = self.ptr.swap(ptr::null_mut(), Ordering::Acquire);
-            // If, by accident, the ptr is null, it means it is just borrowed to play with. It'll
-            // get back soon, so try again.
-            if !ptr.is_null() {
-                return ptr;
-            }
-        }
-    }
+static GEN_IDX: AtomicUsize = ATOMIC_USIZE_INIT;
+static GEN_READERS: AtomicUsize = ATOMIC_USIZE_INIT;
 
+impl<T> ArcSwap<T> {
     /// Loads the value.
     ///
     /// This makes another copy (reference) and returns it, atomically (it is safe even when other
     /// thread stores into the same instance at the same time).
     pub fn load(&self) -> Arc<T> {
-        // Borrow the reference count by taking it out of the atomic ptr for a short while
-        let ptr = self.get();
+        let gen = GEN_IDX.load(Ordering::Acquire);
+        let gen_val = 1 << (16 * gen);
+        GEN_READERS.fetch_add(gen_val, Ordering::Acquire);
+        let ptr = self.ptr.load(Ordering::Acquire);
         assert!(!ptr.is_null());
         let arc = unsafe {
             Arc::from_raw(ptr)
@@ -179,13 +163,7 @@ impl<T> ArcSwap<T> {
         // Bump the reference count by one, so we can return one into the arc and another to
         // the caller.
         assert!(Arc::into_raw(Arc::clone(&arc)) == ptr);
-        // Return the pointer and reference count back
-        //
-        // Release ordering ‒ while the target of the pointer has already been published before
-        // (when it got in us for the first time), we need to make sure that the reference count
-        // bump doesn't get below this.
-        assert!(self.ptr.swap(ptr as *mut T, Ordering::Release).is_null());
-
+        GEN_READERS.fetch_sub(gen_val, Ordering::Release);
         arc
     }
 
@@ -199,10 +177,12 @@ impl<T> ArcSwap<T> {
     /// Exchanges the value inside this instance.
     pub fn swap(&self, arc: Arc<T>) -> Arc<T> {
         let new = strip(arc);
-        assert!(!new.is_null());
-        let old = self.get();
+        let old = self.ptr.swap(new, Ordering::AcqRel);
         assert!(!old.is_null());
-        assert!(self.ptr.swap(new as *mut T, Ordering::Release).is_null());
+        // TODO: Handle the generations
+        while GEN_READERS.load(Ordering::Acquire) > 0 {
+            atomic::spin_loop_hint();
+        }
         unsafe {
             Arc::from_raw(old)
         }
