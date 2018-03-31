@@ -83,6 +83,7 @@
 //! [`Mutex`]: https://doc.rust-lang.org/std/sync/struct.Mutex.html
 //! [`shared_ptr`]: http://en.cppreference.com/w/cpp/memory/shared_ptr
 
+use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 use std::marker::PhantomData;
 use std::mem;
 use std::process;
@@ -191,6 +192,24 @@ impl<T> Drop for ArcSwap<T> {
         // Arc instead of us, which will clear the ref.
         let ptr = *self.ptr.get_mut();
         dispose(ptr);
+    }
+}
+
+impl<T> Clone for ArcSwap<T> {
+    fn clone(&self) -> Self {
+        Self::from(self.load())
+    }
+}
+
+impl<T: Debug> Debug for ArcSwap<T> {
+    fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
+        self.load().fmt(formatter)
+    }
+}
+
+impl<T: Display> Display for ArcSwap<T> {
+    fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
+        self.load().fmt(formatter)
     }
 }
 
