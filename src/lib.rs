@@ -87,18 +87,12 @@ use std::marker::PhantomData;
 use std::mem;
 use std::process;
 use std::sync::Arc;
-use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering, ATOMIC_USIZE_INIT};
+use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
 
 // TODO: Implementation notes/rationale/proofs
 
 /// Store count for 2 newest generations (others must always be 0)
 const GEN_CNT: usize = 2;
-
-/// Either 0 or 1, describing current generation where readers should register.
-static GEN_IDX: AtomicUsize = ATOMIC_USIZE_INIT;
-
-/// Count of readers in either generation (at bits 0-15 & 16-31).
-static GEN_READERS: AtomicUsize = ATOMIC_USIZE_INIT;
 
 /// Dispose of one ref count for this pointer.
 fn dispose<T>(ptr: *const T) {
@@ -130,36 +124,6 @@ fn mask(gen: usize) -> usize {
     }
 }
 
-/// Wait until all readers go away.
-fn wait_for_readers() {
-    for _ in 0..2 {
-        let gen = GEN_IDX.load(Ordering::Acquire);
-        let mask = mask(1 - gen % GEN_CNT);
-        loop {
-            let state = GEN_READERS.load(Ordering::Acquire);
-            // If there are no readers at all, it's safe ‒ nobody to wait for, shortcircuit the
-            // whole thing.
-            if state == 0 {
-                return;
-            }
-            // If the other generation gets empty, we can proceed and perform the switch
-            if state & mask == 0 {
-                break;
-            }
-            let cur_gen = GEN_IDX.load(Ordering::Relaxed);
-            // Someone has advanced the generation already
-            if cur_gen != gen {
-                break;
-            }
-            atomic::spin_loop_hint();
-        }
-        let new_gen = gen.wrapping_add(1);
-        // Try advancing the generation. Don't worry if it doesn't work, because it can happen only
-        // if someone else already did that.
-        GEN_IDX.compare_and_swap(gen, new_gen, Ordering::Release);
-    }
-}
-
 /// An atomic storage for [`Arc`].
 ///
 /// This is a storage where an [`Arc`] may live. It can be read and written atomically from several
@@ -188,7 +152,16 @@ fn wait_for_readers() {
 /// [`from`]: https://doc.rust-lang.org/nightly/std/convert/trait.From.html#tymethod.from
 pub struct ArcSwap<T> {
     // Notes: AtomicPtr needs Sized
+    /// The actual pointer, extracted from the Arc.
     ptr: AtomicPtr<T>,
+
+    /// Either 0 or 1, describing current generation where readers should register.
+    gen_idx: AtomicUsize,
+
+    /// Count of readers in either generation (at bits 0-15 & 16-31 on 32-bit, or twice bigger on
+    /// 64bit).
+    gen_readers: AtomicUsize,
+
     // We are basically an Arc in disguise. Inherit parameters from Arc by pretending to contain
     // it.
     _phantom_arc: PhantomData<Arc<T>>,
@@ -202,6 +175,8 @@ impl<T> From<Arc<T>> for ArcSwap<T> {
         let ptr = strip(arc);
         Self {
             ptr: AtomicPtr::new(ptr),
+            gen_idx: AtomicUsize::new(0),
+            gen_readers: AtomicUsize::new(0),
             _phantom_arc: PhantomData,
         }
     }
@@ -225,9 +200,9 @@ impl<T> ArcSwap<T> {
     /// This makes another copy (reference) and returns it, atomically (it is safe even when other
     /// thread stores into the same instance at the same time).
     pub fn load(&self) -> Arc<T> {
-        let gen = GEN_IDX.load(Ordering::Acquire) % GEN_CNT;
+        let gen = self.gen_idx.load(Ordering::Acquire) % GEN_CNT;
         let gen_val = 1 << (mem::size_of::<usize>() * 4 * gen);
-        let previous = GEN_READERS.fetch_add(gen_val, Ordering::Acquire);
+        let previous = self.gen_readers.fetch_add(gen_val, Ordering::Acquire);
         let mask = mask(gen);
         // Too many readers at once. We detect it after the fact and have no way to fix it, so give
         // up. Note that panic wouldn't be enough.
@@ -241,7 +216,7 @@ impl<T> ArcSwap<T> {
         // Bump the reference count by one, so we can return one into the arc and another to
         // the caller.
         Arc::into_raw(Arc::clone(&arc));
-        GEN_READERS.fetch_sub(gen_val, Ordering::Release);
+        self.gen_readers.fetch_sub(gen_val, Ordering::Release);
         arc
     }
 
@@ -256,12 +231,42 @@ impl<T> ArcSwap<T> {
     pub fn swap(&self, arc: Arc<T>) -> Arc<T> {
         let new = strip(arc);
         let old = self.ptr.swap(new, Ordering::AcqRel);
-        wait_for_readers();
+        self.wait_for_readers();
         unsafe {
             Arc::from_raw(old)
         }
     }
-}
+
+    /// Wait until all readers go away.
+    fn wait_for_readers(&self) {
+        for _ in 0..2 {
+            let gen = self.gen_idx.load(Ordering::Acquire);
+            let mask = mask(1 - gen % GEN_CNT);
+            loop {
+                let state = self.gen_readers.load(Ordering::Acquire);
+                // If there are no readers at all, it's safe ‒ nobody to wait for, shortcircuit the
+                // whole thing.
+                if state == 0 {
+                    return;
+                }
+                // If the other generation gets empty, we can proceed and perform the switch
+                if state & mask == 0 {
+                    break;
+                }
+                let cur_gen = self.gen_idx.load(Ordering::Relaxed);
+                // Someone has advanced the generation already
+                if cur_gen != gen {
+                    break;
+                }
+                atomic::spin_loop_hint();
+            }
+            let new_gen = gen.wrapping_add(1);
+            // Try advancing the generation. Don't worry if it doesn't work, because it can happen
+            // only if someone else already did that.
+            self.gen_idx.compare_and_swap(gen, new_gen, Ordering::Release);
+        }
+    }
+    }
 
 #[cfg(test)]
 mod tests {
