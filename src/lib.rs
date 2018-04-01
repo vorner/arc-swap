@@ -2,7 +2,8 @@
 //!
 //! The [`Arc`] uses atomic reference counters, so the object behind it can be safely pointed to by
 //! several threads at once. However, the [`Arc`] itself is quite ordinary ‒ to change its value
-//! (make it point somewhere else), one has to be the sole owner of it.
+//! (make it point somewhere else), one has to be the sole owner of it (or store it behind a
+//! [`Mutex`]).
 //!
 //! On the other hand, there's [`AtomicPtr`]. It can be modified and read from multiple threads,
 //! allowing to pass the value from one thread to another without the use of a [`Mutex`]. The
@@ -33,17 +34,8 @@
 //!
 //! However, this implementation doesn't suffer from contention. Specifically, arbitrary number of
 //! readers can access the shared value and won't be blocked. Even when there are many readers and
-//! writers at once, the writers, they don't block each other. The writers will be somewhat slower
-//! when there are active readers at the same time, but won't be stopped indefinitely.
-//!
-//! # Limitations
-//!
-//! Current implementation doesn't support more than 2^16 on 32-bit systems or 2^32 on 64-bit
-//! systems concurrent readers (that shouldn't be a problem, as so many threads would probably kill
-//! the OS anyway).
-//!
-//! Other pointer widths are currently not supported, but if specific size is needed, it can be
-//! added.
+//! writers at once, they don't block each other. The writers will be somewhat slower when there
+//! are active readers at the same time, but won't be stopped indefinitely.
 //!
 //! # Example
 //!
@@ -85,8 +77,6 @@
 
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 use std::marker::PhantomData;
-use std::mem;
-use std::process;
 use std::sync::Arc;
 use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
 
@@ -95,7 +85,8 @@ use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
 // The first idea would be to just use AtomicPtr with whatever the Arc::into_raw returns. Then
 // replacing it would be fine (there's no need to update ref counts). The load needs to increment
 // the reference count ‒ one still stays inside and another is returned to the caller. This is done
-// by re-creating the Arc from the raw pointer and then cloning it, throwing one instance away.
+// by re-creating the Arc from the raw pointer and then cloning it, throwing one instance away
+// (without destroying it).
 //
 // This approach has a problem. There's a short time between we read the raw pointer and increment
 // the count. If some other thread replaces the stored Arc and throws it away, the ref count could
@@ -127,26 +118,41 @@ use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
 // busy-wait for this number to drop to 0 ‒ then there are no readers at all. This is safe, but a
 // steady inflow of readers could make a writer wait forever.
 //
-// We introduce the concept of generation. We count the readers in generations separately. After a
-// writer switches the pointer, it increments a generation and all new readers start tracking their
-// time in the new one. The writer doesn't have to wait for these new readers (because they see the
-// new value of the pointer and that one still owns its ref count) so it can wait only for the old
-// generation to drop to 0. This must happen soon, because no new readers increment it.
+// Therefore, we separate readers into two groups, odd and even ones (see below how). When we see
+// both groups to drop to 0 (not necessarily at the same time, though), we are sure all the
+// previous readers were flushed ‒ each of them had to be either odd or even.
 //
-// Technically, we keep just two generations, new and old. This is to have bounded storage for the
-// generations, to fit them into one atomic counter and to avoid the need to check several „old“
-// generations for dropping to 0 (if we had multiple historical ones, we would have to check all of
-// them).
+// To do that, we define a generation. A generation is a number, incremented at certain times and a
+// reader decides by this number if it is odd or even.
 //
-// Therefore, a writer needs to first wait for the „prehistoric“ (the one even older than old, that
-// predated this writer) generation to turn to 0 before incrementing the generation and reusing the
-// now-0 count for counter of the new generation. Then it waits for the now-old generation to drop
-// to 0.
+// One of the writers may increment the generation when it sees a zero in the next-generation's
+// group (if the writer sees 0 in the odd group and the current generation is even, all the current
+// writers are even ‒ so it remembers it saw odd-zero and increments the generation, so new readers
+// start to appear in the odd group and the even has a chance to drop to zero later on). Only one
+// writer does this switch, but all that witness the zero can remember it.
 //
-// Note that concurrent writers can „ride the same wave“, they can share these two increments of
-// generations.
+// # Memory orders
 //
-// Arguments for why the memory orderings are enough as they are are inline.
+// We need to make sure several things happen or don't.
+//
+// First, we have to guarantee the target of the pointer is visible in whatever thread receives a
+// copy of the Arc. Having AcqRel on the swap (because it can both publish and read the pointer)
+// and Acquire on the load is enough for this purpose.
+//
+// Second, the dangerous area when we borrowed the pointer but haven't yet incremented its ref
+// count needs to stay between incrementing and decrementing the reader count (in either group). To
+// accomplish that, using Acquire on the increment and Release on the decrement would be enough.
+//
+// Now the hard part :-). We need to ensure that whatever zero a writer sees is not stale in the
+// sense that it happened before the switch of the pointer. In other words, we need to make sure
+// that at the time we start to look for the zeroes, we already see all the current readers. To do
+// that, we need to synchronize the time lines of the pointer itself and the corresponding group
+// counters. As these are separate, unrelated, atomics, it calls for SeqCst ‒ on the swap and on
+// the increment. This'll guarantee that they'll know which happened first (either increment or the
+// swap), making a base line for the following operations (load of the pointer or looking for
+// zeroes).
+//
+// All other operations can be Relaxed.
 
 /// Store count for 2 newest generations (others must always be 0)
 const GEN_CNT: usize = 2;
@@ -154,24 +160,6 @@ const GEN_CNT: usize = 2;
 /// Turn the arc into a raw pointer.
 fn strip<T>(arc: Arc<T>) -> *mut T {
     Arc::into_raw(arc) as *mut T
-}
-
-fn mask(gen: usize) -> usize {
-    if mem::size_of::<usize>() == 4 {
-        match gen {
-            0 => 0x0000_ffff,
-            1 => 0xffff_0000,
-            _ => unreachable!(),
-        }
-    } else if mem::size_of::<usize>() == 8 {
-        match gen {
-            0 => 0x0000_0000_ffff_ffff,
-            1 => 0xffff_ffff_0000_0000,
-            _ => unreachable!(),
-        }
-    } else {
-        unimplemented!("Unsupported pointer width");
-    }
 }
 
 /// An atomic storage for [`Arc`].
@@ -206,15 +194,14 @@ pub struct ArcSwap<T> {
     /// The actual pointer, extracted from the Arc.
     ptr: AtomicPtr<T>,
 
-    /// Either 0 or 1, describing current generation where readers should register.
+    /// The current generation. Module by their count to discover the groups.
     gen_idx: AtomicUsize,
 
-    /// Count of readers in either generation (at bits 0-15 & 16-31 on 32-bit, or twice bigger on
-    /// 64bit).
-    gen_readers: AtomicUsize,
+    /// Count of readers in either generation.
+    reader_group_cnts: [AtomicUsize; GEN_CNT],
 
-    // We are basically an Arc in disguise. Inherit parameters from Arc by pretending to contain
-    // it.
+    /// We are basically an Arc in disguise. Inherit parameters from Arc by pretending to contain
+    /// it.
     _phantom_arc: PhantomData<Arc<T>>,
 }
 
@@ -227,7 +214,7 @@ impl<T> From<Arc<T>> for ArcSwap<T> {
         Self {
             ptr: AtomicPtr::new(ptr),
             gen_idx: AtomicUsize::new(0),
-            gen_readers: AtomicUsize::new(0),
+            reader_group_cnts: [AtomicUsize::new(0), AtomicUsize::new(0)],
             _phantom_arc: PhantomData,
         }
     }
@@ -235,8 +222,8 @@ impl<T> From<Arc<T>> for ArcSwap<T> {
 
 impl<T> Drop for ArcSwap<T> {
     fn drop(&mut self) {
-        // Note that by now we are visible only by one thread, so we can abandon all these
-        // atomic-ordering madnesses.
+        // Note that by now we are visible only by one thread (otherwise we couldn't get `&mut`),
+        // so we can abandon all these atomic-ordering madnesses.
 
         // We hold one reference in the Arc, but it's hidden. Convert us back to Arc and drop that
         // Arc instead of us, which will clear the ref.
@@ -272,23 +259,23 @@ impl<T> ArcSwap<T> {
     /// This makes another copy (reference) and returns it, atomically (it is safe even when other
     /// thread stores into the same instance at the same time).
     pub fn load(&self) -> Arc<T> {
-        let gen = self.gen_idx.load(Ordering::Acquire) % GEN_CNT;
-        let gen_val = 1 << (mem::size_of::<usize>() * 4 * gen);
-        let previous = self.gen_readers.fetch_add(gen_val, Ordering::Acquire);
-        let mask = mask(gen);
-        // Too many readers at once. We detect it after the fact and have no way to fix it, so give
-        // up. Note that panic wouldn't be enough.
-        if previous & mask == mask {
-            process::abort();
-        }
+        let gen = self.gen_idx.load(Ordering::Relaxed) % GEN_CNT;
+        // Unlike the real Arc, we don't have to check for the ref count overflow. Nobody can drop
+        // a reader.
+        //
+        // SeqCst: Acquire, so the dangerous section stays in. SeqCst to sync timelines with the
+        // swap on the ptr in writer thread.
+        self.reader_group_cnts[gen].fetch_add(1, Ordering::SeqCst);
+        // Acquire, to get the target of the pointer.
         let ptr = self.ptr.load(Ordering::Acquire);
         let arc = unsafe {
             Arc::from_raw(ptr)
         };
         // Bump the reference count by one, so we can return one into the arc and another to
         // the caller.
-        mem::forget(Arc::clone(&arc));
-        self.gen_readers.fetch_sub(gen_val, Ordering::Release);
+        Arc::into_raw(Arc::clone(&arc));
+        // Release, so the dangerous section stays in.
+        self.reader_group_cnts[gen].fetch_sub(1, Ordering::Release);
         arc
     }
 
@@ -302,7 +289,11 @@ impl<T> ArcSwap<T> {
     /// Exchanges the value inside this instance.
     pub fn swap(&self, arc: Arc<T>) -> Arc<T> {
         let new = strip(arc);
-        let old = self.ptr.swap(new, Ordering::AcqRel);
+        // AcqRel needed to publish the target of the new pointer and get the target of the old
+        // one.
+        //
+        // SeqCst to synchronize the time lines with the group counters.
+        let old = self.ptr.swap(new, Ordering::SeqCst);
         self.wait_for_readers();
         unsafe {
             Arc::from_raw(old)
@@ -311,34 +302,28 @@ impl<T> ArcSwap<T> {
 
     /// Wait until all readers go away.
     fn wait_for_readers(&self) {
-        for _ in 0..2 {
-            let gen = self.gen_idx.load(Ordering::Acquire);
-            let mask = mask(1 - gen % GEN_CNT);
-            loop {
-                let state = self.gen_readers.load(Ordering::Acquire);
-                // If there are no readers at all, it's safe ‒ nobody to wait for, shortcircuit the
-                // whole thing.
-                if state == 0 {
-                    return;
-                }
-                // If the other generation gets empty, we can proceed and perform the switch
-                if state & mask == 0 {
-                    break;
-                }
-                let cur_gen = self.gen_idx.load(Ordering::Relaxed);
-                // Someone has advanced the generation already
-                if cur_gen != gen {
-                    break;
-                }
-                atomic::spin_loop_hint();
+        let mut seen_group = [false; GEN_CNT];
+        while !seen_group.iter().all(|seen| *seen) {
+            // Note that we don't need the snapshot to be consistent. We just need to see both
+            // halves being zero, not necessarily at the same time.
+            let gen = self.gen_idx.load(Ordering::Relaxed);
+            let groups = [
+                self.reader_group_cnts[0].load(Ordering::Relaxed),
+                self.reader_group_cnts[1].load(Ordering::Relaxed),
+            ];
+            // Should we increment the generation? Is the next one empty?
+            let next_gen = gen.wrapping_add(1);
+            if groups[next_gen % GEN_CNT] == 0 {
+                // Replace it only if someone else didn't do it in the meantime
+                self.gen_idx.compare_and_swap(gen, next_gen, Ordering::Relaxed);
             }
-            let new_gen = gen.wrapping_add(1);
-            // Try advancing the generation. Don't worry if it doesn't work, because it can happen
-            // only if someone else already did that.
-            self.gen_idx.compare_and_swap(gen, new_gen, Ordering::Release);
+            for i in 0..GEN_CNT {
+                seen_group[i] = seen_group[i] || (groups[i] == 0);
+            }
+            atomic::spin_loop_hint();
         }
     }
-    }
+}
 
 #[cfg(test)]
 mod tests {
