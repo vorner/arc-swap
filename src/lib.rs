@@ -90,17 +90,66 @@ use std::process;
 use std::sync::Arc;
 use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
 
-// TODO: Implementation notes/rationale/proofs
+// # Implementation details
+//
+// The first idea would be to just use AtomicPtr with whatever the Arc::into_raw returns. Then
+// replacing it would be fine (there's no need to update ref counts). The load needs to increment
+// the reference count ‒ one still stays inside and another is returned to the caller. This is done
+// by re-creating the Arc from the raw pointer and then cloning it, throwing one instance away.
+//
+// This approach has a problem. There's a short time between we read the raw pointer and increment
+// the count. If some other thread replaces the stored Arc and throws it away, the ref count could
+// drop to 0, get destroyed and we would be trying to bump ref counts in a ghost, which would be
+// totally broken.
+//
+// To prevent this, the readers work as usual, but register themselves so they can be tracked. Each
+// writer first switches the pointer. Then it takes a snapshot of all the current readers and waits
+// until all of them confirm bumping their reference count. Only then the writer returns to the
+// caller, handing it the ownership of the Arc and allowing possible bad things (like being
+// destroyed) to happen to it.
+//
+// # Unsafety
+//
+// All the uses of the unsafe keyword is just to turn the raw pointer back to Arc. It originated
+// from an Arc in the first place, so the only thing to ensure is it is still valid. That means its
+// ref count never dropped to 0.
+//
+// At the beginning, there's ref count of 1 stored in the raw pointer (and maybe some others
+// elsewhere, but we can't rely on these). This 1 stays there for the whole time the pointer is
+// stored there. When the arc is replaced, this 1 is returned to the caller, so we just have to
+// make sure no more readers access it by that time.
+//
+// # Tracking of readers
+//
+// The simple way would be to have a count of all readers that could be in the dangerous area
+// between reading the pointer and bumping the reference count. We could „lock“ the ref count by
+// incrementing this atomic counter and „unlock“ it when done. The writer would just have to
+// busy-wait for this number to drop to 0 ‒ then there are no readers at all. This is safe, but a
+// steady inflow of readers could make a writer wait forever.
+//
+// We introduce the concept of generation. We count the readers in generations separately. After a
+// writer switches the pointer, it increments a generation and all new readers start tracking their
+// time in the new one. The writer doesn't have to wait for these new readers (because they see the
+// new value of the pointer and that one still owns its ref count) so it can wait only for the old
+// generation to drop to 0. This must happen soon, because no new readers increment it.
+//
+// Technically, we keep just two generations, new and old. This is to have bounded storage for the
+// generations, to fit them into one atomic counter and to avoid the need to check several „old“
+// generations for dropping to 0 (if we had multiple historical ones, we would have to check all of
+// them).
+//
+// Therefore, a writer needs to first wait for the „prehistoric“ (the one even older than old, that
+// predated this writer) generation to turn to 0 before incrementing the generation and reusing the
+// now-0 count for counter of the new generation. Then it waits for the now-old generation to drop
+// to 0.
+//
+// Note that concurrent writers can „ride the same wave“, they can share these two increments of
+// generations.
+//
+// Arguments for why the memory orderings are enough as they are are inline.
 
 /// Store count for 2 newest generations (others must always be 0)
 const GEN_CNT: usize = 2;
-
-/// Dispose of one ref count for this pointer.
-fn dispose<T>(ptr: *const T) {
-    unsafe {
-        Arc::from_raw(ptr);
-    }
-}
 
 /// Turn the arc into a raw pointer.
 fn strip<T>(arc: Arc<T>) -> *mut T {
@@ -130,7 +179,8 @@ fn mask(gen: usize) -> usize {
 /// This is a storage where an [`Arc`] may live. It can be read and written atomically from several
 /// threads, but doesn't act like a pointer itself.
 ///
-/// One can be created [`from`] an [`Arc`]. To get an [`Arc`] back, use the [`load`] method.
+/// One can be created [`from`] an [`Arc`]. To get an [`Arc`] back, use the [`load`](#method.load)
+/// method.
 ///
 /// # Examples
 ///
@@ -191,7 +241,10 @@ impl<T> Drop for ArcSwap<T> {
         // We hold one reference in the Arc, but it's hidden. Convert us back to Arc and drop that
         // Arc instead of us, which will clear the ref.
         let ptr = *self.ptr.get_mut();
-        dispose(ptr);
+        // Turn it back into the Arc and then drop it.
+        unsafe {
+            Arc::from_raw(ptr);
+        }
     }
 }
 
@@ -234,7 +287,7 @@ impl<T> ArcSwap<T> {
         };
         // Bump the reference count by one, so we can return one into the arc and another to
         // the caller.
-        Arc::into_raw(Arc::clone(&arc));
+        mem::forget(Arc::clone(&arc));
         self.gen_readers.fetch_sub(gen_val, Ordering::Release);
         arc
     }
