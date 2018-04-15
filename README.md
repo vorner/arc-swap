@@ -10,7 +10,7 @@ do that, one needs to place it under a lock.
 On the other hand, [`AtomicPtr`] can be replaced atomically, but it's hard to
 know when the target can be safely freed.
 
-This is a cross-breed between the two ‒ an `ArcSwap` can be seeded with an
+This is a cross-breed between the two ‒ an [`ArcSwap`] can be seeded with an
 [`Arc`] and the [`Arc`] can be simultaneously replaced and read by multiple
 threads without any locking.
 
@@ -32,3 +32,4 @@ or conditions.
 
 [`Arc`]: https://doc.rust-lang.org/std/sync/struct.Arc.html
 [`AtomicPtr`]: https://doc.rust-lang.org/std/sync/atomic/struct.AtomicPtr.html
+[`ArcSwap`]: https://docs.rs/arc-swap/*/arc_swap/struct.ArcSwap.html
