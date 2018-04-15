@@ -2,8 +2,21 @@
 name = "arc-swap"
 version = "0.1.0"
 authors = ["Michal 'vorner' Vaner <vorner@vorner.cz>"]
+description = "Atomically swappable Arc"
+documentation = "https://docs.rs/arc-swap"
+repository = "https://github.com/vorner/arc-swap"
+readme = "README.md"
+keywords = ["atomic", "Arc"]
+categories = ["data-structures", "memory-management"]
+license = "Apache-2.0/MIT"
+
+[badges]
+travis-ci = { repository = "vorner/corona" }
+appveyor = { repository = "vorner/corona" }
+maintenance = { status = "actively-developed" }
 
 [dependencies]
 
 [dev-dependencies]
 crossbeam-utils = "~0.3"
+version-sync = "~0.5"
