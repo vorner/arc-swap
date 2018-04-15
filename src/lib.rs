@@ -341,7 +341,7 @@ mod tests {
     /// 000 of them just wait in a tight loop for the other thread to happen.
     #[test]
     fn publish() {
-        for _ in 0..1000 {
+        for _ in 0..100 {
             let config = ArcSwap::from(Arc::new(String::default()));
             let ended = AtomicUsize::new(0);
             thread::scope(|scope| {
@@ -370,7 +370,7 @@ mod tests {
     /// Similar to the doc tests of ArcSwap, but happens more times.
     #[test]
     fn swap_load() {
-        for _ in 0..1000 {
+        for _ in 0..100 {
             let arc = Arc::new(42);
             let arc_swap = ArcSwap::from(Arc::clone(&arc));
             assert_eq!(42, *arc_swap.load());
