@@ -77,8 +77,8 @@
 
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 use std::marker::PhantomData;
-use std::sync::Arc;
 use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 // # Implementation details
 //
@@ -268,9 +268,7 @@ impl<T> ArcSwap<T> {
         self.reader_group_cnts[gen].fetch_add(1, Ordering::SeqCst);
         // Acquire, to get the target of the pointer.
         let ptr = self.ptr.load(Ordering::Acquire);
-        let arc = unsafe {
-            Arc::from_raw(ptr)
-        };
+        let arc = unsafe { Arc::from_raw(ptr) };
         // Bump the reference count by one, so we can return one into the arc and another to
         // the caller.
         Arc::into_raw(Arc::clone(&arc));
@@ -295,9 +293,7 @@ impl<T> ArcSwap<T> {
         // SeqCst to synchronize the time lines with the group counters.
         let old = self.ptr.swap(new, Ordering::SeqCst);
         self.wait_for_readers();
-        unsafe {
-            Arc::from_raw(old)
-        }
+        unsafe { Arc::from_raw(old) }
     }
 
     /// Wait until all readers go away.
@@ -315,7 +311,8 @@ impl<T> ArcSwap<T> {
             let next_gen = gen.wrapping_add(1);
             if groups[next_gen % GEN_CNT] == 0 {
                 // Replace it only if someone else didn't do it in the meantime
-                self.gen_idx.compare_and_swap(gen, next_gen, Ordering::Relaxed);
+                self.gen_idx
+                    .compare_and_swap(gen, next_gen, Ordering::Relaxed);
             }
             for i in 0..GEN_CNT {
                 seen_group[i] = seen_group[i] || (groups[i] == 0);
@@ -329,11 +326,11 @@ impl<T> ArcSwap<T> {
 mod tests {
     extern crate crossbeam_utils;
 
-    use std::sync::Barrier;
     use std::sync::atomic::AtomicUsize;
+    use std::sync::Barrier;
 
-    use super::*;
     use self::crossbeam_utils::scoped as thread;
+    use super::*;
 
     /// Similar to the one in doc tests of the lib, but more times and more intensive (we want to
     /// torture it a bit).
@@ -347,16 +344,14 @@ mod tests {
             let ended = AtomicUsize::new(0);
             thread::scope(|scope| {
                 for _ in 0..20 {
-                    scope.spawn(|| {
-                        loop {
-                            let cfg = config.load();
-                            if !cfg.is_empty() {
-                                assert_eq!(*cfg, "New configuration");
-                                ended.fetch_add(1, Ordering::Relaxed);
-                                return;
-                            }
-                            atomic::spin_loop_hint();
+                    scope.spawn(|| loop {
+                        let cfg = config.load();
+                        if !cfg.is_empty() {
+                            assert_eq!(*cfg, "New configuration");
+                            ended.fetch_add(1, Ordering::Relaxed);
+                            return;
                         }
+                        atomic::spin_loop_hint();
                     });
                 }
                 scope.spawn(|| {
