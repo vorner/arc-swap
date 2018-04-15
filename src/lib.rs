@@ -142,6 +142,8 @@ use std::sync::Arc;
 // Second, the dangerous area when we borrowed the pointer but haven't yet incremented its ref
 // count needs to stay between incrementing and decrementing the reader count (in either group). To
 // accomplish that, using Acquire on the increment and Release on the decrement would be enough.
+// The loads in the writer use Acquire to complete the edge and make sure no part of the dangerous
+// area leaks outside of it in the writers view.
 //
 // Now the hard part :-). We need to ensure that whatever zero a writer sees is not stale in the
 // sense that it happened before the switch of the pointer. In other words, we need to make sure
@@ -304,8 +306,8 @@ impl<T> ArcSwap<T> {
             // halves being zero, not necessarily at the same time.
             let gen = self.gen_idx.load(Ordering::Relaxed);
             let groups = [
-                self.reader_group_cnts[0].load(Ordering::Relaxed),
-                self.reader_group_cnts[1].load(Ordering::Relaxed),
+                self.reader_group_cnts[0].load(Ordering::Acquire),
+                self.reader_group_cnts[1].load(Ordering::Acquire),
             ];
             // Should we increment the generation? Is the next one empty?
             let next_gen = gen.wrapping_add(1);
