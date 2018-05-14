@@ -11,8 +11,8 @@ categories = ["data-structures", "memory-management"]
 license = "Apache-2.0/MIT"
 
 [badges]
-travis-ci = { repository = "vorner/corona" }
-appveyor = { repository = "vorner/corona" }
+travis-ci = { repository = "vorner/arc-swap" }
+appveyor = { repository = "vorner/arc-swap" }
 maintenance = { status = "actively-developed" }
 
 [dependencies]
