@@ -1,3 +1,6 @@
+#![doc(html_root_url = "https://docs.rs/arc-swap/0.1.0/arc-swap/")]
+#![deny(missing_docs)]
+
 //! Making [`Arc`] itself atomic
 //!
 //! The [`Arc`] uses atomic reference counters, so the object behind it can be safely pointed to by
