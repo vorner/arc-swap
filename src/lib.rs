@@ -32,14 +32,20 @@
 //!
 //! # Performance characteristics
 //!
-//! Some benchmarks need to be done. Due to the complexity, it may be possible that using
-//! `Mutex<Arc<T>>` might be faster in some cases.
+//! Only very basic benchmarks were done so far (you can find them in the git repository). These
+//! suggest this is slightly faster than using a mutex in most cases.
 //!
-//! However, this implementation doesn't suffer from contention. Specifically, arbitrary number of
-//! readers can access the shared value and won't be blocked. Even when there are many readers and
-//! writers at once, they don't block each other. The writers will be somewhat slower when there
-//! are active readers at the same time, but won't be stopped indefinitely. Readers always perform
-//! the same number of instructions.
+//! Furthermore, this implementation doesn't suffer from contention. Specifically, arbitrary number
+//! of readers can access the shared value and won't block each other, even when there are many
+//! readers and writers at once, they don't block each other. The writers will be somewhat slower
+//! when there are active readers at the same time, but won't be stopped indefinitely. Readers
+//! always perform the same number of instructions, without any locking or waiting.
+//!
+//! # RCU
+//!
+//! This also offers an [RCU implementation](struct.ArcSwap.html#method.rcu), for read-heavy
+//! situations. Note that the RCU update is considered relatively slow operation. In case there's
+//! only one update thread, using [`store`](struct.ArcSwap.html#method.store) is enough.
 //!
 //! # Unix signal handlers
 //!
@@ -565,6 +571,11 @@ impl<T> ArcSwap<T> {
     /// One use case is around signal handlers. The signal handler loads the pointer, but it must
     /// not be the last one to drop it. Therefore, this methods make sure there are no signal
     /// handlers owning it at the time of deconstruction of the `Arc`.
+    ///
+    /// Another use case might be an RCU with a structure that is rather slow to drop ‒ if it was
+    /// left to random reader (the last one to hold the old value), it could cause a timeout or
+    /// jitter in a query time. With this, the deallocation is done in the updater thread,
+    /// therefore outside of a hot path.
     ///
     /// # Warning
     ///

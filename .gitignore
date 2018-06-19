@@ -1,5 +1,6 @@
 
 /target
+*/target
 **/*.rs.bk
-Cargo.lock
+/Cargo.lock
 tags
