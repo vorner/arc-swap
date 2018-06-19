@@ -1,3 +1,5 @@
+# 0.1.1
+
 * `rcu` support.
 * `compare_and_swap` support.
 * Added some primitive benchmarks.

@@ -1,4 +1,4 @@
-#![doc(html_root_url = "https://docs.rs/arc-swap/0.1.0/arc-swap/")]
+#![doc(html_root_url = "https://docs.rs/arc-swap/0.1.1/arc-swap/")]
 #![deny(missing_docs)]
 
 //! Making [`Arc`] itself atomic
