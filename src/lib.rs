@@ -80,6 +80,7 @@
 
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 use std::marker::PhantomData;
+use std::mem;
 use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -159,6 +160,16 @@ use std::sync::Arc;
 //
 // All other operations can be Relaxed.
 
+/// Generation lock, to abstract locking and unlocking readers.
+struct GenLock(usize);
+
+/// A bomb so one doesn't forget to unlock generations.
+impl Drop for GenLock {
+    fn drop(&mut self) {
+        unreachable!("Forgot to unlock generation");
+    }
+}
+
 /// Store count for 2 newest generations (others must always be 0)
 const GEN_CNT: usize = 2;
 
@@ -234,9 +245,7 @@ impl<T> Drop for ArcSwap<T> {
         // Arc instead of us, which will clear the ref.
         let ptr = *self.ptr.get_mut();
         // Turn it back into the Arc and then drop it.
-        unsafe {
-            Arc::from_raw(ptr);
-        }
+        drop(unsafe { Arc::from_raw(ptr) });
     }
 }
 
@@ -263,14 +272,9 @@ impl<T> ArcSwap<T> {
     ///
     /// This makes another copy (reference) and returns it, atomically (it is safe even when other
     /// thread stores into the same instance at the same time).
+    #[inline]
     pub fn load(&self) -> Arc<T> {
-        let gen = self.gen_idx.load(Ordering::Relaxed) % GEN_CNT;
-        // Unlike the real Arc, we don't have to check for the ref count overflow. Nobody can drop
-        // a reader.
-        //
-        // SeqCst: Acquire, so the dangerous section stays in. SeqCst to sync timelines with the
-        // swap on the ptr in writer thread.
-        self.reader_group_cnts[gen].fetch_add(1, Ordering::SeqCst);
+        let gen = self.gen_lock();
         // Acquire, to get the target of the pointer.
         let ptr = self.ptr.load(Ordering::Acquire);
         let arc = unsafe { Arc::from_raw(ptr) };
@@ -278,18 +282,20 @@ impl<T> ArcSwap<T> {
         // the caller.
         Arc::into_raw(Arc::clone(&arc));
         // Release, so the dangerous section stays in.
-        self.reader_group_cnts[gen].fetch_sub(1, Ordering::Release);
+        self.gen_unlock(gen);
         arc
     }
 
     /// Replaces the value inside this instance.
     ///
     /// Further loads will yield the new value.
+    #[inline]
     pub fn store(&self, arc: Arc<T>) {
-        self.swap(arc);
+        drop(self.swap(arc));
     }
 
     /// Exchanges the value inside this instance.
+    #[inline]
     pub fn swap(&self, arc: Arc<T>) -> Arc<T> {
         let new = strip(arc);
         // AcqRel needed to publish the target of the new pointer and get the target of the old
@@ -301,7 +307,56 @@ impl<T> ArcSwap<T> {
         unsafe { Arc::from_raw(old) }
     }
 
+    /// Swaps the stored Arc if it is equal to `current`.
+    ///
+    /// If the current value of the `ArcSwap` is equal to `current`, the `new` is stored inside. If
+    /// not, nothing happens.
+    ///
+    /// Either way, the original value is returned.
+    ///
+    /// In other words, if the caller „guesses“ the value of current correctly, it acts like
+    /// [`swap`](#method.swap), otherwise it acts like [`load`](#method.load).
+    #[inline]
+    pub fn compare_and_swap(&self, current: Arc<T>, new: Arc<T>) -> Arc<T> {
+        // As noted above, this method has either semantics of load or of store. We don't know
+        // which ones upfront, so we need to implement safety measures for both.
+        let current = strip(current);
+        let new = strip(new);
+
+        let gen = self.gen_lock();
+
+        let previous = self.ptr.compare_and_swap(current, new, Ordering::SeqCst);
+        let swapped = current == previous;
+        let previous = unsafe { Arc::from_raw(previous) };
+
+        if swapped {
+            // New went in, previous out, but their ref counts are correct. We handle current later
+            // on. So nothing to do here.
+        } else {
+            // Previous is a new copy of what is inside (and it stays there as well), so bump its
+            // ref count. New is thrown away so dec its ref count (but do it outside of the
+            // gen-lock).
+            Arc::into_raw(Arc::clone(&previous));
+        }
+
+        self.gen_unlock(gen);
+
+        if swapped {
+            // We swapped. Before releasing the (possibly only) ref count of previous to user, wait
+            // for all readers to make sure there are no more untracked copies of it.
+            self.wait_for_readers();
+        } else {
+            // We didn't swap, so new is black-holed.
+            drop(unsafe { Arc::from_raw(new) });
+        }
+        // The current is black-holed every time.
+        drop(unsafe { Arc::from_raw(current) });
+
+        previous
+    }
+
     /// Wait until all readers go away.
+    #[inline]
     fn wait_for_readers(&self) {
         let mut seen_group = [false; GEN_CNT];
         while !seen_group.iter().all(|seen| *seen) {
@@ -324,6 +379,27 @@ impl<T> ArcSwap<T> {
             }
             atomic::spin_loop_hint();
         }
+    }
+
+    #[inline]
+    fn gen_lock(&self) -> GenLock {
+        let gen = self.gen_idx.load(Ordering::Relaxed) % GEN_CNT;
+        // Unlike the real Arc, we don't have to check for the ref count overflow. Nobody can drop
+        // a reader.
+        //
+        // SeqCst: Acquire, so the dangerous section stays in. SeqCst to sync timelines with the
+        // swap on the ptr in writer thread.
+        self.reader_group_cnts[gen].fetch_add(1, Ordering::SeqCst);
+        GenLock(gen)
+    }
+
+    #[inline]
+    fn gen_unlock(&self, lock: GenLock) {
+        let gen = lock.0;
+        // Disarm the drop-bomb
+        mem::forget(lock);
+        // Release, so the dangerous section stays in.
+        self.reader_group_cnts[gen].fetch_sub(1, Ordering::Release);
     }
 }
 
@@ -449,5 +525,39 @@ mod tests {
                 });
             }
         });
+    }
+
+    #[test]
+    /// Make sure the reference count and compare_and_swap works as expected.
+    fn cas_ref_cnt() {
+        const ITERATIONS: usize = 50;
+        let shared = ArcSwap::from(Arc::new(0));
+        for i in 0..ITERATIONS {
+            let orig = shared.load();
+            assert_eq!(i, *orig);
+            // One for orig, one for shared
+            assert_eq!(2, Arc::strong_count(&orig));
+            let n1 = Arc::new(i + 1);
+            // Success
+            let prev = shared.compare_and_swap(Arc::clone(&orig), Arc::clone(&n1));
+            assert!(Arc::ptr_eq(&orig, &prev));
+            // One for orig, one for prev
+            assert_eq!(2, Arc::strong_count(&orig));
+            // One for n1, one for shared
+            assert_eq!(2, Arc::strong_count(&n1));
+            assert_eq!(i + 1, *shared.load());
+            let n2 = Arc::new(i);
+            drop(prev);
+            // Failure
+            let prev = shared.compare_and_swap(Arc::clone(&orig), Arc::clone(&n2));
+            assert!(Arc::ptr_eq(&n1, &prev));
+            // One for orig
+            assert_eq!(1, Arc::strong_count(&orig));
+            // One for n1, one for shared, one for prev
+            assert_eq!(3, Arc::strong_count(&n1));
+            // n2 didn't get increased
+            assert_eq!(1, Arc::strong_count(&n2));
+            assert_eq!(i + 1, *shared.load());
+        }
     }
 }
