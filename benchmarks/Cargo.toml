@@ -6,4 +6,4 @@ publish = false
 
 [dependencies]
 arc-swap = { path = ".." }
-crossbeam-utils = "~0.3"
+crossbeam-utils = "~0.4"

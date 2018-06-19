@@ -7,22 +7,13 @@ name = "benchmarks"
 version = "0.1.0"
 dependencies = [
  "arc-swap 0.1.0",
- "crossbeam-utils 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "crossbeam-utils 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
-
-[[package]]
-name = "cfg-if"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "crossbeam-utils"
-version = "0.3.2"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-dependencies = [
- "cfg-if 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
-]
 
 [metadata]
-"checksum cfg-if 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)" = "405216fd8fe65f718daa7102ea808a946b6ce40c742998fbfd3463645552de18"
-"checksum crossbeam-utils 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)" = "d636a8b3bcc1b409d7ffd3facef8f21dcb4009626adbd0c5e6c4305c07253c7b"
+"checksum crossbeam-utils 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "b71f220442ed14749909b543d4dd7ec3918cb1fe289fd96e88d0abe6ca049783"
