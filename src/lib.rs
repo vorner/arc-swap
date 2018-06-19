@@ -38,7 +38,22 @@
 //! However, this implementation doesn't suffer from contention. Specifically, arbitrary number of
 //! readers can access the shared value and won't be blocked. Even when there are many readers and
 //! writers at once, they don't block each other. The writers will be somewhat slower when there
-//! are active readers at the same time, but won't be stopped indefinitely.
+//! are active readers at the same time, but won't be stopped indefinitely. Readers always perform
+//! the same number of instructions.
+//!
+//! # Unix signal handlers
+//!
+//! Unix signals are hard to use correctly, partly because there is a very restricted set of
+//! functions one might use inside them. Specifically, it is *not* allowed to use mutexes inside
+//! them (because that could cause a deadlock).
+//!
+//! On the other hand, it is possible to use [`ArcSwap::load`](struct.ArcSwap.html#method.load)
+//! (and theoretically some of the others, but a correct use would be very hard). Note that the
+//! signal handler is not allowed to allocate or deallocate memory. This also means the signal
+//! handler must not drop the last reference to the `Arc` received by loading ‒ therefore, the part
+//! changing it from the outside needs to make sure it does not drop the only other instance once
+//! it swapped the content while the signal handler still runs. See
+//! [`ArcSwap::rcu_unwrap`](struct.ArcSwap.html#method.rcu_unwrap).
 //!
 //! # Example
 //!
@@ -83,6 +98,7 @@ use std::marker::PhantomData;
 use std::mem;
 use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::thread;
 
 // # Implementation details
 //
@@ -312,12 +328,16 @@ impl<T> ArcSwap<T> {
     /// If the current value of the `ArcSwap` is equal to `current`, the `new` is stored inside. If
     /// not, nothing happens.
     ///
-    /// Either way, the original value is returned.
+    /// True is returned as the first part of result if it did swap content, false otherwise.
+    /// Either way, the previous content is returned as the second part. The property of standard
+    /// library atomics that if previous is the same as current, the swap happened, is still true,
+    /// but unlike the values in the atomics, `Arc` is not copy ‒ therefore, you may want to pass
+    /// the only instance of current into it and not clone it just to compare.
     ///
     /// In other words, if the caller „guesses“ the value of current correctly, it acts like
     /// [`swap`](#method.swap), otherwise it acts like [`load`](#method.load).
     #[inline]
-    pub fn compare_and_swap(&self, current: Arc<T>, new: Arc<T>) -> Arc<T> {
+    pub fn compare_and_swap(&self, current: Arc<T>, new: Arc<T>) -> (bool, Arc<T>) {
         // As noted above, this method has either semantics of load or of store. We don't know
         // which ones upfront, so we need to implement safety measures for both.
         let current = strip(current);
@@ -352,7 +372,7 @@ impl<T> ArcSwap<T> {
         // The current is black-holed every time.
         drop(unsafe { Arc::from_raw(current) });
 
-        previous
+        (swapped, previous)
     }
 
     /// Wait until all readers go away.
@@ -400,6 +420,168 @@ impl<T> ArcSwap<T> {
         mem::forget(lock);
         // Release, so the dangerous section stays in.
         self.reader_group_cnts[gen].fetch_sub(1, Ordering::Release);
+    }
+
+    /// Read-Copy-Update of the pointer inside.
+    ///
+    /// This is useful in read-heavy situations with several threads that sometimes update the data
+    /// pointed to. The readers can just repeatedly use [`load`](#method.load) without any locking.
+    /// The writer uses this method to perform the update.
+    ///
+    /// In case there's only one thread that does updates or in case the next version is
+    /// independent of the previous onse, simple [`swap`](#method.swap) or [`store`](#method.store)
+    /// is enough. Otherwise, it may be needed to retry the update operation if some other thread
+    /// made an update in between. This is what this method does.
+    ///
+    /// # Examples
+    ///
+    /// This will *not* work as expected, because between loading and storing, some other thread
+    /// might have updated the value.
+    ///
+    /// ```rust
+    /// extern crate arc_swap;
+    /// extern crate crossbeam_utils;
+    ///
+    /// use std::sync::Arc;
+    ///
+    /// use arc_swap::ArcSwap;
+    /// use crossbeam_utils::scoped as thread;
+    ///
+    /// fn main() {
+    ///     let cnt = ArcSwap::from(Arc::new(0));
+    ///     thread::scope(|scope| {
+    ///         for _ in 0..10 {
+    ///             scope.spawn(|| {
+    ///                 let inner = cnt.load();
+    ///                 // Another thread might have stored some other number than what we have
+    ///                 // between the load and store.
+    ///                 cnt.store(Arc::new(*inner + 1));
+    ///             });
+    ///         }
+    ///     });
+    ///     // This will likely fail:
+    ///     // assert_eq!(10, *cnt.load());
+    /// }
+    /// ```
+    ///
+    /// This will, but it can call the closure multiple times to do retries:
+    ///
+    /// ```rust
+    /// extern crate arc_swap;
+    /// extern crate crossbeam_utils;
+    ///
+    /// use std::sync::Arc;
+    ///
+    /// use arc_swap::ArcSwap;
+    /// use crossbeam_utils::scoped as thread;
+    ///
+    /// fn main() {
+    ///     let cnt = ArcSwap::from(Arc::new(0));
+    ///     thread::scope(|scope| {
+    ///         for _ in 0..10 {
+    ///             scope.spawn(|| cnt.rcu(|inner| Arc::new(**inner + 1)));
+    ///         }
+    ///     });
+    ///     assert_eq!(10, *cnt.load());
+    /// }
+    /// ```
+    ///
+    /// Due to the retries, you might want to perform all the expensive operations *before* the
+    /// rcu. As an example, if there's a cache of some computations as a map, and the map is cheap
+    /// to clone but the computations are not, you could do something like this:
+    ///
+    /// ```rust
+    /// extern crate arc_swap;
+    /// extern crate crossbeam_utils;
+    /// #[macro_use]
+    /// extern crate lazy_static;
+    ///
+    /// use std::collections::HashMap;
+    /// use std::sync::Arc;
+    ///
+    /// use arc_swap::ArcSwap;
+    /// use crossbeam_utils::scoped as thread;
+    ///
+    /// fn expensive_computation(x: usize) -> usize {
+    ///     x * 2 // Let's pretend multiplication is really expensive
+    /// }
+    ///
+    /// type Cache = HashMap<usize, usize>;
+    ///
+    /// lazy_static! {
+    ///     static ref CACHE: ArcSwap<Cache> = ArcSwap::from(Arc::new(HashMap::new()));
+    /// }
+    ///
+    /// fn cached_computation(x: usize) -> usize {
+    ///     let cache = CACHE.load();
+    ///     if let Some(result) = cache.get(&x) {
+    ///         return *result;
+    ///     }
+    ///     // Not in cache. Compute and store.
+    ///     // The expensive computation goes outside, so it is not retried.
+    ///     let result = expensive_computation(x);
+    ///     CACHE.rcu(|cache| {
+    ///         // The cheaper clone of the cache can be retried if need be.
+    ///         let mut cache = HashMap::clone(cache);
+    ///         cache.insert(x, result);
+    ///         Arc::new(cache)
+    ///     });
+    ///     result
+    /// }
+    ///
+    /// fn main() {
+    ///     assert_eq!(42, cached_computation(21));
+    ///     assert_eq!(42, cached_computation(21));
+    /// }
+    /// ```
+    ///
+    /// # The cost of cloning
+    ///
+    /// Depending on the size of cache above, the cloning might not be as cheap. You can however
+    /// use persistent data structures ‒ each modification creates a new data structure, but it
+    /// shares most of the data with the old one. Something like
+    /// [`rpds`](https://crates.io/crates/rpds) or [`im`](https://crates.io/crates/im) might do
+    /// what you need.
+    pub fn rcu<F: FnMut(&Arc<T>) -> Arc<T>>(&self, mut f: F) -> Arc<T> {
+        let mut cur = self.load();
+        loop {
+            let new = f(&cur);
+            let (swapped, prev) = self.compare_and_swap(cur, new);
+            if swapped {
+                return prev;
+            } else {
+                cur = prev;
+            }
+        }
+    }
+
+    /// An [`rcu`](#method.rcu) which waits to be the sole owner of the original value and unwraps
+    /// it.
+    ///
+    /// This one works the same way as the [`rcu`](#method.rcu) method, but works on the inner type
+    /// instead of `Arc`. After replacing the original, it waits until there are no other owners of
+    /// the arc and unwraps it.
+    ///
+    /// One use case is around signal handlers. The signal handler loads the pointer, but it must
+    /// not be the last one to drop it. Therefore, this methods make sure there are no signal
+    /// handlers owning it at the time of deconstruction of the `Arc`.
+    ///
+    /// # Warning
+    ///
+    /// Note that if you store a copy of the `Arc` somewhere except the `ArcSwap` itself for
+    /// extended period of time, this'll busy-wait the whole time. Unless you need the assurance
+    /// the `Arc` is deconstructed here, prefer [`rcu`](#method.rcu).
+    pub fn rcu_unwrap<F: FnMut(&T) -> T>(&self, mut f: F) -> T {
+        let mut wrapped = self.rcu(|prev| Arc::new(f(prev)));
+        loop {
+            match Arc::try_unwrap(wrapped) {
+                Ok(val) => return val,
+                Err(w) => {
+                    wrapped = w;
+                    thread::yield_now();
+                }
+            }
+        }
     }
 }
 
@@ -539,7 +721,8 @@ mod tests {
             assert_eq!(2, Arc::strong_count(&orig));
             let n1 = Arc::new(i + 1);
             // Success
-            let prev = shared.compare_and_swap(Arc::clone(&orig), Arc::clone(&n1));
+            let (swapped, prev) = shared.compare_and_swap(Arc::clone(&orig), Arc::clone(&n1));
+            assert!(swapped);
             assert!(Arc::ptr_eq(&orig, &prev));
             // One for orig, one for prev
             assert_eq!(2, Arc::strong_count(&orig));
@@ -549,7 +732,8 @@ mod tests {
             let n2 = Arc::new(i);
             drop(prev);
             // Failure
-            let prev = shared.compare_and_swap(Arc::clone(&orig), Arc::clone(&n2));
+            let (swapped, prev) = shared.compare_and_swap(Arc::clone(&orig), Arc::clone(&n2));
+            assert!(!swapped);
             assert!(Arc::ptr_eq(&n1, &prev));
             // One for orig
             assert_eq!(1, Arc::strong_count(&orig));
@@ -559,5 +743,41 @@ mod tests {
             assert_eq!(1, Arc::strong_count(&n2));
             assert_eq!(i + 1, *shared.load());
         }
+    }
+
+    #[test]
+    /// Multiple RCUs interacting.
+    fn rcu() {
+        const ITERATIONS: usize = 50;
+        const THREADS: usize = 10;
+        let shared = ArcSwap::from(Arc::new(0));
+        thread::scope(|scope| {
+            for _ in 0..THREADS {
+                scope.spawn(|| {
+                    for _ in 0..ITERATIONS {
+                        shared.rcu(|old| Arc::new(**old + 1));
+                    }
+                });
+            }
+        });
+        assert_eq!(THREADS * ITERATIONS, *shared.load());
+    }
+
+    #[test]
+    /// Multiple RCUs interacting, with unwrapping.
+    fn rcu_unwrap() {
+        const ITERATIONS: usize = 50;
+        const THREADS: usize = 10;
+        let shared = ArcSwap::from(Arc::new(0));
+        thread::scope(|scope| {
+            for _ in 0..THREADS {
+                scope.spawn(|| {
+                    for _ in 0..ITERATIONS {
+                        shared.rcu_unwrap(|old| *old + 1);
+                    }
+                });
+            }
+        });
+        assert_eq!(THREADS * ITERATIONS, *shared.load());
     }
 }
