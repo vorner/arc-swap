@@ -12,8 +12,9 @@
 //! allowing to pass the value from one thread to another without the use of a [`Mutex`]. The
 //! downside is, tracking when the data can be safely deleted is hard.
 //!
-//! This library provides [`ArcSwap`] that allows both at once. It can be constructed from ordinary
-//! [`Arc`], but its value can be loaded and stored atomically, my multiple concurrent threads.
+//! This library provides [`ArcSwap`](struct.ArcSwap.html) that allows both at once. It can be
+//! constructed from ordinary [`Arc`], but its value can be loaded and stored atomically, my
+//! multiple concurrent threads.
 //!
 //! # Motivation
 //!
@@ -25,10 +26,10 @@
 //!
 //! And finally, there are some real use cases for this functionality. For example, when one thread
 //! publishes something (for example configuration) and other threads want to have a peek to the
-//! current one from time to time. There's a global [`ArcSwap`], holding the current snapshot and
-//! everyone is free to make a copy and hold onto it for a while. The publisher thread simply
-//! stores a new snapshot every time and the old configuration gets dropped once all the other
-//! threads give up their copies of the pointer.
+//! current one from time to time. There's a global [`ArcSwap`](struct.ArcSwap.html), holding the
+//! current snapshot and everyone is free to make a copy and hold onto it for a while. The
+//! publisher thread simply stores a new snapshot every time and the old configuration gets dropped
+//! once all the other threads give up their copies of the pointer.
 //!
 //! # Performance characteristics
 //!
