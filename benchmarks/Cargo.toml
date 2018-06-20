@@ -1,9 +1,0 @@
-[package]
-name = "benchmarks"
-version = "0.1.0"
-authors = ["Michal 'vorner' Vaner <vorner@vorner.cz>"]
-publish = false
-
-[dependencies]
-arc-swap = { path = ".." }
-crossbeam-utils = "~0.4"

@@ -1,5 +1,11 @@
 #![feature(test)]
 
+//! These are very minimal benchmarks ‒ reading and writing an integer shared in
+//! different ways. You can compare the times and see the characteristics.
+//!
+//! Note that this requires nightly to run (that's why it's not part of the crate
+//! itself).
+
 extern crate arc_swap;
 extern crate crossbeam_utils;
 extern crate test;

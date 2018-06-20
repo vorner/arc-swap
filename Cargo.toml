@@ -21,3 +21,8 @@ maintenance = { status = "actively-developed" }
 crossbeam-utils = "~0.4"
 lazy_static = "~1"
 version-sync = "~0.5"
+
+[[bench]]
+name = "int-access"
+path = "benches/int-access.rs"
+harness = false
