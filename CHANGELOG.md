@@ -1,3 +1,7 @@
+# 0.1.2
+
+* More freedom in the `rcu` and `rcu_unwrap` return types.
+
 # 0.1.1
 
 * `rcu` support.

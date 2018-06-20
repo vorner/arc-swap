@@ -1,12 +1,12 @@
 [[package]]
 name = "arc-swap"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "benchmarks"
 version = "0.1.0"
 dependencies = [
- "arc-swap 0.1.0",
+ "arc-swap 0.1.1",
  "crossbeam-utils 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 

@@ -1,4 +1,4 @@
-#![doc(html_root_url = "https://docs.rs/arc-swap/0.1.1/arc-swap/")]
+#![doc(html_root_url = "https://docs.rs/arc-swap/0.1.2/arc-swap/")]
 #![deny(missing_docs)]
 
 //! Making [`Arc`] itself atomic
@@ -485,7 +485,7 @@ impl<T> ArcSwap<T> {
     ///     let cnt = ArcSwap::from(Arc::new(0));
     ///     thread::scope(|scope| {
     ///         for _ in 0..10 {
-    ///             scope.spawn(|| cnt.rcu(|inner| Arc::new(**inner + 1)));
+    ///             scope.spawn(|| cnt.rcu(|inner| **inner + 1));
     ///         }
     ///     });
     ///     assert_eq!(10, *cnt.load());
@@ -530,7 +530,7 @@ impl<T> ArcSwap<T> {
     ///         // The cheaper clone of the cache can be retried if need be.
     ///         let mut cache = HashMap::clone(cache);
     ///         cache.insert(x, result);
-    ///         Arc::new(cache)
+    ///         cache
     ///     });
     ///     result
     /// }
@@ -548,10 +548,14 @@ impl<T> ArcSwap<T> {
     /// shares most of the data with the old one. Something like
     /// [`rpds`](https://crates.io/crates/rpds) or [`im`](https://crates.io/crates/im) might do
     /// what you need.
-    pub fn rcu<F: FnMut(&Arc<T>) -> Arc<T>>(&self, mut f: F) -> Arc<T> {
+    pub fn rcu<R, F>(&self, mut f: F) -> Arc<T>
+    where
+        F: FnMut(&Arc<T>) -> R,
+        R: Into<Arc<T>>,
+    {
         let mut cur = self.load();
         loop {
-            let new = f(&cur);
+            let new = f(&cur).into();
             let (swapped, prev) = self.compare_and_swap(cur, new);
             if swapped {
                 return prev;
@@ -582,8 +586,12 @@ impl<T> ArcSwap<T> {
     /// Note that if you store a copy of the `Arc` somewhere except the `ArcSwap` itself for
     /// extended period of time, this'll busy-wait the whole time. Unless you need the assurance
     /// the `Arc` is deconstructed here, prefer [`rcu`](#method.rcu).
-    pub fn rcu_unwrap<F: FnMut(&T) -> T>(&self, mut f: F) -> T {
-        let mut wrapped = self.rcu(|prev| Arc::new(f(prev)));
+    pub fn rcu_unwrap<R, F>(&self, mut f: F) -> T
+    where
+        F: FnMut(&T) -> R,
+        R: Into<Arc<T>>,
+    {
+        let mut wrapped = self.rcu(|prev| f(&*prev));
         loop {
             match Arc::try_unwrap(wrapped) {
                 Ok(val) => return val,
@@ -766,7 +774,7 @@ mod tests {
             for _ in 0..THREADS {
                 scope.spawn(|| {
                     for _ in 0..ITERATIONS {
-                        shared.rcu(|old| Arc::new(**old + 1));
+                        shared.rcu(|old| **old + 1);
                     }
                 });
             }
