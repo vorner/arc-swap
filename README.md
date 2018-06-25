@@ -12,7 +12,7 @@ know when the target can be safely freed.
 
 This is a cross-breed between the two ‒ an [`ArcSwap`] can be seeded with an
 [`Arc`] and the [`Arc`] can be simultaneously replaced and read by multiple
-threads without any locking.
+threads.
 
 ## License
 
