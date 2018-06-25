@@ -1,4 +1,4 @@
-#![doc(html_root_url = "https://docs.rs/arc-swap/0.1.2/arc-swap/")]
+#![doc(html_root_url = "https://docs.rs/arc-swap/0.1.3/arc-swap/")]
 #![deny(missing_docs)]
 
 //! Making [`Arc`] itself atomic
@@ -37,10 +37,10 @@
 //! suggest this is slightly faster than using a mutex in most cases.
 //!
 //! Furthermore, this implementation doesn't suffer from contention. Specifically, arbitrary number
-//! of readers can access the shared value and won't block each other, even when there are many
-//! readers and writers at once, they don't block each other. The writers will be somewhat slower
-//! when there are active readers at the same time, but won't be stopped indefinitely. Readers
-//! always perform the same number of instructions, without any locking or waiting.
+//! of readers can access the shared value and won't block each other, and are not blocked by
+//! writers.  The writers will be somewhat slower when there are active readers at the same time,
+//! but won't be stopped indefinitely. Readers always perform the same number of instructions,
+//! without any locking or waiting.
 //!
 //! # RCU
 //!
@@ -55,12 +55,11 @@
 //! them (because that could cause a deadlock).
 //!
 //! On the other hand, it is possible to use [`ArcSwap::load`](struct.ArcSwap.html#method.load)
-//! (and theoretically some of the others, but a correct use would be very hard). Note that the
-//! signal handler is not allowed to allocate or deallocate memory. This also means the signal
-//! handler must not drop the last reference to the `Arc` received by loading ‒ therefore, the part
-//! changing it from the outside needs to make sure it does not drop the only other instance once
-//! it swapped the content while the signal handler still runs. See
-//! [`ArcSwap::rcu_unwrap`](struct.ArcSwap.html#method.rcu_unwrap).
+//! (but not the others). Note that the signal handler is not allowed to allocate or deallocate
+//! memory. This also means the signal handler must not drop the last reference to the `Arc`
+//! received by loading ‒ therefore, the part changing it from the outside needs to make sure it
+//! does not drop the only other instance once it swapped the content while the signal handler
+//! still runs. See [`ArcSwap::rcu_unwrap`](struct.ArcSwap.html#method.rcu_unwrap).
 //!
 //! # Example
 //!
@@ -295,6 +294,8 @@ impl<T> ArcSwap<T> {
     ///
     /// This makes another copy (reference) and returns it, atomically (it is safe even when other
     /// thread stores into the same instance at the same time).
+    ///
+    /// The method is lock-free and wait-free.
     #[inline]
     pub fn load(&self) -> Arc<T> {
         let gen = self.gen_lock();
@@ -311,13 +312,17 @@ impl<T> ArcSwap<T> {
 
     /// Replaces the value inside this instance.
     ///
-    /// Further loads will yield the new value.
+    /// Further loads will yield the new value. Uses [`swap`](#method.swap) internally.
     #[inline]
     pub fn store(&self, arc: Arc<T>) {
         drop(self.swap(arc));
     }
 
     /// Exchanges the value inside this instance.
+    ///
+    /// While multiple `swap`s can run concurrently and won't block each other, each one needs to
+    /// wait for all the [`load`s](#method.load) that have seen the old value to finish before
+    /// returning.
     #[inline]
     pub fn swap(&self, arc: Arc<T>) -> Arc<T> {
         let new = strip(arc);
@@ -342,7 +347,8 @@ impl<T> ArcSwap<T> {
     /// the only instance of current into it and not clone it just to compare.
     ///
     /// In other words, if the caller „guesses“ the value of current correctly, it acts like
-    /// [`swap`](#method.swap), otherwise it acts like [`load`](#method.load).
+    /// [`swap`](#method.swap), otherwise it acts like [`load`](#method.load) (including the
+    /// limitations).
     #[inline]
     pub fn compare_and_swap(&self, current: Arc<T>, new: Arc<T>) -> (bool, Arc<T>) {
         // As noted above, this method has either semantics of load or of store. We don't know
