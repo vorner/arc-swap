@@ -1,4 +1,4 @@
-#![doc(html_root_url = "https://docs.rs/arc-swap/0.1.3/arc-swap/")]
+#![doc(html_root_url = "https://docs.rs/arc-swap/0.1.3/arc-swap/", test(attr(deny(warnings))))]
 #![deny(missing_docs)]
 
 //! Making [`Arc`] itself atomic
@@ -513,7 +513,6 @@ impl<T> ArcSwap<T> {
     /// use std::sync::Arc;
     ///
     /// use arc_swap::ArcSwap;
-    /// use crossbeam_utils::scoped as thread;
     ///
     /// fn expensive_computation(x: usize) -> usize {
     ///     x * 2 // Let's pretend multiplication is really expensive
