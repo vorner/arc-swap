@@ -13,7 +13,7 @@
 //! downside is, tracking when the data can be safely deleted is hard.
 //!
 //! This library provides [`ArcSwap`](struct.ArcSwap.html) that allows both at once. It can be
-//! constructed from ordinary [`Arc`], but its value can be loaded and stored atomically, my
+//! constructed from ordinary [`Arc`], but its value can be loaded and stored atomically, by
 //! multiple concurrent threads.
 //!
 //! # Motivation
