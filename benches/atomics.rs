@@ -66,6 +66,18 @@ fn load_store_relaxed(b: &mut Bencher) {
 }
 
 #[bench]
+fn load_swap_relaxed(b: &mut Bencher) {
+    b.iter(|| {
+        let x = AtomicUsize::new(0);
+        for i in 0..BATCH {
+            let x = test::black_box(&x);
+            test::black_box(x.swap(x.load(Ordering::Relaxed) + i, Ordering::Relaxed));
+        }
+        test::black_box(x.load(Ordering::Relaxed));
+    });
+}
+
+#[bench]
 fn load_store_acq_rel(b: &mut Bencher) {
     b.iter(|| {
         let x = AtomicUsize::new(0);
@@ -140,6 +152,18 @@ fn load_store_mt_cst_broken(b: &mut Bencher) {
     bar.wait();
     b.iter(|| {
         bar.wait();
+    });
+}
+
+#[bench]
+fn load_swap_cst(b: &mut Bencher) {
+    b.iter(|| {
+        let x = AtomicUsize::new(0);
+        for i in 0..BATCH {
+            let x = test::black_box(&x);
+            test::black_box(x.swap(x.load(Ordering::SeqCst) + i, Ordering::SeqCst));
+        }
+        test::black_box(x.load(Ordering::SeqCst));
     });
 }
 
