@@ -23,10 +23,14 @@ lazy_static = "~1"
 version-sync = "~0.5"
 
 [[bench]]
-name = "int-access"
-path = "benches/int-access.rs"
-harness = false
+name = "atomics"
+path = "benches/atomics.rs"
 
 [[bench]]
 name = "background"
 path = "benches/background.rs"
+
+[[bench]]
+name = "int-access"
+path = "benches/int-access.rs"
+harness = false
