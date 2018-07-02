@@ -26,3 +26,7 @@ version-sync = "~0.5"
 name = "int-access"
 path = "benches/int-access.rs"
 harness = false
+
+[[bench]]
+name = "atomics"
+path = "benches/atomics.rs"
