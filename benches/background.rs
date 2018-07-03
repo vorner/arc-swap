@@ -70,8 +70,8 @@ fn peek_r1(b: &mut Bencher) {
 }
 
 #[bench]
-fn peek_r4(b: &mut Bencher) {
-    noise(b, 4, 0, peek);
+fn peek_r3(b: &mut Bencher) {
+    noise(b, 3, 0, peek);
 }
 
 #[bench]
@@ -90,8 +90,8 @@ fn load_r1(b: &mut Bencher) {
 }
 
 #[bench]
-fn load_r4(b: &mut Bencher) {
-    noise(b, 4, 0, read);
+fn load_r3(b: &mut Bencher) {
+    noise(b, 3, 0, read);
 }
 
 #[bench]
@@ -110,8 +110,8 @@ fn store_r1(b: &mut Bencher) {
 }
 
 #[bench]
-fn store_r4(b: &mut Bencher) {
-    noise(b, 4, 0, write);
+fn store_r3(b: &mut Bencher) {
+    noise(b, 3, 0, write);
 }
 
 #[bench]
