@@ -102,6 +102,7 @@
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 use std::marker::PhantomData;
 use std::mem;
+use std::ops::Deref;
 use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -189,6 +190,60 @@ struct GenLock(usize);
 impl Drop for GenLock {
     fn drop(&mut self) {
         unreachable!("Forgot to unlock generation");
+    }
+}
+
+/// A short-term proxy object from [`peek`](struct.ArcSwap.html#method.peek)
+pub struct Guard<'a, T: 'a> {
+    lock: Option<GenLock>,
+    arc_swap: &'a ArcSwap<T>,
+    ptr: *const T,
+}
+
+impl<'a, T> Guard<'a, T> {
+    /// Upgrades the guard to a real `Arc`.
+    ///
+    /// This shares the reference count with all the `Arc` inside the corresponding `ArcSwap`. Use
+    /// this if you need to hold the object for longer periods of time.
+    ///
+    /// See [`peek`](struct.ArcSwap.html#method.peek) for details.
+    ///
+    /// Note that this is associated function (so it doesn't collide with the thing pointed to):
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use std::sync::Arc;
+    /// # use arc_swap::{ArcSwap, Guard};
+    /// let a = ArcSwap::from(Arc::new(42));
+    /// let mut ptr = None;
+    /// { // limit the scope where the guard lives
+    ///     let guard = a.peek();
+    ///     if *guard > 40 {
+    ///         ptr = Some(Guard::upgrade(&guard));
+    ///     }
+    /// }
+    /// # let _ = ptr;
+    /// ```
+    pub fn upgrade(guard: &Self) -> Arc<T> {
+        let arc = unsafe { Arc::from_raw(guard.ptr) };
+        Arc::into_raw(Arc::clone(&arc));
+        arc
+    }
+}
+
+impl<'a, T> Deref for Guard<'a, T> {
+    type Target = T;
+    #[inline]
+    fn deref(&self) -> &T {
+        unsafe { self.ptr.as_ref().unwrap() }
+    }
+}
+
+impl<'a, T> Drop for Guard<'a, T> {
+    #[inline]
+    fn drop(&mut self) {
+        self.arc_swap.gen_unlock(self.lock.take().unwrap());
     }
 }
 
@@ -298,16 +353,35 @@ impl<T> ArcSwap<T> {
     /// The method is lock-free and wait-free.
     #[inline]
     pub fn load(&self) -> Arc<T> {
+        Guard::upgrade(&self.peek())
+    }
+
+    /// Loans the value for a short time.
+    ///
+    /// This returns a temporary borrow of the object currently held inside. This is slightly
+    /// faster than [`load`](#method.load), but it is not suitable for holding onto for longer
+    /// periods of time.
+    ///
+    /// If you discover later on that you need to hold onto it for longer, you can [`
+    ///
+    /// # Warning
+    ///
+    /// This currently prevents the `Arc` inside from being replaced. Any [`swap`](#method.swap),
+    /// [`store`](#method.store) or [`rcu`](#method.rcu) will busy-loop while waiting for the proxy
+    /// object to be destroyed. Therefore, this is suitable only for things like reading a
+    /// (reasonably small) configuration value, but not for eg. computations on the held values.
+    ///
+    /// If you are not sure what is better, benchmarking is recommended.
+    #[inline]
+    pub fn peek(&self) -> Guard<T> {
         let gen = self.gen_lock();
-        // Acquire, to get the target of the pointer.
         let ptr = self.ptr.load(Ordering::Acquire);
-        let arc = unsafe { Arc::from_raw(ptr) };
-        // Bump the reference count by one, so we can return one into the arc and another to
-        // the caller.
-        Arc::into_raw(Arc::clone(&arc));
-        // Release, so the dangerous section stays in.
-        self.gen_unlock(gen);
-        arc
+
+        Guard {
+            lock: Some(gen),
+            arc_swap: self,
+            ptr,
+        }
     }
 
     /// Replaces the value inside this instance.

@@ -121,6 +121,12 @@ fn main() {
         |i| arc.store(Arc::new(i)),
     );
     test_round(
+        "arc-peek-store",
+        10_000_000,
+        || *arc.peek(),
+        |i| arc.store(Arc::new(i)),
+    );
+    test_round(
         "arc-rcu",
         10_000_000,
         || *arc.load(),
