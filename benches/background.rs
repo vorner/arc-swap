@@ -13,108 +13,156 @@ use arc_swap::ArcSwap;
 use crossbeam_utils::scoped;
 use test::Bencher;
 
-const ITERS: usize = 1_000_000;
+const ITERS: usize = 100_000;
 
-lazy_static! {
-    static ref A: ArcSwap<usize> = ArcSwap::from(Arc::new(0));
+macro_rules! method {
+    ($name:ident) => {
+        mod $name {
+            use super::{noise, Bencher};
+
+            #[bench]
+            fn uncontended(b: &mut Bencher) {
+                b.iter(super::$name);
+            }
+
+            #[bench]
+            fn r1(b: &mut Bencher) {
+                noise(b, 1, 0, super::$name);
+            }
+
+            #[bench]
+            fn r3(b: &mut Bencher) {
+                noise(b, 3, 0, super::$name);
+            }
+
+            #[bench]
+            fn rw(b: &mut Bencher) {
+                noise(b, 1, 1, super::$name);
+            }
+        }
+    };
 }
 
-fn peek() {
-    for _ in 0..ITERS {
-        test::black_box(*A.peek());
-    }
-}
+macro_rules! noise {
+    () => {
+        use super::{scoped, test, Arc, AtomicBool, Bencher, Ordering, ITERS};
 
-fn read() {
-    for _ in 0..ITERS {
-        test::black_box(A.load());
-    }
-}
-
-fn write() {
-    for _ in 0..ITERS {
-        test::black_box(A.store(Arc::new(0)));
-    }
-}
-
-fn noise<F: Fn()>(b: &mut Bencher, readers: usize, writers: usize, f: F) {
-    let flag = Arc::new(AtomicBool::new(true));
-    scoped::scope(|s| {
-        for _ in 0..readers {
-            s.spawn(|| {
-                while flag.load(Ordering::Relaxed) {
-                    read();
+        fn noise<F: Fn()>(b: &mut Bencher, readers: usize, writers: usize, f: F) {
+            let flag = Arc::new(AtomicBool::new(true));
+            scoped::scope(|s| {
+                for _ in 0..readers {
+                    s.spawn(|| {
+                        while flag.load(Ordering::Relaxed) {
+                            read();
+                        }
+                    });
                 }
+                for _ in 0..writers {
+                    s.spawn(|| {
+                        while flag.load(Ordering::Relaxed) {
+                            write();
+                        }
+                    });
+                }
+                b.iter(f);
+                flag.store(false, Ordering::Relaxed);
             });
         }
-        for _ in 0..writers {
-            s.spawn(|| {
-                while flag.load(Ordering::Relaxed) {
-                    write();
-                }
-            });
+    };
+}
+
+mod arc_swap_b {
+    use super::ArcSwap;
+
+    lazy_static! {
+        static ref A: ArcSwap<usize> = ArcSwap::from(Arc::new(0));
+    }
+
+    fn peek() {
+        for _ in 0..ITERS {
+            test::black_box(*A.peek());
         }
-        b.iter(f);
-        flag.store(false, Ordering::Relaxed);
-    });
+    }
+
+    fn read() {
+        for _ in 0..ITERS {
+            test::black_box(A.load());
+        }
+    }
+
+    fn write() {
+        for _ in 0..ITERS {
+            test::black_box(A.store(Arc::new(0)));
+        }
+    }
+
+    noise!();
+
+    method!(peek);
+    method!(read);
+    method!(write);
 }
 
-#[bench]
-fn peek_uncontended(b: &mut Bencher) {
-    b.iter(peek);
+mod mutex {
+    use std::sync::Mutex;
+
+    lazy_static! {
+        static ref M: Mutex<Arc<usize>> = Mutex::new(Arc::new(0));
+    }
+
+    fn peek() {
+        for _ in 0..ITERS {
+            test::black_box(**M.lock().unwrap());
+        }
+    }
+
+    fn read() {
+        for _ in 0..ITERS {
+            test::black_box(Arc::clone(&*M.lock().unwrap()));
+        }
+    }
+
+    fn write() {
+        for _ in 0..ITERS {
+            test::black_box(*M.lock().unwrap() = Arc::new(42));
+        }
+    }
+
+    noise!();
+
+    method!(peek);
+    method!(read);
+    method!(write);
 }
 
-#[bench]
-fn peek_r1(b: &mut Bencher) {
-    noise(b, 1, 0, peek);
-}
+mod rwlock {
+    use std::sync::RwLock;
 
-#[bench]
-fn peek_r3(b: &mut Bencher) {
-    noise(b, 3, 0, peek);
-}
+    lazy_static! {
+        static ref L: RwLock<Arc<usize>> = RwLock::new(Arc::new(0));
+    }
 
-#[bench]
-fn peek_rw(b: &mut Bencher) {
-    noise(b, 2, 1, peek);
-}
+    fn peek() {
+        for _ in 0..ITERS {
+            test::black_box(**L.read().unwrap());
+        }
+    }
 
-#[bench]
-fn load_uncontended(b: &mut Bencher) {
-    b.iter(read);
-}
+    fn read() {
+        for _ in 0..ITERS {
+            test::black_box(Arc::clone(&*L.read().unwrap()));
+        }
+    }
 
-#[bench]
-fn load_r1(b: &mut Bencher) {
-    noise(b, 1, 0, read);
-}
+    fn write() {
+        for _ in 0..ITERS {
+            test::black_box(*L.write().unwrap() = Arc::new(42));
+        }
+    }
 
-#[bench]
-fn load_r3(b: &mut Bencher) {
-    noise(b, 3, 0, read);
-}
+    noise!();
 
-#[bench]
-fn load_rw(b: &mut Bencher) {
-    noise(b, 2, 1, read);
-}
-
-#[bench]
-fn store_uncontended(b: &mut Bencher) {
-    b.iter(write);
-}
-
-#[bench]
-fn store_r1(b: &mut Bencher) {
-    noise(b, 1, 0, write);
-}
-
-#[bench]
-fn store_r3(b: &mut Bencher) {
-    noise(b, 3, 0, write);
-}
-
-#[bench]
-fn store_rw(b: &mut Bencher) {
-    noise(b, 2, 1, write);
+    method!(peek);
+    method!(read);
+    method!(write);
 }
