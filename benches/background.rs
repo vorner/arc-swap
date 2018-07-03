@@ -19,6 +19,12 @@ lazy_static! {
     static ref A: ArcSwap<usize> = ArcSwap::from(Arc::new(0));
 }
 
+fn peek() {
+    for _ in 0..ITERS {
+        test::black_box(*A.peek());
+    }
+}
+
 fn read() {
     for _ in 0..ITERS {
         test::black_box(A.load());
@@ -54,6 +60,26 @@ fn noise<F: Fn()>(b: &mut Bencher, readers: usize, writers: usize, f: F) {
 }
 
 #[bench]
+fn peek_uncontended(b: &mut Bencher) {
+    b.iter(peek);
+}
+
+#[bench]
+fn peek_r1(b: &mut Bencher) {
+    noise(b, 1, 0, peek);
+}
+
+#[bench]
+fn peek_r4(b: &mut Bencher) {
+    noise(b, 4, 0, peek);
+}
+
+#[bench]
+fn peek_rw(b: &mut Bencher) {
+    noise(b, 2, 1, peek);
+}
+
+#[bench]
 fn load_uncontended(b: &mut Bencher) {
     b.iter(read);
 }
@@ -70,7 +96,7 @@ fn load_r4(b: &mut Bencher) {
 
 #[bench]
 fn load_rw(b: &mut Bencher) {
-    noise(b, 2, 1, write);
+    noise(b, 2, 1, read);
 }
 
 #[bench]
