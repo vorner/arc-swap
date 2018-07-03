@@ -24,12 +24,14 @@ fn test_run<R, W>(
     iterations: usize,
     r: R,
     w: W,
-)
-where
+) where
     R: Fn() -> usize + Sync + Send,
     W: Fn(usize) + Sync + Send,
 {
-    print!("{:20} ({} + {}) x {}: ", name, read_threads, write_threads, iterations);
+    print!(
+        "{:20} ({} + {}) x {}: ",
+        name, read_threads, write_threads, iterations
+    );
     io::stdout().flush().unwrap();
     let before = Instant::now();
     thread::scope(|scope| {
@@ -49,7 +51,11 @@ where
         }
     });
     let duration = Instant::now() - before;
-    println!("{:03}.{:03}s", duration.as_secs(), duration.subsec_nanos() / 1_000_000);
+    println!(
+        "{:03}.{:03}s",
+        duration.as_secs(),
+        duration.subsec_nanos() / 1_000_000
+    );
 }
 
 fn test_round<R, W>(name: &str, iterations: usize, r: R, w: W)
