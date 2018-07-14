@@ -27,3 +27,9 @@ impl<T> AsRaw<T> for *mut T {
         self
     }
 }
+
+impl<T> AsRaw<T> for *const T {
+    fn as_raw(self) -> *mut T {
+        self as *mut T
+    }
+}

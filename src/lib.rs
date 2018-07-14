@@ -975,6 +975,13 @@ mod tests {
             assert_eq!(1, Arc::strong_count(&n2));
             assert_eq!(i + 1, *shared.load());
         }
+
+        let a = shared.load();
+        // One inside shared, one for a
+        assert_eq!(2, Arc::strong_count(&a));
+        drop(shared);
+        // Only a now
+        assert_eq!(1, Arc::strong_count(&a));
     }
 
     #[test]
@@ -1013,5 +1020,20 @@ mod tests {
         assert_eq!(THREADS * ITERATIONS, *shared.load());
     }
 
-    // XXX: Test for dropping & ref counts
+    /// Handling null/none values
+    #[test]
+    fn nulls() {
+        let shared = ArcSwapAny::from(Some(Arc::new(0)));
+        let orig = shared.swap(None);
+        assert_eq!(1, Arc::strong_count(&orig.unwrap()));
+        let null = shared.load();
+        assert!(null.is_none());
+        let a = Arc::new(42);
+        let orig = shared.compare_and_swap(ptr::null(), Some(Arc::clone(&a)));
+        assert!(orig.is_none());
+        assert_eq!(2, Arc::strong_count(&a));
+        let orig = shared.compare_and_swap(&None, None);
+        assert_eq!(3, Arc::strong_count(&a));
+        assert!(Arc::ptr_eq(&a, &orig.unwrap()));
+    }
 }
