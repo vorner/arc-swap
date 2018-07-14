@@ -22,6 +22,9 @@ crossbeam-utils = "~0.4"
 lazy_static = "~1"
 version-sync = "~0.5"
 
+[profile.bench]
+debug = true
+
 [[bench]]
 name = "atomics"
 path = "benches/atomics.rs"
