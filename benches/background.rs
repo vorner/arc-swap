@@ -9,7 +9,7 @@ extern crate test;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use arc_swap::ArcSwap;
+use arc_swap::{ArcSwap, ArcSwapOption, Guard};
 use crossbeam_utils::scoped;
 use test::Bencher;
 
@@ -93,6 +93,38 @@ mod arc_swap_b {
     fn write() {
         for _ in 0..ITERS {
             test::black_box(A.store(Arc::new(0)));
+        }
+    }
+
+    noise!();
+
+    method!(peek);
+    method!(read);
+    method!(write);
+}
+
+mod arc_swap_option {
+    use super::{ArcSwapOption, Guard};
+
+    lazy_static! {
+        static ref A: ArcSwapOption<usize> = ArcSwapOption::from(None);
+    }
+
+    fn peek() {
+        for _ in 0..ITERS {
+            test::black_box(Guard::get_ref(&A.peek()));
+        }
+    }
+
+    fn read() {
+        for _ in 0..ITERS {
+            test::black_box(A.load());
+        }
+    }
+
+    fn write() {
+        for _ in 0..ITERS {
+            test::black_box(A.store(Some(Arc::new(0))));
         }
     }
 

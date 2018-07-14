@@ -12,7 +12,7 @@ extern crate num_cpus;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex, MutexGuard, PoisonError};
 
-use arc_swap::ArcSwapAny;
+use arc_swap::ArcSwapOption;
 use crossbeam_utils::scoped;
 
 lazy_static! {
@@ -30,13 +30,13 @@ fn lock() -> MutexGuard<'static, ()> {
 /// the ref counts are correct afterwards.
 fn storm_link_list(node_cnt: usize, iters: usize) {
     struct LLNode {
-        next: ArcSwapAny<Option<Arc<LLNode>>>,
+        next: ArcSwapOption<LLNode>,
         num: usize,
         owner: usize,
     }
 
     let _lock = lock();
-    let head = ArcSwapAny::from(None::<Arc<LLNode>>);
+    let head = ArcSwapOption::from(None::<Arc<LLNode>>);
     let cpus = num_cpus::get();
     // FIXME: If one thread fails, but others don't, it'll deadlock.
     let bar = Barrier::new(cpus);
@@ -48,7 +48,7 @@ fn storm_link_list(node_cnt: usize, iters: usize) {
             scope.spawn(move || {
                 let nodes = (0..node_cnt)
                     .map(|i| LLNode {
-                        next: ArcSwapAny::from(None),
+                        next: ArcSwapOption::from(None),
                         num: i,
                         owner: thread,
                     })
@@ -144,7 +144,7 @@ fn storm_unroll(node_cnt: usize, iters: usize) {
     let global_cnt = AtomicUsize::new(0);
     // We plan to create this many nodes during the whole test.
     let live_cnt = AtomicUsize::new(cpus * node_cnt * iters);
-    let head = ArcSwapAny::from(None);
+    let head = ArcSwapOption::from(None);
     scoped::scope(|scope| {
         for thread in 0..cpus {
             // Borrow these instead of moving.

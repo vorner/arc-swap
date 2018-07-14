@@ -393,6 +393,7 @@ pub struct ArcSwapAny<T: RefCnt> {
 }
 
 pub type ArcSwap<T> = ArcSwapAny<Arc<T>>;
+pub type ArcSwapOption<T> = ArcSwapAny<Option<Arc<T>>>;
 
 impl<T: RefCnt> From<T> for ArcSwapAny<T> {
     fn from(val: T) -> Self {
@@ -1026,7 +1027,7 @@ mod tests {
     /// Handling null/none values
     #[test]
     fn nulls() {
-        let shared = ArcSwapAny::from(Some(Arc::new(0)));
+        let shared = ArcSwapOption::from(Some(Arc::new(0)));
         let orig = shared.swap(None);
         assert_eq!(1, Arc::strong_count(&orig.unwrap()));
         let null = shared.load();
