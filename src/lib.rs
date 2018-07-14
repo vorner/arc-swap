@@ -115,6 +115,7 @@
 //! [`Mutex`]: https://doc.rust-lang.org/std/sync/struct.Mutex.html
 //! [`shared_ptr`]: http://en.cppreference.com/w/cpp/memory/shared_ptr
 
+mod as_raw;
 mod ref_cnt;
 
 use std::cell::Cell;
@@ -127,6 +128,7 @@ use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 
+use as_raw::AsRaw;
 use ref_cnt::{NonNull, RefCnt};
 
 // # Implementation details
@@ -551,9 +553,10 @@ impl<T: RefCnt> ArcSwapAny<T> {
     /// In other words, if the caller „guesses“ the value of current correctly, it acts like
     /// [`swap`](#method.swap), otherwise it acts like [`load`](#method.load) (including the
     /// limitations).
-    // TODO: Accept the guard too!
-    pub fn compare_and_swap(&self, current: &T, new: T) -> T {
-        let current = T::as_ptr(current);
+    ///
+    /// The `current` can be specified as `&Arc`, [`Guard`](struct.Guard.html) or as a raw pointer.
+    pub fn compare_and_swap<C: AsRaw<T::Base>>(&self, current: C, new: T) -> T {
+        let current = current.as_raw();
         let new = T::into_ptr(new);
 
         // As noted above, this method has either semantics of load or of store. We don't know
