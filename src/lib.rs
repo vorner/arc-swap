@@ -2,7 +2,7 @@
     html_root_url = "https://docs.rs/arc-swap/0.1.4/arc-swap/",
     test(attr(deny(warnings)))
 )]
-#![deny(missing_docs)]
+// #![deny(missing_docs)] XXX
 
 //! Making [`Arc`] itself atomic
 //!
@@ -115,6 +115,8 @@
 //! [`Mutex`]: https://doc.rust-lang.org/std/sync/struct.Mutex.html
 //! [`shared_ptr`]: http://en.cppreference.com/w/cpp/memory/shared_ptr
 
+mod ref_cnt;
+
 use std::cell::Cell;
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 use std::marker::PhantomData;
@@ -124,6 +126,8 @@ use std::ptr;
 use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
+
+use ref_cnt::{NonNull, RefCnt};
 
 // # Implementation details
 //
@@ -208,7 +212,7 @@ struct GenLock {
 }
 
 /// A bomb so one doesn't forget to unlock generations.
-#[cfg(debug_assertions)]
+#[cfg(debug_assertions)] // The bomb actually makes it ~20% slower, so don't put it into production
 impl Drop for GenLock {
     fn drop(&mut self) {
         unreachable!("Forgot to unlock generation");
@@ -216,13 +220,16 @@ impl Drop for GenLock {
 }
 
 /// A short-term proxy object from [`peek`](struct.ArcSwap.html#method.peek)
-pub struct Guard<'a, T: 'a> {
+pub struct Guard<'a, T: RefCnt + 'a>
+where
+    T::Base: 'a,
+{
     lock: Option<GenLock>,
-    arc_swap: &'a ArcSwap<T>,
-    ptr: *const T,
+    arc_swap: &'a ArcSwapAny<T>,
+    ptr: *const T::Base,
 }
 
-impl<'a, T> Guard<'a, T> {
+impl<'a, T: RefCnt> Guard<'a, T> {
     /// Upgrades the guard to a real `Arc`.
     ///
     /// This shares the reference count with all the `Arc` inside the corresponding `ArcSwap`. Use
@@ -247,21 +254,25 @@ impl<'a, T> Guard<'a, T> {
     /// }
     /// # let _ = ptr;
     /// ```
-    pub fn upgrade(guard: &Self) -> Arc<T> {
-        let arc = unsafe { Arc::from_raw(guard.ptr) };
-        Arc::into_raw(Arc::clone(&arc));
-        arc
+    pub fn upgrade(guard: &Self) -> T {
+        let res = unsafe { T::from_ptr(guard.ptr) };
+        T::inc(&res);
+        res
+    }
+
+    pub fn get_ref<'g>(guard: &'g Self) -> Option<&'g T::Base> {
+        unsafe { guard.ptr.as_ref() }
     }
 }
 
-impl<'a, T> Deref for Guard<'a, T> {
-    type Target = T;
-    fn deref(&self) -> &T {
+impl<'a, T: NonNull> Deref for Guard<'a, T> {
+    type Target = T::Base;
+    fn deref(&self) -> &T::Base {
         unsafe { self.ptr.as_ref().unwrap() }
     }
 }
 
-impl<'a, T> Drop for Guard<'a, T> {
+impl<'a, T: RefCnt> Drop for Guard<'a, T> {
     fn drop(&mut self) {
         self.arc_swap.gen_unlock(self.lock.take().unwrap());
     }
@@ -269,11 +280,6 @@ impl<'a, T> Drop for Guard<'a, T> {
 
 /// Store count for 2 newest generations (others must always be 0)
 const GEN_CNT: usize = 2;
-
-/// Turn the arc into a raw pointer.
-fn strip<T>(arc: Arc<T>) -> *mut T {
-    Arc::into_raw(arc) as *mut T
-}
 
 enum SignalSafety {
     Safe,
@@ -365,10 +371,10 @@ const YIELD_EVERY: usize = 16;
 /// [`Arc`]: https://doc.rust-lang.org/std/sync/struct.Arc.html
 /// [`from`]: https://doc.rust-lang.org/nightly/std/convert/trait.From.html#tymethod.from
 #[repr(align(64))]
-pub struct ArcSwap<T> {
+pub struct ArcSwapAny<T: RefCnt> {
     // Notes: AtomicPtr needs Sized
     /// The actual pointer, extracted from the Arc.
-    ptr: AtomicPtr<T>,
+    ptr: AtomicPtr<T::Base>,
 
     /// The current generation. Module by their count to discover the groups.
     gen_idx: AtomicUsize,
@@ -381,12 +387,14 @@ pub struct ArcSwap<T> {
     _phantom_arc: PhantomData<Arc<T>>,
 }
 
-impl<T> From<Arc<T>> for ArcSwap<T> {
-    fn from(arc: Arc<T>) -> Self {
+pub type ArcSwap<T> = ArcSwapAny<Arc<T>>;
+
+impl<T: RefCnt> From<T> for ArcSwapAny<T> {
+    fn from(val: T) -> Self {
         // The AtomicPtr requires *mut in its interface. We are more like *const, so we cast it.
         // However, we always go back to *const right away when we get the pointer on the other
         // side, so it should be fine.
-        let ptr = strip(arc);
+        let ptr = T::into_ptr(val);
         Self {
             ptr: AtomicPtr::new(ptr),
             gen_idx: AtomicUsize::new(0),
@@ -396,7 +404,7 @@ impl<T> From<Arc<T>> for ArcSwap<T> {
     }
 }
 
-impl<T> Drop for ArcSwap<T> {
+impl<T: RefCnt> Drop for ArcSwapAny<T> {
     fn drop(&mut self) {
         // Note that by now we are visible only by one thread (otherwise we couldn't get `&mut`),
         // so we can abandon all these atomic-ordering madnesses.
@@ -404,30 +412,44 @@ impl<T> Drop for ArcSwap<T> {
         // We hold one reference in the Arc, but it's hidden. Convert us back to Arc and drop that
         // Arc instead of us, which will clear the ref.
         let ptr = *self.ptr.get_mut();
-        // Turn it back into the Arc and then drop it.
-        drop(unsafe { Arc::from_raw(ptr) });
+        // We are getting rid of the one stored ref count
+        unsafe { T::dec(ptr) };
     }
 }
 
-impl<T> Clone for ArcSwap<T> {
+impl<T: RefCnt> Clone for ArcSwapAny<T> {
     fn clone(&self) -> Self {
         Self::from(self.load())
     }
 }
 
-impl<T: Debug> Debug for ArcSwap<T> {
+impl<T> Debug for ArcSwapAny<T>
+where
+    T: RefCnt,
+    T::Base: Debug,
+{
     fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
-        self.load().fmt(formatter)
+        let guard = self.peek();
+        let r = Guard::get_ref(&guard);
+        if T::can_null() {
+            r.fmt(formatter)
+        } else {
+            r.unwrap().fmt(formatter)
+        }
     }
 }
 
-impl<T: Display> Display for ArcSwap<T> {
+impl<T> Display for ArcSwapAny<T>
+where
+    T: NonNull,
+    T::Base: Display,
+{
     fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
-        self.load().fmt(formatter)
+        self.peek().deref().fmt(formatter)
     }
 }
 
-impl<T> ArcSwap<T> {
+impl<T: RefCnt> ArcSwapAny<T> {
     /// Loads the value.
     ///
     /// This makes another copy (reference) and returns it, atomically (it is safe even when other
@@ -439,7 +461,7 @@ impl<T> ArcSwap<T> {
     ///
     /// The method is *not* async-signal-safe. Use [`peek_signal_safe`](#method.peek_signal_safe)
     /// for that.
-    pub fn load(&self) -> Arc<T> {
+    pub fn load(&self) -> T {
         Guard::upgrade(&self.peek())
     }
 
@@ -497,8 +519,8 @@ impl<T> ArcSwap<T> {
     /// Replaces the value inside this instance.
     ///
     /// Further loads will yield the new value. Uses [`swap`](#method.swap) internally.
-    pub fn store(&self, arc: Arc<T>) {
-        drop(self.swap(arc));
+    pub fn store(&self, val: T) {
+        drop(self.swap(val));
     }
 
     /// Exchanges the value inside this instance.
@@ -506,15 +528,15 @@ impl<T> ArcSwap<T> {
     /// While multiple `swap`s can run concurrently and won't block each other, each one needs to
     /// wait for all the [`load`s](#method.load) that have seen the old value to finish before
     /// returning.
-    pub fn swap(&self, arc: Arc<T>) -> Arc<T> {
-        let new = strip(arc);
+    pub fn swap(&self, new: T) -> T {
+        let new = T::into_ptr(new);
         // AcqRel needed to publish the target of the new pointer and get the target of the old
         // one.
         //
         // SeqCst to synchronize the time lines with the group counters.
         let old = self.ptr.swap(new, Ordering::SeqCst);
         self.wait_for_readers();
-        unsafe { Arc::from_raw(old) }
+        unsafe { T::from_ptr(old) }
     }
 
     /// Swaps the stored Arc if it is equal to `current`.
@@ -530,9 +552,9 @@ impl<T> ArcSwap<T> {
     /// [`swap`](#method.swap), otherwise it acts like [`load`](#method.load) (including the
     /// limitations).
     // TODO: Accept the guard too!
-    pub fn compare_and_swap(&self, current: &Arc<T>, new: Arc<T>) -> Arc<T> {
-        let current = current as &T as *const T as *mut T;
-        let new = strip(new);
+    pub fn compare_and_swap(&self, current: &T, new: T) -> T {
+        let current = T::as_ptr(current);
+        let new = T::into_ptr(new);
 
         // As noted above, this method has either semantics of load or of store. We don't know
         // which ones upfront, so we need to implement safety measures for both.
@@ -540,7 +562,7 @@ impl<T> ArcSwap<T> {
 
         let previous = self.ptr.compare_and_swap(current, new, Ordering::SeqCst);
         let swapped = ptr::eq(current, previous);
-        let previous = unsafe { Arc::from_raw(previous) };
+        let previous = unsafe { T::from_ptr(previous) };
 
         if swapped {
             // New went in, previous out, but their ref counts are correct. So nothing to do here.
@@ -548,7 +570,7 @@ impl<T> ArcSwap<T> {
             // Previous is a new copy of what is inside (and it stays there as well), so bump its
             // ref count. New is thrown away so dec its ref count (but do it outside of the
             // gen-lock).
-            Arc::into_raw(Arc::clone(&previous));
+            T::inc(&previous);
         }
 
         self.gen_unlock(gen);
@@ -559,7 +581,7 @@ impl<T> ArcSwap<T> {
             self.wait_for_readers();
         } else {
             // We didn't swap, so new is black-holed.
-            drop(unsafe { Arc::from_raw(new) });
+            unsafe { T::dec(new) };
         }
 
         previous
@@ -739,16 +761,16 @@ impl<T> ArcSwap<T> {
     /// shares most of the data with the old one. Something like
     /// [`rpds`](https://crates.io/crates/rpds) or [`im`](https://crates.io/crates/im) might do
     /// what you need.
-    pub fn rcu<R, F>(&self, mut f: F) -> Arc<T>
+    pub fn rcu<R, F>(&self, mut f: F) -> T
     where
-        F: FnMut(&Arc<T>) -> R,
-        R: Into<Arc<T>>,
+        F: FnMut(&T) -> R,
+        R: Into<T>,
     {
         let mut cur = self.load();
         loop {
             let new = f(&cur).into();
             let prev = self.compare_and_swap(&cur, new);
-            let swapped = Arc::ptr_eq(&cur, &prev);
+            let swapped = ptr::eq(T::as_ptr(&cur), T::as_ptr(&prev));
             if swapped {
                 return prev;
             } else {
@@ -756,7 +778,9 @@ impl<T> ArcSwap<T> {
             }
         }
     }
+}
 
+impl<T> ArcSwap<T> {
     /// An [`rcu`](#method.rcu) which waits to be the sole owner of the original value and unwraps
     /// it.
     ///
@@ -985,4 +1009,6 @@ mod tests {
         });
         assert_eq!(THREADS * ITERATIONS, *shared.load());
     }
+
+    // XXX: Test for dropping & ref counts
 }
