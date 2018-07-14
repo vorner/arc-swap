@@ -1,3 +1,5 @@
+* `compare_and_swap` accepts borrowed `Arc` as `current` and doesn't consume one
+  ref count.
 * Sharding internal counters, to improve performance on read-mostly contented
   scenarios.
 * Providing `peek_signal_safe` as the only async signal safe method to use

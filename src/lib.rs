@@ -120,6 +120,7 @@ use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;
+use std::ptr;
 use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -521,30 +522,28 @@ impl<T> ArcSwap<T> {
     /// If the current value of the `ArcSwap` is equal to `current`, the `new` is stored inside. If
     /// not, nothing happens.
     ///
-    /// True is returned as the first part of result if it did swap content, false otherwise.
-    /// Either way, the previous content is returned as the second part. The property of standard
-    /// library atomics that if previous is the same as current, the swap happened, is still true,
-    /// but unlike the values in the atomics, `Arc` is not copy ‒ therefore, you may want to pass
-    /// the only instance of current into it and not clone it just to compare.
+    /// The previous value (no matter if the swap happened or not) is returned. Therefore, if the
+    /// returned value is equal to `current`, the swap happened. You want to do a pointer-based
+    /// comparison to determine it (`Arc::ptr_eq`).
     ///
     /// In other words, if the caller „guesses“ the value of current correctly, it acts like
     /// [`swap`](#method.swap), otherwise it acts like [`load`](#method.load) (including the
     /// limitations).
-    pub fn compare_and_swap(&self, current: Arc<T>, new: Arc<T>) -> (bool, Arc<T>) {
-        // As noted above, this method has either semantics of load or of store. We don't know
-        // which ones upfront, so we need to implement safety measures for both.
-        let current = strip(current);
+    // TODO: Accept the guard too!
+    pub fn compare_and_swap(&self, current: &Arc<T>, new: Arc<T>) -> Arc<T> {
+        let current = current as &T as *const T as *mut T;
         let new = strip(new);
 
+        // As noted above, this method has either semantics of load or of store. We don't know
+        // which ones upfront, so we need to implement safety measures for both.
         let gen = self.gen_lock(SignalSafety::Unsafe);
 
         let previous = self.ptr.compare_and_swap(current, new, Ordering::SeqCst);
-        let swapped = current == previous;
+        let swapped = ptr::eq(current, previous);
         let previous = unsafe { Arc::from_raw(previous) };
 
         if swapped {
-            // New went in, previous out, but their ref counts are correct. We handle current later
-            // on. So nothing to do here.
+            // New went in, previous out, but their ref counts are correct. So nothing to do here.
         } else {
             // Previous is a new copy of what is inside (and it stays there as well), so bump its
             // ref count. New is thrown away so dec its ref count (but do it outside of the
@@ -562,10 +561,8 @@ impl<T> ArcSwap<T> {
             // We didn't swap, so new is black-holed.
             drop(unsafe { Arc::from_raw(new) });
         }
-        // The current is black-holed every time.
-        drop(unsafe { Arc::from_raw(current) });
 
-        (swapped, previous)
+        previous
     }
 
     /// Wait until all readers go away.
@@ -750,7 +747,8 @@ impl<T> ArcSwap<T> {
         let mut cur = self.load();
         loop {
             let new = f(&cur).into();
-            let (swapped, prev) = self.compare_and_swap(cur, new);
+            let prev = self.compare_and_swap(&cur, new);
+            let swapped = Arc::ptr_eq(&cur, &prev);
             if swapped {
                 return prev;
             } else {
@@ -930,8 +928,7 @@ mod tests {
             assert_eq!(2, Arc::strong_count(&orig));
             let n1 = Arc::new(i + 1);
             // Success
-            let (swapped, prev) = shared.compare_and_swap(Arc::clone(&orig), Arc::clone(&n1));
-            assert!(swapped);
+            let prev = shared.compare_and_swap(&orig, Arc::clone(&n1));
             assert!(Arc::ptr_eq(&orig, &prev));
             // One for orig, one for prev
             assert_eq!(2, Arc::strong_count(&orig));
@@ -941,8 +938,7 @@ mod tests {
             let n2 = Arc::new(i);
             drop(prev);
             // Failure
-            let (swapped, prev) = shared.compare_and_swap(Arc::clone(&orig), Arc::clone(&n2));
-            assert!(!swapped);
+            let prev = shared.compare_and_swap(&orig, Arc::clone(&n2));
             assert!(Arc::ptr_eq(&n1, &prev));
             // One for orig
             assert_eq!(1, Arc::strong_count(&orig));
