@@ -262,6 +262,9 @@ impl<'a, T: RefCnt> Guard<'a, T> {
         res
     }
 
+    // Note on the lifetime: we can't really return the 'a lifetime even though the underlying
+    // arc-swap lives that long. The arc-swap does not guarantee the lifetime of the Arc inside,
+    // the guard does.
     pub fn get_ref<'g>(guard: &'g Self) -> Option<&'g T::Base> {
         unsafe { guard.ptr.as_ref() }
     }
