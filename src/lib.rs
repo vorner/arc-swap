@@ -184,7 +184,10 @@ use std::thread;
 // All other operations can be Relaxed.
 
 /// Generation lock, to abstract locking and unlocking readers.
-struct GenLock(usize);
+struct GenLock {
+    shard: usize,
+    gen: usize,
+}
 
 /// A bomb so one doesn't forget to unlock generations.
 impl Drop for GenLock {
@@ -255,6 +258,59 @@ fn strip<T>(arc: Arc<T>) -> *mut T {
     Arc::into_raw(arc) as *mut T
 }
 
+/// Number of shards (see [`Shard`]).
+const SHARD_CNT: usize = 9;
+
+/// A single shard.
+///
+/// To avoid contention and sharing of the counters between readers, we don't have one pair of
+/// generation counters, but several. The reader picks one shard and uses that, while the writer
+/// looks through all of them. This is still not perfect (two threads may choose the same ID), but
+/// it helps.
+#[repr(align(64))]
+#[derive(Default)]
+struct Shard([AtomicUsize; GEN_CNT]);
+
+/// Global counter of threads.
+///
+/// We specifically don't use ThreadId here, because that one uses a mutex inside and we want to be
+/// able to use `load` in signal handlers.
+static THREAD_ID_GEN: AtomicUsize = AtomicUsize::new(0);
+
+thread_local! {
+    /// A shard a thread has chosen.
+    ///
+    /// I haven't found anything that would prevent signal handlers from accessing thread-local
+    /// storage. But we can't use ordinary Cell because of that. However, Relaxed load and ordinary
+    /// read from normal variable is of the same speed on x86 architecture according to benchmarks.
+    static THREAD_SHARD: AtomicUsize = AtomicUsize::new(SHARD_CNT);
+}
+
+impl Shard {
+    /// Chooses which shard to use.
+    ///
+    /// Caches the decision in thread local storage.
+    fn choose() -> usize {
+        THREAD_SHARD
+            .try_with(|ts| {
+                let mut val = ts.load(Ordering::Relaxed);
+                if val >= SHARD_CNT {
+                    val = THREAD_ID_GEN.fetch_add(1, Ordering::Relaxed) % SHARD_CNT;
+                    ts.store(val, Ordering::Relaxed);
+                }
+                val
+            })
+            .unwrap_or(0)
+    }
+    /// Takes a snapshot of current values (with Acquire ordering)
+    fn snapshot(&self) -> [usize; GEN_CNT] {
+        [
+            self.0[0].load(Ordering::Acquire),
+            self.0[1].load(Ordering::Acquire),
+        ]
+    }
+}
+
 /// An atomic storage for [`Arc`].
 ///
 /// This is a storage where an [`Arc`] may live. It can be read and written atomically from several
@@ -290,8 +346,8 @@ pub struct ArcSwap<T> {
     /// The current generation. Module by their count to discover the groups.
     gen_idx: AtomicUsize,
 
-    /// Count of readers in either generation.
-    reader_group_cnts: [AtomicUsize; GEN_CNT],
+    /// Count of readers in either generation per shard.
+    shards: [Shard; SHARD_CNT],
 
     /// We are basically an Arc in disguise. Inherit parameters from Arc by pretending to contain
     /// it.
@@ -307,7 +363,7 @@ impl<T> From<Arc<T>> for ArcSwap<T> {
         Self {
             ptr: AtomicPtr::new(ptr),
             gen_idx: AtomicUsize::new(0),
-            reader_group_cnts: [AtomicUsize::new(0), AtomicUsize::new(0)],
+            shards: Default::default(),
             _phantom_arc: PhantomData,
         }
     }
@@ -470,10 +526,12 @@ impl<T> ArcSwap<T> {
             // Note that we don't need the snapshot to be consistent. We just need to see both
             // halves being zero, not necessarily at the same time.
             let gen = self.gen_idx.load(Ordering::Relaxed);
-            let groups = [
-                self.reader_group_cnts[0].load(Ordering::Acquire),
-                self.reader_group_cnts[1].load(Ordering::Acquire),
-            ];
+            // TODO: Would it possibly be faster to track the generations separately per each
+            // shard?
+            let groups = self.shards.iter().fold([0, 0], |[a1, a2], s| {
+                let [v1, v2] = s.snapshot();
+                [a1 + v1, a2 + v2]
+            });
             // Should we increment the generation? Is the next one empty?
             let next_gen = gen.wrapping_add(1);
             if groups[next_gen % GEN_CNT] == 0 {
@@ -490,23 +548,23 @@ impl<T> ArcSwap<T> {
 
     #[inline]
     fn gen_lock(&self) -> GenLock {
+        let shard = Shard::choose();
         let gen = self.gen_idx.load(Ordering::Relaxed) % GEN_CNT;
         // Unlike the real Arc, we don't have to check for the ref count overflow. Nobody can drop
         // a reader.
         //
         // SeqCst: Acquire, so the dangerous section stays in. SeqCst to sync timelines with the
         // swap on the ptr in writer thread.
-        self.reader_group_cnts[gen].fetch_add(1, Ordering::SeqCst);
-        GenLock(gen)
+        self.shards[shard].0[gen].fetch_add(1, Ordering::SeqCst);
+        GenLock { shard, gen }
     }
 
     #[inline]
     fn gen_unlock(&self, lock: GenLock) {
-        let gen = lock.0;
+        // Release, so the dangerous section stays in.
+        self.shards[lock.shard].0[lock.gen].fetch_sub(1, Ordering::Release);
         // Disarm the drop-bomb
         mem::forget(lock);
-        // Release, so the dangerous section stays in.
-        self.reader_group_cnts[gen].fetch_sub(1, Ordering::Release);
     }
 
     /// Read-Copy-Update of the pointer inside.
