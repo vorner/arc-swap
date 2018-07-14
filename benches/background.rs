@@ -7,7 +7,7 @@ extern crate lazy_static;
 extern crate test;
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use arc_swap::{ArcSwap, ArcSwapOption, Guard};
 use crossbeam_utils::scoped;
@@ -15,29 +15,57 @@ use test::Bencher;
 
 const ITERS: usize = 100_000;
 
+lazy_static! {
+    static ref LOCK: Mutex<()> = Mutex::new(());
+}
+
+/// We want to prevent these tests from running concurrently, because they run multi-threaded.
+///
+/// If it is run as benchmark, it is OK. But if it is run as a test, they run in multiple threads
+/// and some of them fight (especially the rwlock ones run for a really long time).
+fn lock() -> MutexGuard<'static, ()> {
+    LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 macro_rules! method {
     ($name:ident) => {
         mod $name {
-            use super::{noise, Bencher};
+            use super::{lock, noise, Bencher};
 
             #[bench]
             fn uncontended(b: &mut Bencher) {
+                let _lock = lock();
                 b.iter(super::$name);
             }
 
             #[bench]
             fn r1(b: &mut Bencher) {
-                noise(b, 1, 0, super::$name);
+                noise(b, 1, 0, 0, super::$name);
             }
 
             #[bench]
             fn r3(b: &mut Bencher) {
-                noise(b, 3, 0, super::$name);
+                noise(b, 3, 0, 0, super::$name);
+            }
+
+            #[bench]
+            fn p1(b: &mut Bencher) {
+                noise(b, 0, 1, 0, super::$name);
+            }
+
+            #[bench]
+            fn p3(b: &mut Bencher) {
+                noise(b, 0, 3, 0, super::$name);
             }
 
             #[bench]
             fn rw(b: &mut Bencher) {
-                noise(b, 1, 1, super::$name);
+                noise(b, 1, 0, 1, super::$name);
+            }
+
+            #[bench]
+            fn pw(b: &mut Bencher) {
+                noise(b, 0, 1, 1, super::$name);
             }
         }
     };
@@ -45,15 +73,23 @@ macro_rules! method {
 
 macro_rules! noise {
     () => {
-        use super::{scoped, test, Arc, AtomicBool, Bencher, Ordering, ITERS};
+        use super::{lock, scoped, test, Arc, AtomicBool, Bencher, Ordering, ITERS};
 
-        fn noise<F: Fn()>(b: &mut Bencher, readers: usize, writers: usize, f: F) {
+        fn noise<F: Fn()>(b: &mut Bencher, readers: usize, peekers: usize, writers: usize, f: F) {
+            let _lock = lock();
             let flag = Arc::new(AtomicBool::new(true));
             scoped::scope(|s| {
                 for _ in 0..readers {
                     s.spawn(|| {
                         while flag.load(Ordering::Relaxed) {
                             read();
+                        }
+                    });
+                }
+                for _ in 0..peekers {
+                    s.spawn(|| {
+                        while flag.load(Ordering::Relaxed) {
+                            peek();
                         }
                     });
                 }
