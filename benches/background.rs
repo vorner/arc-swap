@@ -15,18 +15,6 @@ use test::Bencher;
 
 const ITERS: usize = 100_000;
 
-lazy_static! {
-    static ref LOCK: Mutex<()> = Mutex::new(());
-}
-
-/// We want to prevent these tests from running concurrently, because they run multi-threaded.
-///
-/// If it is run as benchmark, it is OK. But if it is run as a test, they run in multiple threads
-/// and some of them fight (especially the rwlock ones run for a really long time).
-fn lock() -> MutexGuard<'static, ()> {
-    LOCK.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 macro_rules! method {
     ($name:ident) => {
         mod $name {
@@ -73,7 +61,20 @@ macro_rules! method {
 
 macro_rules! noise {
     () => {
-        use super::{lock, scoped, test, Arc, AtomicBool, Bencher, Ordering, ITERS};
+        use super::{scoped, test, Arc, AtomicBool, Bencher, Mutex, MutexGuard, Ordering, PoisonError, ITERS};
+
+        lazy_static! {
+            static ref LOCK: Mutex<()> = Mutex::new(());
+        }
+
+        /// We want to prevent these tests from running concurrently, because they run multi-threaded.
+        ///
+        /// If it is run as benchmark, it is OK. But if it is run as a test, they run in multiple threads
+        /// and some of them fight (especially the rwlock ones run for a really long time).
+        fn lock() -> MutexGuard<'static, ()> {
+            LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+        }
+
 
         fn noise<F: Fn()>(b: &mut Bencher, readers: usize, peekers: usize, writers: usize, f: F) {
             let _lock = lock();
@@ -172,8 +173,6 @@ mod arc_swap_option {
 }
 
 mod mutex {
-    use std::sync::Mutex;
-
     lazy_static! {
         static ref M: Mutex<Arc<usize>> = Mutex::new(Arc::new(0));
     }

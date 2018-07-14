@@ -54,7 +54,7 @@ fn test_run<R, W>(
     println!(
         "{:03}.{:03}s",
         duration.as_secs(),
-        duration.subsec_nanos() / 1_000_000
+        duration.subsec_nanos() / 100_000
     );
 }
 
@@ -82,59 +82,59 @@ fn main() {
     let mutex = Mutex::new(42);
     test_round(
         "mutex",
-        10_000_000,
+        100_000,
         || *mutex.lock().unwrap(),
         |i| *mutex.lock().unwrap() = i,
     );
     let mutex = Mutex::new(Arc::new(42));
     test_round(
         "mutex-arc",
-        10_000_000,
+        100_000,
         || **mutex.lock().unwrap(),
         |i| *mutex.lock().unwrap() = Arc::new(i),
     );
     test_round(
         "mutex-arc-clone",
-        10_000_000,
+        100_000,
         || *Arc::clone(&*mutex.lock().unwrap()),
         |i| *mutex.lock().unwrap() = Arc::new(i),
     );
     let lock = RwLock::new(42);
     test_round(
         "rw",
-        10_000_000,
+        100_000,
         || *lock.read().unwrap(),
         |i| *lock.write().unwrap() = i,
     );
     let lock = RwLock::new(Arc::new(42));
     test_round(
         "rw-arc",
-        10_000_000,
+        100_000,
         || **lock.read().unwrap(),
         |i| *lock.write().unwrap() = Arc::new(i),
     );
     test_round(
         "rw-arc-clone",
-        10_000_000,
+        100_000,
         || *Arc::clone(&*lock.read().unwrap()),
         |i| *lock.write().unwrap() = Arc::new(i),
     );
     let arc = ArcSwap::from(Arc::new(42));
     test_round(
         "arc-load-store",
-        10_000_000,
+        100_000,
         || *arc.load(),
         |i| arc.store(Arc::new(i)),
     );
     test_round(
         "arc-peek-store",
-        10_000_000,
+        100_000,
         || *arc.peek(),
         |i| arc.store(Arc::new(i)),
     );
     test_round(
         "arc-rcu",
-        10_000_000,
+        100_000,
         || *arc.load(),
         |i| {
             arc.rcu(|_| Arc::new(i));
@@ -142,7 +142,7 @@ fn main() {
     );
     test_round(
         "arc-rcu-unwrap",
-        10_000_000,
+        100_000,
         || *arc.load(),
         |i| {
             arc.rcu_unwrap(|_| i);

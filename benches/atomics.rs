@@ -9,7 +9,7 @@ use std::thread;
 
 use test::Bencher;
 
-const BATCH: usize = 10_000_000;
+const BATCH: usize = 1_000_000;
 const PARAL: usize = 4;
 
 #[bench]
