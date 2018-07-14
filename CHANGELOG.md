@@ -1,3 +1,9 @@
+* Sharding internal counters, to improve performance on read-mostly contented
+  scenarios.
+* Providing `peek_signal_safe` as the only async signal safe method to use
+  inside signal handlers. This removes the footgun with dropping the `Arc`
+  returned from `load` inside a signal handler.
+
 # 0.1.4
 
 * The `peek` method to use the `Arc` inside without incrementing the reference

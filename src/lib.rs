@@ -57,14 +57,14 @@
 //! functions one might use inside them. Specifically, it is *not* allowed to use mutexes inside
 //! them (because that could cause a deadlock).
 //!
-//! On the other hand, it is possible to use [`ArcSwap::load`](struct.ArcSwap.html#method.load)
-//! (but not the others). Note that the signal handler is not allowed to allocate or deallocate
-//! memory. This also means the signal handler must not drop the last reference to the `Arc`
-//! received by loading ‒ therefore, the part changing it from the outside needs to make sure it
-//! does not drop the only other instance once it swapped the content while the signal handler
-//! still runs. See [`ArcSwap::rcu_unwrap`](struct.ArcSwap.html#method.rcu_unwrap).
+//! On the other hand, it is possible to use
+//! [`ArcSwap::peek_signal_safe`](struct.ArcSwap.html#method.peek_signal_safe) (but not the
+//! others). Note that the signal handler is not allowed to allocate or deallocate
+//! memory, therefore it is not recommended to [`upgrade`](struct.Guard.html#method.upgrade) the
+//! returned guard (it is strictly speaking possible to use that safely, but it is hard and brings
+//! no benefit).
 //!
-//! # Example
+//! # Examples
 //!
 //! ```rust
 //! extern crate arc_swap;
@@ -102,6 +102,7 @@
 //! [`Mutex`]: https://doc.rust-lang.org/std/sync/struct.Mutex.html
 //! [`shared_ptr`]: http://en.cppreference.com/w/cpp/memory/shared_ptr
 
+use std::cell::Cell;
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 use std::marker::PhantomData;
 use std::mem;
@@ -260,6 +261,11 @@ fn strip<T>(arc: Arc<T>) -> *mut T {
     Arc::into_raw(arc) as *mut T
 }
 
+enum SignalSafety {
+    Safe,
+    Unsafe,
+}
+
 /// Number of shards (see [`Shard`]).
 const SHARD_CNT: usize = 9;
 
@@ -275,17 +281,14 @@ struct Shard([AtomicUsize; GEN_CNT]);
 
 /// Global counter of threads.
 ///
-/// We specifically don't use ThreadId here, because that one uses a mutex inside and we want to be
-/// able to use `load` in signal handlers.
+/// We specifically don't use ThreadId here, because it is opaque and doesn't give us a number :-(.
 static THREAD_ID_GEN: AtomicUsize = AtomicUsize::new(0);
 
 thread_local! {
     /// A shard a thread has chosen.
     ///
-    /// I haven't found anything that would prevent signal handlers from accessing thread-local
-    /// storage. But we can't use ordinary Cell because of that. However, Relaxed load and ordinary
-    /// read from normal variable is of the same speed on x86 architecture according to benchmarks.
-    static THREAD_SHARD: AtomicUsize = AtomicUsize::new(SHARD_CNT);
+    /// The default value is just a marker it hasn't been set.
+    static THREAD_SHARD: Cell<usize> = Cell::new(SHARD_CNT);
 }
 
 impl Shard {
@@ -298,10 +301,10 @@ impl Shard {
     fn choose() -> usize {
         THREAD_SHARD
             .try_with(|ts| {
-                let mut val = ts.load(Ordering::Relaxed);
+                let mut val = ts.get();
                 if val >= SHARD_CNT {
                     val = THREAD_ID_GEN.fetch_add(1, Ordering::Relaxed) % SHARD_CNT;
-                    ts.store(val, Ordering::Relaxed);
+                    ts.set(val);
                 }
                 val
             })
@@ -417,8 +420,24 @@ impl<T> ArcSwap<T> {
     /// thread stores into the same instance at the same time).
     ///
     /// The method is lock-free and wait-free.
+    ///
+    /// # Signal safety
+    ///
+    /// The method is *not* async-signal-safe. Use [`peek_signal_safe`](#method.peek_signal_safe)
+    /// for that.
     pub fn load(&self) -> Arc<T> {
         Guard::upgrade(&self.peek())
+    }
+
+    fn peek_inner(&self, signal_safe: SignalSafety) -> Guard<T> {
+        let gen = self.gen_lock(signal_safe);
+        let ptr = self.ptr.load(Ordering::Acquire);
+
+        Guard {
+            lock: Some(gen),
+            arc_swap: self,
+            ptr,
+        }
     }
 
     /// Loans the value for a short time.
@@ -437,15 +456,28 @@ impl<T> ArcSwap<T> {
     /// (reasonably small) configuration value, but not for eg. computations on the held values.
     ///
     /// If you are not sure what is better, benchmarking is recommended.
+    ///
+    /// # Signal safety
+    ///
+    /// For an async-signal-safe version, use [`peek_signal_safe`](#method.peek_signal_safe).
     pub fn peek(&self) -> Guard<T> {
-        let gen = self.gen_lock();
-        let ptr = self.ptr.load(Ordering::Acquire);
+        self.peek_inner(SignalSafety::Unsafe)
+    }
 
-        Guard {
-            lock: Some(gen),
-            arc_swap: self,
-            ptr,
-        }
+    /// An async-signal-safe version of [`peek`](#method.peek)
+    ///
+    /// This method uses only restricted set of primitives to be async-signal-safe, at a slight
+    /// performance hit in a contended scenario (signals should be rare, so it shouldn't be a
+    /// problem in practice).
+    ///
+    /// As the returned guard prevents the value inside to be dropped, the value can be used during
+    /// the signal handler. Unless it is upgraded (which is *not* recommended in a signal handler),
+    /// there's also no way the signal handler would have to drop the value inside the `Arc`.
+    ///
+    /// The same performance warning about writer methods applies, so it is recommended not to
+    /// spend too much time holding the returned guard.
+    pub fn peek_signal_safe(&self) -> Guard<T> {
+        self.peek_inner(SignalSafety::Safe)
     }
 
     /// Replaces the value inside this instance.
@@ -491,7 +523,7 @@ impl<T> ArcSwap<T> {
         let current = strip(current);
         let new = strip(new);
 
-        let gen = self.gen_lock();
+        let gen = self.gen_lock(SignalSafety::Unsafe);
 
         let previous = self.ptr.compare_and_swap(current, new, Ordering::SeqCst);
         let swapped = current == previous;
@@ -556,8 +588,11 @@ impl<T> ArcSwap<T> {
         }
     }
 
-    fn gen_lock(&self) -> GenLock {
-        let shard = Shard::choose();
+    fn gen_lock(&self, signal_safe: SignalSafety) -> GenLock {
+        let shard = match signal_safe {
+            SignalSafety::Safe => 0,
+            SignalSafety::Unsafe => Shard::choose(),
+        };
         let gen = self.gen_idx.load(Ordering::Relaxed) % GEN_CNT;
         // Unlike the real Arc, we don't have to check for the ref count overflow. Nobody can drop
         // a reader.
@@ -718,14 +753,10 @@ impl<T> ArcSwap<T> {
     /// instead of `Arc`. After replacing the original, it waits until there are no other owners of
     /// the arc and unwraps it.
     ///
-    /// One use case is around signal handlers. The signal handler loads the pointer, but it must
-    /// not be the last one to drop it. Therefore, this methods make sure there are no signal
-    /// handlers owning it at the time of deconstruction of the `Arc`.
-    ///
-    /// Another use case might be an RCU with a structure that is rather slow to drop ‒ if it was
+    /// Possible use case might be an RCU with a structure that is rather slow to drop ‒ if it was
     /// left to random reader (the last one to hold the old value), it could cause a timeout or
     /// jitter in a query time. With this, the deallocation is done in the updater thread,
-    /// therefore outside of a hot path.
+    /// therefore outside of the hot path.
     ///
     /// # Warning
     ///
