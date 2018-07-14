@@ -36,20 +36,33 @@
 //!
 //! # Performance characteristics
 //!
+//! The data structure is optimise for read-heavy situations with only occasional writes.
+//!
 //! Only very basic benchmarks were done so far (you can find them in the git repository). These
-//! suggest this is slightly faster than using a mutex in most cases.
+//! suggest reading operations are faster than using a mutex, in a contended situation by a large
+//! margin and comparable on writes.
 //!
 //! Furthermore, this implementation doesn't suffer from contention. Specifically, arbitrary number
 //! of readers can access the shared value and won't block each other, and are not blocked by
 //! writers.  The writers will be somewhat slower when there are active readers at the same time,
 //! but won't be stopped indefinitely. Readers always perform the same number of instructions,
-//! without any locking or waiting.
+//! without any locking or waiting (though they can slow each other down by accessing the same
+//! memory locations under circumstances).
+//!
+//! However, the data structure is a bit large so it probably is not suitable to have a lot of them
+//! around. It is more aimed to „anchor“ a global immutable data structure than building complex
+//! atomic data structures with many pointers inside them.
 //!
 //! # RCU
 //!
 //! This also offers an [RCU implementation](struct.ArcSwap.html#method.rcu), for read-heavy
 //! situations. Note that the RCU update is considered relatively slow operation. In case there's
 //! only one update thread, using [`store`](struct.ArcSwap.html#method.store) is enough.
+//!
+//! # Atomic orderings
+//!
+//! It is guaranteed each operation performs at least one `SeqCst` atomic read-write operation,
+//! therefore even operations on different instances have a defined global order of operations.
 //!
 //! # Unix signal handlers
 //!
