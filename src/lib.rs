@@ -1,4 +1,7 @@
-#![doc(html_root_url = "https://docs.rs/arc-swap/0.1.4/arc-swap/", test(attr(deny(warnings))))]
+#![doc(
+    html_root_url = "https://docs.rs/arc-swap/0.1.4/arc-swap/",
+    test(attr(deny(warnings)))
+)]
 #![deny(missing_docs)]
 
 //! Making [`Arc`] itself atomic
@@ -289,6 +292,9 @@ impl Shard {
     /// Chooses which shard to use.
     ///
     /// Caches the decision in thread local storage.
+    ///
+    /// Note that all the orderings around here are Relaxed. That is OK ‒ we just want to have *a*
+    /// number (that is likely different than someone else has right now).
     fn choose() -> usize {
         THREAD_SHARD
             .try_with(|ts| {
@@ -309,6 +315,10 @@ impl Shard {
         ]
     }
 }
+
+/// When waiting to something, yield the thread every so many iterations so something else might
+/// get a chance to run and release whatever is being held.
+const YIELD_EVERY: usize = 16;
 
 /// An atomic storage for [`Arc`].
 ///
@@ -516,6 +526,7 @@ impl<T> ArcSwap<T> {
     /// Wait until all readers go away.
     fn wait_for_readers(&self) {
         let mut seen_group = [false; GEN_CNT];
+        let mut iter = 0usize;
         while !seen_group.iter().all(|seen| *seen) {
             // Note that we don't need the snapshot to be consistent. We just need to see both
             // halves being zero, not necessarily at the same time.
@@ -536,8 +547,12 @@ impl<T> ArcSwap<T> {
             for i in 0..GEN_CNT {
                 seen_group[i] = seen_group[i] || (groups[i] == 0);
             }
-            // TODO: Sometimes yield
-            atomic::spin_loop_hint();
+            iter = iter.wrapping_add(1);
+            if iter % YIELD_EVERY == 0 {
+                thread::yield_now();
+            } else {
+                atomic::spin_loop_hint();
+            }
         }
     }
 
