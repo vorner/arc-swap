@@ -190,6 +190,7 @@ struct GenLock {
 }
 
 /// A bomb so one doesn't forget to unlock generations.
+#[cfg(debug_assertions)]
 impl Drop for GenLock {
     fn drop(&mut self) {
         unreachable!("Forgot to unlock generation");
@@ -237,14 +238,12 @@ impl<'a, T> Guard<'a, T> {
 
 impl<'a, T> Deref for Guard<'a, T> {
     type Target = T;
-    #[inline]
     fn deref(&self) -> &T {
         unsafe { self.ptr.as_ref().unwrap() }
     }
 }
 
 impl<'a, T> Drop for Guard<'a, T> {
-    #[inline]
     fn drop(&mut self) {
         self.arc_swap.gen_unlock(self.lock.take().unwrap());
     }
@@ -338,6 +337,7 @@ impl Shard {
 ///
 /// [`Arc`]: https://doc.rust-lang.org/std/sync/struct.Arc.html
 /// [`from`]: https://doc.rust-lang.org/nightly/std/convert/trait.From.html#tymethod.from
+#[repr(align(64))]
 pub struct ArcSwap<T> {
     // Notes: AtomicPtr needs Sized
     /// The actual pointer, extracted from the Arc.
@@ -407,7 +407,6 @@ impl<T> ArcSwap<T> {
     /// thread stores into the same instance at the same time).
     ///
     /// The method is lock-free and wait-free.
-    #[inline]
     pub fn load(&self) -> Arc<T> {
         Guard::upgrade(&self.peek())
     }
@@ -428,7 +427,6 @@ impl<T> ArcSwap<T> {
     /// (reasonably small) configuration value, but not for eg. computations on the held values.
     ///
     /// If you are not sure what is better, benchmarking is recommended.
-    #[inline]
     pub fn peek(&self) -> Guard<T> {
         let gen = self.gen_lock();
         let ptr = self.ptr.load(Ordering::Acquire);
@@ -443,7 +441,6 @@ impl<T> ArcSwap<T> {
     /// Replaces the value inside this instance.
     ///
     /// Further loads will yield the new value. Uses [`swap`](#method.swap) internally.
-    #[inline]
     pub fn store(&self, arc: Arc<T>) {
         drop(self.swap(arc));
     }
@@ -453,7 +450,6 @@ impl<T> ArcSwap<T> {
     /// While multiple `swap`s can run concurrently and won't block each other, each one needs to
     /// wait for all the [`load`s](#method.load) that have seen the old value to finish before
     /// returning.
-    #[inline]
     pub fn swap(&self, arc: Arc<T>) -> Arc<T> {
         let new = strip(arc);
         // AcqRel needed to publish the target of the new pointer and get the target of the old
@@ -479,7 +475,6 @@ impl<T> ArcSwap<T> {
     /// In other words, if the caller „guesses“ the value of current correctly, it acts like
     /// [`swap`](#method.swap), otherwise it acts like [`load`](#method.load) (including the
     /// limitations).
-    #[inline]
     pub fn compare_and_swap(&self, current: Arc<T>, new: Arc<T>) -> (bool, Arc<T>) {
         // As noted above, this method has either semantics of load or of store. We don't know
         // which ones upfront, so we need to implement safety measures for both.
@@ -519,7 +514,6 @@ impl<T> ArcSwap<T> {
     }
 
     /// Wait until all readers go away.
-    #[inline]
     fn wait_for_readers(&self) {
         let mut seen_group = [false; GEN_CNT];
         while !seen_group.iter().all(|seen| *seen) {
@@ -542,11 +536,11 @@ impl<T> ArcSwap<T> {
             for i in 0..GEN_CNT {
                 seen_group[i] = seen_group[i] || (groups[i] == 0);
             }
+            // TODO: Sometimes yield
             atomic::spin_loop_hint();
         }
     }
 
-    #[inline]
     fn gen_lock(&self) -> GenLock {
         let shard = Shard::choose();
         let gen = self.gen_idx.load(Ordering::Relaxed) % GEN_CNT;
@@ -559,7 +553,6 @@ impl<T> ArcSwap<T> {
         GenLock { shard, gen }
     }
 
-    #[inline]
     fn gen_unlock(&self, lock: GenLock) {
         // Release, so the dangerous section stays in.
         self.shards[lock.shard].0[lock.gen].fetch_sub(1, Ordering::Release);
