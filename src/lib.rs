@@ -277,14 +277,19 @@ impl<'a, T: RefCnt> Guard<'a, T> {
         res
     }
 
-    // Note on the lifetime: we can't really return the 'a lifetime even though the underlying
-    // arc-swap lives that long. The arc-swap does not guarantee the lifetime of the Arc inside,
-    // the guard does.
     /// Gets a reference to the value inside.
     ///
     /// This is returned as `Option` even for pointers that can't return Null, to have a common
     /// interface. The non-null ones also implement the `Deref` trait, so they can more easily be
     /// used as that.
+    // Explicit lifetimes here:
+    // * The ptr.as_ref() is more than willing to provide *any* lifetime we ask for. So being extra
+    //   careful around it.
+    // * While this is the lifetime that would get elided, one could also think the 'a lifetime
+    //   would make sense. However, it is not so, because the arc-swap can replace the Arc inside
+    //   and drop, the only thing preventing it from doing so is this guard. Therefore, at any time
+    //   after the guard goes away, the pointed-to value can too.
+    #[cfg_attr(feature = "cargo-clippy", allow(needless_lifetimes))]
     pub fn get_ref<'g>(guard: &'g Self) -> Option<&'g T::Base> {
         unsafe { guard.ptr.as_ref() }
     }
@@ -904,6 +909,7 @@ pub type ArcSwapOption<T> = ArcSwapAny<Option<Arc<T>>>;
 mod tests {
     extern crate crossbeam_utils;
 
+    use std::panic;
     use std::sync::atomic::AtomicUsize;
     use std::sync::Barrier;
 
@@ -1116,5 +1122,28 @@ mod tests {
         let orig = shared.compare_and_swap(&None::<Arc<_>>, None);
         assert_eq!(3, Arc::strong_count(&a));
         assert!(Arc::ptr_eq(&a, &orig.unwrap()));
+    }
+
+    /// We have a callback in RCU. Check what happens if we access the value from within.
+    #[test]
+    fn recursive() {
+        let shared = ArcSwap::from(Arc::new(0));
+
+        shared.rcu(|i| {
+            if **i < 10 {
+                shared.rcu(|i| **i + 1);
+            }
+            **i
+        });
+        assert_eq!(10, *shared.peek());
+        assert_eq!(2, Arc::strong_count(&shared.load()));
+    }
+
+    /// A panic from within the rcu callback should not change anything.
+    #[test]
+    fn rcu_panic() {
+        let shared = ArcSwap::from(Arc::new(0));
+        assert!(panic::catch_unwind(|| shared.rcu(|_| -> usize { panic!() })).is_err());
+        assert_eq!(1, Arc::strong_count(&shared.swap(Arc::new(42))));
     }
 }
