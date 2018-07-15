@@ -19,7 +19,7 @@ script:
       export RUST_BACKTRACE=1 &&
       export CARGO_INCREMENTAL=1 &&
       cargo build &&
-      cargo test --release --tests &&
+      cargo test --release --all &&
       cargo test --release -- --ignored &&
       cargo doc --no-deps &&
       (test "$TRAVIS_RUST_VERSION" != nightly || cargo test --release --benches) &&
