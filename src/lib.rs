@@ -2,7 +2,7 @@
     html_root_url = "https://docs.rs/arc-swap/0.1.4/arc-swap/",
     test(attr(deny(warnings)))
 )]
-// #![deny(missing_docs)] XXX
+#![deny(missing_docs)]
 
 //! Making [`Arc`] itself atomic
 //!
@@ -280,6 +280,11 @@ impl<'a, T: RefCnt> Guard<'a, T> {
     // Note on the lifetime: we can't really return the 'a lifetime even though the underlying
     // arc-swap lives that long. The arc-swap does not guarantee the lifetime of the Arc inside,
     // the guard does.
+    /// Gets a reference to the value inside.
+    ///
+    /// This is returned as `Option` even for pointers that can't return Null, to have a common
+    /// interface. The non-null ones also implement the `Deref` trait, so they can more easily be
+    /// used as that.
     pub fn get_ref<'g>(guard: &'g Self) -> Option<&'g T::Base> {
         unsafe { guard.ptr.as_ref() }
     }
@@ -416,7 +421,7 @@ pub struct ArcSwapAny<T: RefCnt> {
 
     /// We are basically an Arc in disguise. Inherit parameters from Arc by pretending to contain
     /// it.
-    _phantom_arc: PhantomData<Arc<T>>,
+    _phantom_arc: PhantomData<T>,
 }
 
 impl<T: RefCnt> From<T> for ArcSwapAny<T> {
@@ -562,6 +567,19 @@ impl<T: RefCnt> ArcSwapAny<T> {
     /// [`Guard`](struct.Guard.html) can prevent this from finishing. However, unlike `RwLock`, a
     /// steady stream of readers will not block writers and if each guard is held only for a short
     /// period of time, writers will progress too.
+    ///
+    /// However, it is also possible to cause a deadlock (eg. this is an example of *broken* code):
+    ///
+    /// ```rust,no_run
+    /// # use std::sync::Arc;
+    /// # use arc_swap::ArcSwap;
+    /// let shared = ArcSwap::from(Arc::new(42));
+    /// let guard = shared.peek();
+    /// // This will deadlock, because the guard is still active here and swap
+    /// // can't pull the value from under its feet.
+    /// shared.swap(Arc::new(0));
+    /// # drop(guard);
+    /// ```
     pub fn swap(&self, new: T) -> T {
         let new = T::into_ptr(new);
         // AcqRel needed to publish the target of the new pointer and get the target of the old
@@ -795,7 +813,8 @@ impl<T: RefCnt> ArcSwapAny<T> {
     ///
     /// Depending on the size of cache above, the cloning might not be as cheap. You can however
     /// use persistent data structures ‒ each modification creates a new data structure, but it
-    /// shares most of the data with the old one. Something like
+    /// shares most of the data with the old one (which is usually accomplished by using `Arc`s
+    /// inside to share the unchanged values). Something like
     /// [`rpds`](https://crates.io/crates/rpds) or [`im`](https://crates.io/crates/im) might do
     /// what you need.
     pub fn rcu<R, F>(&self, mut f: F) -> T
@@ -1094,7 +1113,7 @@ mod tests {
         let orig = shared.compare_and_swap(ptr::null(), Some(Arc::clone(&a)));
         assert!(orig.is_none());
         assert_eq!(2, Arc::strong_count(&a));
-        let orig = shared.compare_and_swap(&None, None);
+        let orig = shared.compare_and_swap(&None::<Arc<_>>, None);
         assert_eq!(3, Arc::strong_count(&a));
         assert!(Arc::ptr_eq(&a, &orig.unwrap()));
     }

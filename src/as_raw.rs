@@ -1,6 +1,31 @@
 use super::{Guard, RefCnt};
 
+/// A trait describing things that can be turned into a raw pointer.
+///
+/// This is just an abstraction of things that can be passed to the
+/// [`compare_and_swap`](struct.ArcSwapAny.html#method.compare_and_swap).
+///
+/// # Examples
+///
+/// ```
+/// use std::ptr;
+/// use std::sync::Arc;
+///
+/// use arc_swap::ArcSwapOption;
+///
+/// let a = Arc::new(42);
+/// let shared = ArcSwapOption::from(Some(Arc::clone(&a)));
+///
+/// shared.compare_and_swap(&a, Some(Arc::clone(&a)));
+/// shared.compare_and_swap(&None::<Arc<_>>, Some(Arc::clone(&a)));
+/// shared.compare_and_swap(shared.peek(), Some(Arc::clone(&a)));
+/// shared.compare_and_swap(ptr::null(), Some(Arc::clone(&a)));
+/// ```
 pub trait AsRaw<T> {
+    /// Converts the value into a raw pointer.
+    ///
+    /// The value is consumed, because the trait is usually implemented on references and
+    /// reference-like types.
     fn as_raw(self) -> *mut T;
 }
 
