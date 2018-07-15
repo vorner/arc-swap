@@ -1,3 +1,5 @@
+# 0.2.0
+
 * Added an `ArcSwapOption`, which allows storing NULL values (as None) as well
   as a valid pointer.
 * `compare_and_swap` accepts borrowed `Arc` as `current` and doesn't consume one
