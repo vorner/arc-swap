@@ -15,7 +15,7 @@
 //! allowing to pass the value from one thread to another without the use of a [`Mutex`]. The
 //! downside is, tracking when the data can be safely deleted is hard.
 //!
-//! This library provides [`ArcSwap`](struct.ArcSwap.html) that allows both at once. It can be
+//! This library provides [`ArcSwap`](type.ArcSwap.html) that allows both at once. It can be
 //! constructed from ordinary [`Arc`], but its value can be loaded and stored atomically, by
 //! multiple concurrent threads.
 //!
@@ -29,7 +29,7 @@
 //!
 //! And finally, there are some real use cases for this functionality. For example, when one thread
 //! publishes something (for example configuration) and other threads want to have a peek to the
-//! current one from time to time. There's a global [`ArcSwap`](struct.ArcSwap.html), holding the
+//! current one from time to time. There's a global [`ArcSwap`](type.ArcSwap.html), holding the
 //! current snapshot and everyone is free to make a copy and hold onto it for a while. The
 //! publisher thread simply stores a new snapshot every time and the old configuration gets dropped
 //! once all the other threads give up their copies of the pointer.
@@ -55,9 +55,9 @@
 //!
 //! # RCU
 //!
-//! This also offers an [RCU implementation](struct.ArcSwap.html#method.rcu), for read-heavy
+//! This also offers an [RCU implementation](struct.ArcSwapAny.html#method.rcu), for read-heavy
 //! situations. Note that the RCU update is considered relatively slow operation. In case there's
-//! only one update thread, using [`store`](struct.ArcSwap.html#method.store) is enough.
+//! only one update thread, using [`store`](struct.ArcSwapAny.html#method.store) is enough.
 //!
 //! # Atomic orderings
 //!
@@ -71,11 +71,22 @@
 //! them (because that could cause a deadlock).
 //!
 //! On the other hand, it is possible to use
-//! [`ArcSwap::peek_signal_safe`](struct.ArcSwap.html#method.peek_signal_safe) (but not the
+//! [`ArcSwap::peek_signal_safe`](struct.ArcSwapAny.html#method.peek_signal_safe) (but not the
 //! others). Note that the signal handler is not allowed to allocate or deallocate
 //! memory, therefore it is not recommended to [`upgrade`](struct.Guard.html#method.upgrade) the
 //! returned guard (it is strictly speaking possible to use that safely, but it is hard and brings
 //! no benefit).
+//!
+//! # Support for `NULL`
+//!
+//! Similar to `Arc`, [`ArcSwap`](type.ArcSwap.html) always contains a value. There is, however,
+//! [`ArcSwapOption`](type.ArcSwapOption.html), which works on `Option<Arc<_>>` instead of
+//! `Arc<_>` and supports mostly the same operations. In fact, both are just type aliases of
+//! [`ArcSwapAny`](struct.ArcSwapAny.html). Therefore, most documentation and methods can be found
+//! there instead on the type aliases.
+//!
+//! It is also possible to support other types similar to `Arc` by implementing the
+//! [`RefCnt`](trait.RefCnt.html) trait.
 //!
 //! # Examples
 //!
@@ -128,8 +139,8 @@ use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 
-use as_raw::AsRaw;
-use ref_cnt::{NonNull, RefCnt};
+pub use as_raw::AsRaw;
+pub use ref_cnt::{NonNull, RefCnt};
 
 // # Implementation details
 //
@@ -221,7 +232,11 @@ impl Drop for GenLock {
     }
 }
 
-/// A short-term proxy object from [`peek`](struct.ArcSwap.html#method.peek)
+/// A short-term proxy object from [`peek`](struct.ArcSwapAny.html#method.peek).
+///
+/// This allows for upgrading to a full smart pointer and borrowing of the value inside. It also
+/// dereferences to the actual pointed to type if the smart pointer guarantees not to contain NULL
+/// values (eg. on `Arc`, but not on `Option<Arc>`).
 pub struct Guard<'a, T: RefCnt + 'a>
 where
     T::Base: 'a,
@@ -237,7 +252,7 @@ impl<'a, T: RefCnt> Guard<'a, T> {
     /// This shares the reference count with all the `Arc` inside the corresponding `ArcSwap`. Use
     /// this if you need to hold the object for longer periods of time.
     ///
-    /// See [`peek`](struct.ArcSwap.html#method.peek) for details.
+    /// See [`peek`](struct.ArcSwapAny.html#method.peek) for details.
     ///
     /// Note that this is associated function (so it doesn't collide with the thing pointed to):
     ///
@@ -286,6 +301,7 @@ impl<'a, T: RefCnt> Drop for Guard<'a, T> {
 /// Store count for 2 newest generations (others must always be 0)
 const GEN_CNT: usize = 2;
 
+#[derive(Copy, Clone)]
 enum SignalSafety {
     Safe,
     Unsafe,
@@ -348,13 +364,24 @@ impl Shard {
 /// get a chance to run and release whatever is being held.
 const YIELD_EVERY: usize = 16;
 
-/// An atomic storage for [`Arc`].
+/// An atomic storage for a smart pointer like [`Arc`] or `Option<Arc>`.
 ///
-/// This is a storage where an [`Arc`] may live. It can be read and written atomically from several
-/// threads, but doesn't act like a pointer itself.
+/// This is a storage where a smart pointer may live. It can be read and written atomically from
+/// several threads, but doesn't act like a pointer itself.
 ///
-/// One can be created [`from`] an [`Arc`]. To get an [`Arc`] back, use the [`load`](#method.load)
+/// One can be created [`from`] an [`Arc`]. To get the pointer back, use the [`load`](#method.load)
 /// method.
+///
+/// # Note
+///
+/// This is the generic low-level implementation. This allows sharing the same code for storing
+/// both `Arc` and `Option<Arc>` (and possibly other similar types).
+///
+/// In your code, you most probably want to interact with it through the
+/// [`ArcSwap`](type.ArcSwap.html) and [`ArcSwapOption`](type.ArcSwapOption.html) aliases. However,
+/// the methods they share are described here and are applicable to both of them. That's why the
+/// examples here use `ArcSwap` ‒ but they could as well be written with `ArcSwapOption` or
+/// `ArcSwapAny`.
 ///
 /// # Examples
 ///
@@ -391,9 +418,6 @@ pub struct ArcSwapAny<T: RefCnt> {
     /// it.
     _phantom_arc: PhantomData<Arc<T>>,
 }
-
-pub type ArcSwap<T> = ArcSwapAny<Arc<T>>;
-pub type ArcSwapOption<T> = ArcSwapAny<Option<Arc<T>>>;
 
 impl<T: RefCnt> From<T> for ArcSwapAny<T> {
     fn from(val: T) -> Self {
@@ -488,11 +512,12 @@ impl<T: RefCnt> ArcSwapAny<T> {
     /// faster than [`load`](#method.load), but it is not suitable for holding onto for longer
     /// periods of time.
     ///
-    /// If you discover later on that you need to hold onto it for longer, you can [`
+    /// If you discover later on that you need to hold onto it for longer, you can
+    /// [`Guard::upgrade`](struct.Guard.html#method.upgrade) it.
     ///
     /// # Warning
     ///
-    /// This currently prevents the `Arc` inside from being replaced. Any [`swap`](#method.swap),
+    /// This currently prevents the pointer inside from being replaced. Any [`swap`](#method.swap),
     /// [`store`](#method.store) or [`rcu`](#method.rcu) will busy-loop while waiting for the proxy
     /// object to be destroyed. Therefore, this is suitable only for things like reading a
     /// (reasonably small) configuration value, but not for eg. computations on the held values.
@@ -514,7 +539,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
     ///
     /// As the returned guard prevents the value inside to be dropped, the value can be used during
     /// the signal handler. Unless it is upgraded (which is *not* recommended in a signal handler),
-    /// there's also no way the signal handler would have to drop the value inside the `Arc`.
+    /// there's also no way the signal handler would have to drop the pointed to value.
     ///
     /// The same performance warning about writer methods applies, so it is recommended not to
     /// spend too much time holding the returned guard.
@@ -532,8 +557,11 @@ impl<T: RefCnt> ArcSwapAny<T> {
     /// Exchanges the value inside this instance.
     ///
     /// While multiple `swap`s can run concurrently and won't block each other, each one needs to
-    /// wait for all the [`load`s](#method.load) that have seen the old value to finish before
-    /// returning.
+    /// wait for all the [`load`s](#method.load) and [`peek` Guards](#method.peek) that have seen
+    /// the old value to finish before returning. This is in a way similar to locking ‒ a living
+    /// [`Guard`](struct.Guard.html) can prevent this from finishing. However, unlike `RwLock`, a
+    /// steady stream of readers will not block writers and if each guard is held only for a short
+    /// period of time, writers will progress too.
     pub fn swap(&self, new: T) -> T {
         let new = T::into_ptr(new);
         // AcqRel needed to publish the target of the new pointer and get the target of the old
@@ -547,18 +575,18 @@ impl<T: RefCnt> ArcSwapAny<T> {
 
     /// Swaps the stored Arc if it is equal to `current`.
     ///
-    /// If the current value of the `ArcSwap` is equal to `current`, the `new` is stored inside. If
-    /// not, nothing happens.
+    /// If the current value of the `ArcSwapAny` is equal to `current`, the `new` is stored inside.
+    /// If not, nothing happens.
     ///
     /// The previous value (no matter if the swap happened or not) is returned. Therefore, if the
     /// returned value is equal to `current`, the swap happened. You want to do a pointer-based
-    /// comparison to determine it (`Arc::ptr_eq`).
+    /// comparison to determine it (like `Arc::ptr_eq`).
     ///
     /// In other words, if the caller „guesses“ the value of current correctly, it acts like
     /// [`swap`](#method.swap), otherwise it acts like [`load`](#method.load) (including the
     /// limitations).
     ///
-    /// The `current` can be specified as `&Arc`, [`Guard`](struct.Guard.html) or as a raw pointer.
+    /// The `current` can be specified as `&Arc`, [`&Guard`](struct.Guard.html) or as a raw pointer.
     pub fn compare_and_swap<C: AsRaw<T::Base>>(&self, current: C, new: T) -> T {
         let current = current.as_raw();
         let new = T::into_ptr(new);
@@ -627,6 +655,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
         }
     }
 
+    /// Creates a generation lock.
     fn gen_lock(&self, signal_safe: SignalSafety) -> GenLock {
         let shard = match signal_safe {
             SignalSafety::Safe => 0,
@@ -642,6 +671,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
         GenLock { shard, gen }
     }
 
+    /// Removes a generation lock.
     fn gen_unlock(&self, lock: GenLock) {
         // Release, so the dangerous section stays in.
         self.shards[lock.shard].0[lock.gen].fetch_sub(1, Ordering::Release);
@@ -656,7 +686,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
     /// The writer uses this method to perform the update.
     ///
     /// In case there's only one thread that does updates or in case the next version is
-    /// independent of the previous onse, simple [`swap`](#method.swap) or [`store`](#method.store)
+    /// independent of the previous one, simple [`swap`](#method.swap) or [`store`](#method.store)
     /// is enough. Otherwise, it may be needed to retry the update operation if some other thread
     /// made an update in between. This is what this method does.
     ///
@@ -787,6 +817,12 @@ impl<T: RefCnt> ArcSwapAny<T> {
     }
 }
 
+/// An atomic storage for `Arc`.
+///
+/// This is a type alias only. Most of its methods are described on
+/// [`ArcSwapAny`](struct.ArcSwapAny.html).
+pub type ArcSwap<T> = ArcSwapAny<Arc<T>>;
+
 impl<T> ArcSwap<T> {
     /// An [`rcu`](#method.rcu) which waits to be the sole owner of the original value and unwraps
     /// it.
@@ -822,6 +858,28 @@ impl<T> ArcSwap<T> {
         }
     }
 }
+
+/// An atomic storage for `Option<Arc>`.
+///
+/// This is very similar to [`ArcSwap`](type.ArcSwap.html), but allows storing NULL values, which
+/// is useful in some situations.
+///
+/// This is a type alias only. Most of the methods are described on
+/// [`ArcSwapAny`](struct.ArcSwapAny.html). Even though the examples there often use `ArcSwap`,
+/// they are applicable to `ArcSwapOption` with appropriate changes.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use arc_swap::ArcSwapOption;
+///
+/// let shared = ArcSwapOption::from(None);
+/// assert!(shared.load().is_none());
+/// assert!(shared.swap(Some(Arc::new(42))).is_none());
+/// assert_eq!(42, *shared.load().unwrap());
+/// ```
+pub type ArcSwapOption<T> = ArcSwapAny<Option<Arc<T>>>;
 
 #[cfg(test)]
 mod tests {
