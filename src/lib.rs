@@ -15,7 +15,7 @@
 //! allowing to pass the value from one thread to another without the use of a [`Mutex`]. The
 //! downside is, tracking when the data can be safely deleted is hard.
 //!
-//! This library provides [`ArcSwap`](struct.ArcSwap.html) that allows both at once. It can be
+//! This library provides [`ArcSwap`](type.ArcSwap.html) that allows both at once. It can be
 //! constructed from ordinary [`Arc`], but its value can be loaded and stored atomically, by
 //! multiple concurrent threads.
 //!
@@ -29,7 +29,7 @@
 //!
 //! And finally, there are some real use cases for this functionality. For example, when one thread
 //! publishes something (for example configuration) and other threads want to have a peek to the
-//! current one from time to time. There's a global [`ArcSwap`](struct.ArcSwap.html), holding the
+//! current one from time to time. There's a global [`ArcSwap`](type.ArcSwap.html), holding the
 //! current snapshot and everyone is free to make a copy and hold onto it for a while. The
 //! publisher thread simply stores a new snapshot every time and the old configuration gets dropped
 //! once all the other threads give up their copies of the pointer.
@@ -55,9 +55,9 @@
 //!
 //! # RCU
 //!
-//! This also offers an [RCU implementation](struct.ArcSwap.html#method.rcu), for read-heavy
+//! This also offers an [RCU implementation](struct.ArcSwapAny.html#method.rcu), for read-heavy
 //! situations. Note that the RCU update is considered relatively slow operation. In case there's
-//! only one update thread, using [`store`](struct.ArcSwap.html#method.store) is enough.
+//! only one update thread, using [`store`](struct.ArcSwapAny.html#method.store) is enough.
 //!
 //! # Atomic orderings
 //!
@@ -71,11 +71,22 @@
 //! them (because that could cause a deadlock).
 //!
 //! On the other hand, it is possible to use
-//! [`ArcSwap::peek_signal_safe`](struct.ArcSwap.html#method.peek_signal_safe) (but not the
+//! [`ArcSwap::peek_signal_safe`](struct.ArcSwapAny.html#method.peek_signal_safe) (but not the
 //! others). Note that the signal handler is not allowed to allocate or deallocate
 //! memory, therefore it is not recommended to [`upgrade`](struct.Guard.html#method.upgrade) the
 //! returned guard (it is strictly speaking possible to use that safely, but it is hard and brings
 //! no benefit).
+//!
+//! # Support for `NULL`
+//!
+//! Similar to `Arc`, [`ArcSwap`](type.ArcSwap.html) always contains a value. There is, however,
+//! [`ArcSwapOption`](type.ArcSwapOption.html), which works on `Option<Arc<_>>` instead of
+//! `Arc<_>` and supports mostly the same operations. In fact, both are just type aliases of
+//! [`ArcSwapAny`](struct.ArcSwapAny.html). Therefore, most documentation and methods can be found
+//! there instead on the type aliases.
+//!
+//! It is also possible to support other types similar to `Arc` by implementing the
+//! [`RefCnt`](trait.RefCnt.html) trait.
 //!
 //! # Examples
 //!
@@ -115,6 +126,9 @@
 //! [`Mutex`]: https://doc.rust-lang.org/std/sync/struct.Mutex.html
 //! [`shared_ptr`]: http://en.cppreference.com/w/cpp/memory/shared_ptr
 
+mod as_raw;
+mod ref_cnt;
+
 use std::cell::Cell;
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 use std::marker::PhantomData;
@@ -124,6 +138,9 @@ use std::ptr;
 use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
+
+pub use as_raw::AsRaw;
+pub use ref_cnt::{NonNull, RefCnt};
 
 // # Implementation details
 //
@@ -208,27 +225,34 @@ struct GenLock {
 }
 
 /// A bomb so one doesn't forget to unlock generations.
-#[cfg(debug_assertions)]
+#[cfg(debug_assertions)] // The bomb actually makes it ~20% slower, so don't put it into production
 impl Drop for GenLock {
     fn drop(&mut self) {
         unreachable!("Forgot to unlock generation");
     }
 }
 
-/// A short-term proxy object from [`peek`](struct.ArcSwap.html#method.peek)
-pub struct Guard<'a, T: 'a> {
+/// A short-term proxy object from [`peek`](struct.ArcSwapAny.html#method.peek).
+///
+/// This allows for upgrading to a full smart pointer and borrowing of the value inside. It also
+/// dereferences to the actual pointed to type if the smart pointer guarantees not to contain NULL
+/// values (eg. on `Arc`, but not on `Option<Arc>`).
+pub struct Guard<'a, T: RefCnt + 'a>
+where
+    T::Base: 'a,
+{
     lock: Option<GenLock>,
-    arc_swap: &'a ArcSwap<T>,
-    ptr: *const T,
+    arc_swap: &'a ArcSwapAny<T>,
+    ptr: *const T::Base,
 }
 
-impl<'a, T> Guard<'a, T> {
+impl<'a, T: RefCnt> Guard<'a, T> {
     /// Upgrades the guard to a real `Arc`.
     ///
     /// This shares the reference count with all the `Arc` inside the corresponding `ArcSwap`. Use
     /// this if you need to hold the object for longer periods of time.
     ///
-    /// See [`peek`](struct.ArcSwap.html#method.peek) for details.
+    /// See [`peek`](struct.ArcSwapAny.html#method.peek) for details.
     ///
     /// Note that this is associated function (so it doesn't collide with the thing pointed to):
     ///
@@ -247,21 +271,38 @@ impl<'a, T> Guard<'a, T> {
     /// }
     /// # let _ = ptr;
     /// ```
-    pub fn upgrade(guard: &Self) -> Arc<T> {
-        let arc = unsafe { Arc::from_raw(guard.ptr) };
-        Arc::into_raw(Arc::clone(&arc));
-        arc
+    pub fn upgrade(guard: &Self) -> T {
+        let res = unsafe { T::from_ptr(guard.ptr) };
+        T::inc(&res);
+        res
+    }
+
+    /// Gets a reference to the value inside.
+    ///
+    /// This is returned as `Option` even for pointers that can't return Null, to have a common
+    /// interface. The non-null ones also implement the `Deref` trait, so they can more easily be
+    /// used as that.
+    // Explicit lifetimes here:
+    // * The ptr.as_ref() is more than willing to provide *any* lifetime we ask for. So being extra
+    //   careful around it.
+    // * While this is the lifetime that would get elided, one could also think the 'a lifetime
+    //   would make sense. However, it is not so, because the arc-swap can replace the Arc inside
+    //   and drop, the only thing preventing it from doing so is this guard. Therefore, at any time
+    //   after the guard goes away, the pointed-to value can too.
+    #[cfg_attr(feature = "cargo-clippy", allow(needless_lifetimes))]
+    pub fn get_ref<'g>(guard: &'g Self) -> Option<&'g T::Base> {
+        unsafe { guard.ptr.as_ref() }
     }
 }
 
-impl<'a, T> Deref for Guard<'a, T> {
-    type Target = T;
-    fn deref(&self) -> &T {
+impl<'a, T: NonNull> Deref for Guard<'a, T> {
+    type Target = T::Base;
+    fn deref(&self) -> &T::Base {
         unsafe { self.ptr.as_ref().unwrap() }
     }
 }
 
-impl<'a, T> Drop for Guard<'a, T> {
+impl<'a, T: RefCnt> Drop for Guard<'a, T> {
     fn drop(&mut self) {
         self.arc_swap.gen_unlock(self.lock.take().unwrap());
     }
@@ -270,11 +311,7 @@ impl<'a, T> Drop for Guard<'a, T> {
 /// Store count for 2 newest generations (others must always be 0)
 const GEN_CNT: usize = 2;
 
-/// Turn the arc into a raw pointer.
-fn strip<T>(arc: Arc<T>) -> *mut T {
-    Arc::into_raw(arc) as *mut T
-}
-
+#[derive(Copy, Clone)]
 enum SignalSafety {
     Safe,
     Unsafe,
@@ -337,13 +374,24 @@ impl Shard {
 /// get a chance to run and release whatever is being held.
 const YIELD_EVERY: usize = 16;
 
-/// An atomic storage for [`Arc`].
+/// An atomic storage for a smart pointer like [`Arc`] or `Option<Arc>`.
 ///
-/// This is a storage where an [`Arc`] may live. It can be read and written atomically from several
-/// threads, but doesn't act like a pointer itself.
+/// This is a storage where a smart pointer may live. It can be read and written atomically from
+/// several threads, but doesn't act like a pointer itself.
 ///
-/// One can be created [`from`] an [`Arc`]. To get an [`Arc`] back, use the [`load`](#method.load)
+/// One can be created [`from`] an [`Arc`]. To get the pointer back, use the [`load`](#method.load)
 /// method.
+///
+/// # Note
+///
+/// This is the generic low-level implementation. This allows sharing the same code for storing
+/// both `Arc` and `Option<Arc>` (and possibly other similar types).
+///
+/// In your code, you most probably want to interact with it through the
+/// [`ArcSwap`](type.ArcSwap.html) and [`ArcSwapOption`](type.ArcSwapOption.html) aliases. However,
+/// the methods they share are described here and are applicable to both of them. That's why the
+/// examples here use `ArcSwap` ‒ but they could as well be written with `ArcSwapOption` or
+/// `ArcSwapAny`.
 ///
 /// # Examples
 ///
@@ -365,10 +413,10 @@ const YIELD_EVERY: usize = 16;
 /// [`Arc`]: https://doc.rust-lang.org/std/sync/struct.Arc.html
 /// [`from`]: https://doc.rust-lang.org/nightly/std/convert/trait.From.html#tymethod.from
 #[repr(align(64))]
-pub struct ArcSwap<T> {
+pub struct ArcSwapAny<T: RefCnt> {
     // Notes: AtomicPtr needs Sized
     /// The actual pointer, extracted from the Arc.
-    ptr: AtomicPtr<T>,
+    ptr: AtomicPtr<T::Base>,
 
     /// The current generation. Module by their count to discover the groups.
     gen_idx: AtomicUsize,
@@ -378,15 +426,15 @@ pub struct ArcSwap<T> {
 
     /// We are basically an Arc in disguise. Inherit parameters from Arc by pretending to contain
     /// it.
-    _phantom_arc: PhantomData<Arc<T>>,
+    _phantom_arc: PhantomData<T>,
 }
 
-impl<T> From<Arc<T>> for ArcSwap<T> {
-    fn from(arc: Arc<T>) -> Self {
+impl<T: RefCnt> From<T> for ArcSwapAny<T> {
+    fn from(val: T) -> Self {
         // The AtomicPtr requires *mut in its interface. We are more like *const, so we cast it.
         // However, we always go back to *const right away when we get the pointer on the other
         // side, so it should be fine.
-        let ptr = strip(arc);
+        let ptr = T::into_ptr(val);
         Self {
             ptr: AtomicPtr::new(ptr),
             gen_idx: AtomicUsize::new(0),
@@ -396,7 +444,7 @@ impl<T> From<Arc<T>> for ArcSwap<T> {
     }
 }
 
-impl<T> Drop for ArcSwap<T> {
+impl<T: RefCnt> Drop for ArcSwapAny<T> {
     fn drop(&mut self) {
         // Note that by now we are visible only by one thread (otherwise we couldn't get `&mut`),
         // so we can abandon all these atomic-ordering madnesses.
@@ -404,30 +452,44 @@ impl<T> Drop for ArcSwap<T> {
         // We hold one reference in the Arc, but it's hidden. Convert us back to Arc and drop that
         // Arc instead of us, which will clear the ref.
         let ptr = *self.ptr.get_mut();
-        // Turn it back into the Arc and then drop it.
-        drop(unsafe { Arc::from_raw(ptr) });
+        // We are getting rid of the one stored ref count
+        unsafe { T::dec(ptr) };
     }
 }
 
-impl<T> Clone for ArcSwap<T> {
+impl<T: RefCnt> Clone for ArcSwapAny<T> {
     fn clone(&self) -> Self {
         Self::from(self.load())
     }
 }
 
-impl<T: Debug> Debug for ArcSwap<T> {
+impl<T> Debug for ArcSwapAny<T>
+where
+    T: RefCnt,
+    T::Base: Debug,
+{
     fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
-        self.load().fmt(formatter)
+        let guard = self.peek();
+        let r = Guard::get_ref(&guard);
+        if T::can_null() {
+            r.fmt(formatter)
+        } else {
+            r.unwrap().fmt(formatter)
+        }
     }
 }
 
-impl<T: Display> Display for ArcSwap<T> {
+impl<T> Display for ArcSwapAny<T>
+where
+    T: NonNull,
+    T::Base: Display,
+{
     fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
-        self.load().fmt(formatter)
+        self.peek().deref().fmt(formatter)
     }
 }
 
-impl<T> ArcSwap<T> {
+impl<T: RefCnt> ArcSwapAny<T> {
     /// Loads the value.
     ///
     /// This makes another copy (reference) and returns it, atomically (it is safe even when other
@@ -439,7 +501,7 @@ impl<T> ArcSwap<T> {
     ///
     /// The method is *not* async-signal-safe. Use [`peek_signal_safe`](#method.peek_signal_safe)
     /// for that.
-    pub fn load(&self) -> Arc<T> {
+    pub fn load(&self) -> T {
         Guard::upgrade(&self.peek())
     }
 
@@ -460,11 +522,12 @@ impl<T> ArcSwap<T> {
     /// faster than [`load`](#method.load), but it is not suitable for holding onto for longer
     /// periods of time.
     ///
-    /// If you discover later on that you need to hold onto it for longer, you can [`
+    /// If you discover later on that you need to hold onto it for longer, you can
+    /// [`Guard::upgrade`](struct.Guard.html#method.upgrade) it.
     ///
     /// # Warning
     ///
-    /// This currently prevents the `Arc` inside from being replaced. Any [`swap`](#method.swap),
+    /// This currently prevents the pointer inside from being replaced. Any [`swap`](#method.swap),
     /// [`store`](#method.store) or [`rcu`](#method.rcu) will busy-loop while waiting for the proxy
     /// object to be destroyed. Therefore, this is suitable only for things like reading a
     /// (reasonably small) configuration value, but not for eg. computations on the held values.
@@ -486,7 +549,7 @@ impl<T> ArcSwap<T> {
     ///
     /// As the returned guard prevents the value inside to be dropped, the value can be used during
     /// the signal handler. Unless it is upgraded (which is *not* recommended in a signal handler),
-    /// there's also no way the signal handler would have to drop the value inside the `Arc`.
+    /// there's also no way the signal handler would have to drop the pointed to value.
     ///
     /// The same performance warning about writer methods applies, so it is recommended not to
     /// spend too much time holding the returned guard.
@@ -497,42 +560,59 @@ impl<T> ArcSwap<T> {
     /// Replaces the value inside this instance.
     ///
     /// Further loads will yield the new value. Uses [`swap`](#method.swap) internally.
-    pub fn store(&self, arc: Arc<T>) {
-        drop(self.swap(arc));
+    pub fn store(&self, val: T) {
+        drop(self.swap(val));
     }
 
     /// Exchanges the value inside this instance.
     ///
     /// While multiple `swap`s can run concurrently and won't block each other, each one needs to
-    /// wait for all the [`load`s](#method.load) that have seen the old value to finish before
-    /// returning.
-    pub fn swap(&self, arc: Arc<T>) -> Arc<T> {
-        let new = strip(arc);
+    /// wait for all the [`load`s](#method.load) and [`peek` Guards](#method.peek) that have seen
+    /// the old value to finish before returning. This is in a way similar to locking ‒ a living
+    /// [`Guard`](struct.Guard.html) can prevent this from finishing. However, unlike `RwLock`, a
+    /// steady stream of readers will not block writers and if each guard is held only for a short
+    /// period of time, writers will progress too.
+    ///
+    /// However, it is also possible to cause a deadlock (eg. this is an example of *broken* code):
+    ///
+    /// ```rust,no_run
+    /// # use std::sync::Arc;
+    /// # use arc_swap::ArcSwap;
+    /// let shared = ArcSwap::from(Arc::new(42));
+    /// let guard = shared.peek();
+    /// // This will deadlock, because the guard is still active here and swap
+    /// // can't pull the value from under its feet.
+    /// shared.swap(Arc::new(0));
+    /// # drop(guard);
+    /// ```
+    pub fn swap(&self, new: T) -> T {
+        let new = T::into_ptr(new);
         // AcqRel needed to publish the target of the new pointer and get the target of the old
         // one.
         //
         // SeqCst to synchronize the time lines with the group counters.
         let old = self.ptr.swap(new, Ordering::SeqCst);
         self.wait_for_readers();
-        unsafe { Arc::from_raw(old) }
+        unsafe { T::from_ptr(old) }
     }
 
     /// Swaps the stored Arc if it is equal to `current`.
     ///
-    /// If the current value of the `ArcSwap` is equal to `current`, the `new` is stored inside. If
-    /// not, nothing happens.
+    /// If the current value of the `ArcSwapAny` is equal to `current`, the `new` is stored inside.
+    /// If not, nothing happens.
     ///
     /// The previous value (no matter if the swap happened or not) is returned. Therefore, if the
     /// returned value is equal to `current`, the swap happened. You want to do a pointer-based
-    /// comparison to determine it (`Arc::ptr_eq`).
+    /// comparison to determine it (like `Arc::ptr_eq`).
     ///
     /// In other words, if the caller „guesses“ the value of current correctly, it acts like
     /// [`swap`](#method.swap), otherwise it acts like [`load`](#method.load) (including the
     /// limitations).
-    // TODO: Accept the guard too!
-    pub fn compare_and_swap(&self, current: &Arc<T>, new: Arc<T>) -> Arc<T> {
-        let current = current as &T as *const T as *mut T;
-        let new = strip(new);
+    ///
+    /// The `current` can be specified as `&Arc`, [`&Guard`](struct.Guard.html) or as a raw pointer.
+    pub fn compare_and_swap<C: AsRaw<T::Base>>(&self, current: C, new: T) -> T {
+        let current = current.as_raw();
+        let new = T::into_ptr(new);
 
         // As noted above, this method has either semantics of load or of store. We don't know
         // which ones upfront, so we need to implement safety measures for both.
@@ -540,7 +620,7 @@ impl<T> ArcSwap<T> {
 
         let previous = self.ptr.compare_and_swap(current, new, Ordering::SeqCst);
         let swapped = ptr::eq(current, previous);
-        let previous = unsafe { Arc::from_raw(previous) };
+        let previous = unsafe { T::from_ptr(previous) };
 
         if swapped {
             // New went in, previous out, but their ref counts are correct. So nothing to do here.
@@ -548,7 +628,7 @@ impl<T> ArcSwap<T> {
             // Previous is a new copy of what is inside (and it stays there as well), so bump its
             // ref count. New is thrown away so dec its ref count (but do it outside of the
             // gen-lock).
-            Arc::into_raw(Arc::clone(&previous));
+            T::inc(&previous);
         }
 
         self.gen_unlock(gen);
@@ -559,7 +639,7 @@ impl<T> ArcSwap<T> {
             self.wait_for_readers();
         } else {
             // We didn't swap, so new is black-holed.
-            drop(unsafe { Arc::from_raw(new) });
+            unsafe { T::dec(new) };
         }
 
         previous
@@ -598,6 +678,7 @@ impl<T> ArcSwap<T> {
         }
     }
 
+    /// Creates a generation lock.
     fn gen_lock(&self, signal_safe: SignalSafety) -> GenLock {
         let shard = match signal_safe {
             SignalSafety::Safe => 0,
@@ -613,6 +694,7 @@ impl<T> ArcSwap<T> {
         GenLock { shard, gen }
     }
 
+    /// Removes a generation lock.
     fn gen_unlock(&self, lock: GenLock) {
         // Release, so the dangerous section stays in.
         self.shards[lock.shard].0[lock.gen].fetch_sub(1, Ordering::Release);
@@ -627,7 +709,7 @@ impl<T> ArcSwap<T> {
     /// The writer uses this method to perform the update.
     ///
     /// In case there's only one thread that does updates or in case the next version is
-    /// independent of the previous onse, simple [`swap`](#method.swap) or [`store`](#method.store)
+    /// independent of the previous one, simple [`swap`](#method.swap) or [`store`](#method.store)
     /// is enough. Otherwise, it may be needed to retry the update operation if some other thread
     /// made an update in between. This is what this method does.
     ///
@@ -736,19 +818,20 @@ impl<T> ArcSwap<T> {
     ///
     /// Depending on the size of cache above, the cloning might not be as cheap. You can however
     /// use persistent data structures ‒ each modification creates a new data structure, but it
-    /// shares most of the data with the old one. Something like
+    /// shares most of the data with the old one (which is usually accomplished by using `Arc`s
+    /// inside to share the unchanged values). Something like
     /// [`rpds`](https://crates.io/crates/rpds) or [`im`](https://crates.io/crates/im) might do
     /// what you need.
-    pub fn rcu<R, F>(&self, mut f: F) -> Arc<T>
+    pub fn rcu<R, F>(&self, mut f: F) -> T
     where
-        F: FnMut(&Arc<T>) -> R,
-        R: Into<Arc<T>>,
+        F: FnMut(&T) -> R,
+        R: Into<T>,
     {
         let mut cur = self.load();
         loop {
             let new = f(&cur).into();
             let prev = self.compare_and_swap(&cur, new);
-            let swapped = Arc::ptr_eq(&cur, &prev);
+            let swapped = ptr::eq(T::as_ptr(&cur), T::as_ptr(&prev));
             if swapped {
                 return prev;
             } else {
@@ -756,7 +839,15 @@ impl<T> ArcSwap<T> {
             }
         }
     }
+}
 
+/// An atomic storage for `Arc`.
+///
+/// This is a type alias only. Most of its methods are described on
+/// [`ArcSwapAny`](struct.ArcSwapAny.html).
+pub type ArcSwap<T> = ArcSwapAny<Arc<T>>;
+
+impl<T> ArcSwap<T> {
     /// An [`rcu`](#method.rcu) which waits to be the sole owner of the original value and unwraps
     /// it.
     ///
@@ -792,10 +883,33 @@ impl<T> ArcSwap<T> {
     }
 }
 
+/// An atomic storage for `Option<Arc>`.
+///
+/// This is very similar to [`ArcSwap`](type.ArcSwap.html), but allows storing NULL values, which
+/// is useful in some situations.
+///
+/// This is a type alias only. Most of the methods are described on
+/// [`ArcSwapAny`](struct.ArcSwapAny.html). Even though the examples there often use `ArcSwap`,
+/// they are applicable to `ArcSwapOption` with appropriate changes.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use arc_swap::ArcSwapOption;
+///
+/// let shared = ArcSwapOption::from(None);
+/// assert!(shared.load().is_none());
+/// assert!(shared.swap(Some(Arc::new(42))).is_none());
+/// assert_eq!(42, *shared.load().unwrap());
+/// ```
+pub type ArcSwapOption<T> = ArcSwapAny<Option<Arc<T>>>;
+
 #[cfg(test)]
 mod tests {
     extern crate crossbeam_utils;
 
+    use std::panic;
     use std::sync::atomic::AtomicUsize;
     use std::sync::Barrier;
 
@@ -948,6 +1062,13 @@ mod tests {
             assert_eq!(1, Arc::strong_count(&n2));
             assert_eq!(i + 1, *shared.load());
         }
+
+        let a = shared.load();
+        // One inside shared, one for a
+        assert_eq!(2, Arc::strong_count(&a));
+        drop(shared);
+        // Only a now
+        assert_eq!(1, Arc::strong_count(&a));
     }
 
     #[test]
@@ -984,5 +1105,45 @@ mod tests {
             }
         });
         assert_eq!(THREADS * ITERATIONS, *shared.load());
+    }
+
+    /// Handling null/none values
+    #[test]
+    fn nulls() {
+        let shared = ArcSwapOption::from(Some(Arc::new(0)));
+        let orig = shared.swap(None);
+        assert_eq!(1, Arc::strong_count(&orig.unwrap()));
+        let null = shared.load();
+        assert!(null.is_none());
+        let a = Arc::new(42);
+        let orig = shared.compare_and_swap(ptr::null(), Some(Arc::clone(&a)));
+        assert!(orig.is_none());
+        assert_eq!(2, Arc::strong_count(&a));
+        let orig = shared.compare_and_swap(&None::<Arc<_>>, None);
+        assert_eq!(3, Arc::strong_count(&a));
+        assert!(Arc::ptr_eq(&a, &orig.unwrap()));
+    }
+
+    /// We have a callback in RCU. Check what happens if we access the value from within.
+    #[test]
+    fn recursive() {
+        let shared = ArcSwap::from(Arc::new(0));
+
+        shared.rcu(|i| {
+            if **i < 10 {
+                shared.rcu(|i| **i + 1);
+            }
+            **i
+        });
+        assert_eq!(10, *shared.peek());
+        assert_eq!(2, Arc::strong_count(&shared.load()));
+    }
+
+    /// A panic from within the rcu callback should not change anything.
+    #[test]
+    fn rcu_panic() {
+        let shared = ArcSwap::from(Arc::new(0));
+        assert!(panic::catch_unwind(|| shared.rcu(|_| -> usize { panic!() })).is_err());
+        assert_eq!(1, Arc::strong_count(&shared.swap(Arc::new(42))));
     }
 }
