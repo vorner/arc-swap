@@ -149,13 +149,13 @@ mod arc_swap_option {
 
     fn peek() {
         for _ in 0..ITERS {
-            test::black_box(Guard::get_ref(&A.peek()));
+            test::black_box(*Guard::get_ref(&A.peek()).unwrap_or(&0));
         }
     }
 
     fn read() {
         for _ in 0..ITERS {
-            test::black_box(A.load());
+            test::black_box(A.load().map(|a| -> usize { *a }).unwrap_or(0));
         }
     }
 
