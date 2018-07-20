@@ -1,4 +1,4 @@
-use super::{Guard, RefCnt};
+use super::{Guard, Lease, RefCnt};
 
 /// A trait describing things that can be turned into a raw pointer.
 ///
@@ -35,13 +35,19 @@ impl<'a, T: RefCnt> AsRaw<T::Base> for &'a T {
     }
 }
 
-impl<'a, 'r, T: RefCnt> AsRaw<T::Base> for &'r Guard<'a, T> {
+impl<'a, T: RefCnt> AsRaw<T::Base> for Guard<'a, T> {
     fn as_raw(self) -> *mut T::Base {
         self.ptr as *mut _
     }
 }
 
-impl<'a, T: RefCnt> AsRaw<T::Base> for Guard<'a, T> {
+impl<'a, T: RefCnt> AsRaw<T::Base> for &'a Lease<T> {
+    fn as_raw(self) -> *mut T::Base {
+        self.ptr as *mut _
+    }
+}
+
+impl<T: RefCnt> AsRaw<T::Base> for Lease<T> {
     fn as_raw(self) -> *mut T::Base {
         self.ptr as *mut _
     }

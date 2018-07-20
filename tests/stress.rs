@@ -5,6 +5,7 @@
 
 extern crate arc_swap;
 extern crate crossbeam_utils;
+extern crate itertools;
 #[macro_use]
 extern crate lazy_static;
 extern crate num_cpus;
@@ -12,8 +13,9 @@ extern crate num_cpus;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex, MutexGuard, PoisonError};
 
-use arc_swap::ArcSwapOption;
+use arc_swap::{ArcSwap, ArcSwapOption, Lease};
 use crossbeam_utils::scoped;
+use itertools::Itertools;
 
 lazy_static! {
     static ref LOCK: Mutex<()> = Mutex::new(());
@@ -65,14 +67,20 @@ fn storm_link_list(node_cnt: usize, iters: usize) {
                     // And do the checks once everyone finishes
                     bar.wait();
                     // First, check that all our numbers are increasing by one and all are present
-                    let mut node = head.load();
+                    let mut node = head.lease();
                     let mut expecting = 0;
-                    while let Some(inner) = node {
-                        if inner.owner == thread {
-                            assert_eq!(expecting, inner.num);
-                            expecting += 1;
-                        }
-                        node = inner.next.load();
+                    while Lease::get_ref(&node).is_some() {
+                        // A bit of gymnastics, we don't have NLL yet and we need to persuade the
+                        // borrow checker this is safe.
+                        let next = {
+                            let inner = Lease::get_ref(&node).unwrap();
+                            if inner.owner == thread {
+                                assert_eq!(expecting, inner.num);
+                                expecting += 1;
+                            }
+                            inner.next.lease()
+                        };
+                        node = next;
                     }
                     assert_eq!(node_cnt, expecting);
                     // We don't want to count the ref-counts while someone still plays around with
@@ -201,4 +209,43 @@ fn storm_unroll_small() {
 #[ignore]
 fn storm_unroll_large() {
     storm_unroll(10_000, 50);
+}
+
+fn lease_parallel(iters: usize) {
+    let _lock = lock();
+    let cpus = num_cpus::get();
+    let shared = ArcSwap::from(Arc::new(0));
+    scoped::scope(|scope| {
+        scope.spawn(|| {
+            for i in 0..iters {
+                shared.store(Arc::new(i));
+            }
+        });
+        for _ in 0..cpus {
+            scope.spawn(|| {
+                for _ in 0..iters {
+                    let leases = (0..256)
+                        .into_iter()
+                        .map(|_| shared.lease())
+                        .collect::<Vec<_>>();
+                    for (l, h) in leases.iter().tuple_windows() {
+                        assert!(**l <= **h, "{} > {}", l, h);
+                    }
+                }
+            });
+        }
+    });
+    let v = shared.load();
+    assert_eq!(2, Arc::strong_count(&v));
+}
+
+#[test]
+fn lease_parallel_small() {
+    lease_parallel(1000);
+}
+
+#[test]
+#[ignore]
+fn lease_parallel_large() {
+    lease_parallel(100_000);
 }

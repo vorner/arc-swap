@@ -1,6 +1,11 @@
-* Made the ArcSwap as small as the pointer itself, by making the shards/counters
-  and generation ID global. This comes at a theoretical cost of more contention
-  when different threads use different instances.
+* `compare_and_swap` no longer takes `&Guard` as current as that is a sure way
+  to create a deadlock.
+* Introduced `Lease` for temporary storage, which doesn't suffer from contention
+  like `load`, but doesn't block writes like `Guard`. The downside is it slows
+  down with number of held by the current thread.
+* Made the `ArcSwap` as small as the pointer itself, by making the
+  shards/counters and generation ID global. This comes at a theoretical cost of
+  more contention when different threads use different instances.
 
 # 0.2.0
 

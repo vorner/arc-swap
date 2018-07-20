@@ -9,7 +9,7 @@ extern crate test;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use arc_swap::{ArcSwap, ArcSwapOption, Guard};
+use arc_swap::{ArcSwap, ArcSwapOption, Guard, Lease};
 use crossbeam_utils::scoped;
 use test::Bencher;
 
@@ -121,6 +121,23 @@ mod arc_swap_b {
         }
     }
 
+    fn lease() {
+        for _ in 0..ITERS {
+            test::black_box(*A.lease());
+        }
+    }
+
+    // Leases kind of degrade in performance if there are multiple on the same thread.
+    fn four_leases() {
+        for _ in 0..ITERS {
+            let l1 = A.lease();
+            let l2 = A.lease();
+            let l3 = A.lease();
+            let l4 = A.lease();
+            test::black_box((*l1, *l2, *l3, *l4));
+        }
+    }
+
     fn read() {
         for _ in 0..ITERS {
             test::black_box(A.load());
@@ -138,10 +155,12 @@ mod arc_swap_b {
     method!(peek);
     method!(read);
     method!(write);
+    method!(lease);
+    method!(four_leases);
 }
 
 mod arc_swap_option {
-    use super::{ArcSwapOption, Guard};
+    use super::{ArcSwapOption, Guard, Lease};
 
     lazy_static! {
         static ref A: ArcSwapOption<usize> = ArcSwapOption::from(None);
@@ -150,6 +169,12 @@ mod arc_swap_option {
     fn peek() {
         for _ in 0..ITERS {
             test::black_box(*Guard::get_ref(&A.peek()).unwrap_or(&0));
+        }
+    }
+
+    fn lease() {
+        for _ in 0..ITERS {
+            test::black_box(*Lease::get_ref(&A.lease()).unwrap_or(&0));
         }
     }
 
@@ -170,6 +195,7 @@ mod arc_swap_option {
     method!(peek);
     method!(read);
     method!(write);
+    method!(lease);
 }
 
 mod mutex {

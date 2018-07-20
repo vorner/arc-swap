@@ -19,6 +19,7 @@ maintenance = { status = "actively-developed" }
 
 [dev-dependencies]
 crossbeam-utils = "~0.4"
+itertools = "~0.7"
 lazy_static = "~1"
 num_cpus = "~1"
 version-sync = "~0.5"

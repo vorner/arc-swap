@@ -2,7 +2,7 @@
     html_root_url = "https://docs.rs/arc-swap/0.2.0/arc-swap/",
     test(attr(deny(warnings)))
 )]
-#![deny(missing_docs)]
+#![deny(missing_docs, warnings)]
 
 //! Making [`Arc`] itself atomic
 //!
@@ -36,18 +36,46 @@
 //!
 //! # Performance characteristics
 //!
-//! The data structure is optimise for read-heavy situations with only occasional writes.
+//! The data structure is optimised for read-heavy situations with only occasional writes.
 //!
 //! Only very basic benchmarks were done so far (you can find them in the git repository). These
 //! suggest reading operations are faster than using a mutex, in a contended situation by a large
-//! margin and comparable on writes.
+//! margin, but about 2-3 times slower on writes than mutex (it is still faster than `RwLock` on
+//! writes and mutex gets much slower on contended writes).
 //!
 //! Furthermore, this implementation doesn't suffer from contention. Specifically, arbitrary number
 //! of readers can access the shared value and won't block each other, and are not blocked by
-//! writers.  The writers will be somewhat slower when there are active readers at the same time,
+//! writers. The writers will be somewhat slower when there are active readers at the same time,
 //! but won't be stopped indefinitely. Readers always perform the same number of instructions,
-//! without any locking or waiting (though they can slow each other down by accessing the same
-//! memory locations under circumstances).
+//! without any locking or waiting, with the exception of the first
+//! [`lease`](struct.ArcSwapAny.html#method.lease) in each thread (though they can slow each other
+//! down by accessing the same memory locations under circumstances).
+//!
+//! ## What reading operation to choose
+//!
+//! There are actually three different ways to read the data, with different characteristics.
+//!
+//! * [`load`](struct.ArcSwapAny.html#method.load) creates a full-blown `Arc`. You can hold onto it
+//!   as long as desired without any restrictions, but in case there are multiple readers of the
+//!   same [`ArcSwapAny`](struct.ArcSwapAny.html), they slow each other down by fighting over the
+//!   cache line with reference counts. Therefore, this is suitable for long-term storage of the
+//!   result.
+//! * [`lease`](struct.ArcSwapAny.html#method.lease) is suitable for short-term storage or
+//!   manipulation during some algorithm, for example
+//!   during some lookup. The creation is relatively fast and doesn't suffer from contention, but
+//!   there's only limited number of fast active leases possible per thread (currently 6). When the
+//!   number is exceeded, it falls back to the equivalent of
+//!   [`load`](struct.ArcSwapAny.html#method.load) internally.
+//! * [`peek`](struct.ArcSwapAny.html#method.peek) is the fastest. However, existing
+//!   [`Guard`](struct.Guard.html), as returned by the method, prevents all writer methods from
+//!   completing (globally, even on unrelated `ArcSwap`s). Therefore, it is possible to create a
+//!   deadlock with careless usage and hurt the performance by holding onto it for too long. It is
+//!   suitable for very quick operations only, like reading a single value from configuration. Do
+//!   not store it and do not call non-trivial methods on the returned value.
+//!
+//! The faster but shorter-term proxy objects allow upgrading to the longer-term ones, so it is
+//! possible to first do some checks for an optimistic case and obtain the longer-term object in
+//! the pesimistic case.
 //!
 //! # RCU
 //!
@@ -105,7 +133,7 @@
 //!         for _ in 0..10 {
 //!             scope.spawn(|| {
 //!                 loop {
-//!                     let cfg = config.load();
+//!                     let cfg = config.lease();
 //!                     if !cfg.is_empty() {
 //!                         assert_eq!(*cfg, "New configuration");
 //!                         return;
@@ -123,6 +151,7 @@
 //! [`shared_ptr`]: http://en.cppreference.com/w/cpp/memory/shared_ptr
 
 mod as_raw;
+mod debt;
 mod ref_cnt;
 
 use std::cell::Cell;
@@ -136,6 +165,7 @@ use std::sync::Arc;
 use std::thread;
 
 pub use as_raw::AsRaw;
+use debt::Debt;
 pub use ref_cnt::{NonNull, RefCnt};
 
 // # Implementation details
@@ -156,6 +186,12 @@ pub use ref_cnt::{NonNull, RefCnt};
 // until all of them confirm bumping their reference count. Only then the writer returns to the
 // caller, handing it the ownership of the Arc and allowing possible bad things (like being
 // destroyed) to happen to it.
+//
+// Because bumping the reference count can cause contention and slow things down, there's another
+// way to track missing reference counts. There's a global registry of debts and each lease of a
+// missing reference count is written there. If someone wants to replace the pointer inside, it
+// traverses the whole registry and pays all the debts (by incrementing the reference counts) ‒
+// this avoids paying the debt in the most common read only cases.
 //
 // # Unsafety
 //
@@ -189,6 +225,20 @@ pub use ref_cnt::{NonNull, RefCnt};
 // start to appear in the odd group and the even has a chance to drop to zero later on). Only one
 // writer does this switch, but all that witness the zero can remember it.
 //
+// We also split the reader threads into shards ‒ we have multiple copies of the counters, which
+// prevents some contention and sharing of the cache lines. The writer reads them all and sums them
+// up.
+//
+// # Leases and debts
+//
+// Instead of incrementing the reference count, the pointer reference can be owed. In such case, it
+// is recorded into a global storage. As each thread has its own storage (the global storage is
+// composed of multiple thread storages), the readers don't contend. When the pointer in no longer
+// in use, the debt is erased.
+//
+// The writer pays all the existing debts, therefore the reader have the full Arc with ref count at
+// that time. The reader is made aware the debt was paid and decrements the reference count.
+//
 // # Memory orders
 //
 // We need to make sure several things happen or don't.
@@ -212,7 +262,25 @@ pub use ref_cnt::{NonNull, RefCnt};
 // swap), making a base line for the following operations (load of the pointer or looking for
 // zeroes).
 //
-// All other operations can be Relaxed.
+// # Memory orders around around debts
+//
+// The linked list of debt nodes only grows. The shape of the list (existence of nodes) is
+// synchronized through Release on creation and Acquire on load on the head pointer.
+//
+// The debts work similar to locks ‒ Acquire and Release make all the pointer manipulation at the
+// interval where it is written down.
+//
+// In case the writer pays the debt, it sees the new enough data (for the same reasons the stale
+// zeroes are not seen). The reference count on the Arc is AcqRel and makes sure it is not
+// destroyed too soon. The writer traverses all the slots, therefore they don't need to synchronize
+// with each other.
+//
+// The synchronization on the generations make sure all the debt recording stays within a reader
+// lock.
+//
+// All other operations can be Relaxed (they either only claim something, which doesn't need to
+// synchronize with anything else, or they are failed attempts at something ‒ and another attempt
+// will be made, the successful one will do the necessary synchronization).
 
 /// Generation lock, to abstract locking and unlocking readers.
 struct GenLock {
@@ -259,6 +327,11 @@ impl Drop for GenLock {
 /// This allows for upgrading to a full smart pointer and borrowing of the value inside. It also
 /// dereferences to the actual pointed to type if the smart pointer guarantees not to contain NULL
 /// values (eg. on `Arc`, but not on `Option<Arc>`).
+///
+/// # Warning
+///
+/// Do not store or keep around for a long time, as this prevents all the writer methods from
+/// completing on all the swap objects in the whole program from completing.
 pub struct Guard<'a, T: RefCnt + 'a>
 where
     T::Base: 'a,
@@ -299,6 +372,24 @@ impl<'a, T: RefCnt> Guard<'a, T> {
         res
     }
 
+    /// Upgrades the guard to a [`Lease`](struct.Lease.html).
+    ///
+    /// This is useful for cases when the value needs to be held for intermediate time spans, like
+    /// when manipulating a data structure.
+    pub fn lease(guard: &Self) -> Lease<T> {
+        let debt = Debt::new(guard.ptr as usize);
+        if debt.is_none() {
+            let res = unsafe { T::from_ptr(guard.ptr) };
+            T::inc(&res);
+            T::into_ptr(res);
+        }
+        Lease {
+            ptr: guard.ptr,
+            debt,
+            _data: PhantomData,
+        }
+    }
+
     /// Gets a reference to the value inside.
     ///
     /// This is returned as `Option` even for pointers that can't return Null, to have a common
@@ -330,17 +421,6 @@ impl<'a, T: RefCnt> Drop for Guard<'a, T> {
     }
 }
 
-/// Store count for 2 newest generations (others must always be 0)
-const GEN_CNT: usize = 2;
-
-#[derive(Copy, Clone)]
-enum SignalSafety {
-    Safe,
-    Unsafe,
-}
-
-static GEN_IDX: AtomicUsize = AtomicUsize::new(0);
-
 /// Global counter of threads.
 ///
 /// We specifically don't use ThreadId here, because it is opaque and doesn't give us a number :-(.
@@ -352,6 +432,89 @@ thread_local! {
     /// The default value is just a marker it hasn't been set.
     static THREAD_SHARD: Cell<usize> = Cell::new(SHARD_CNT);
 }
+
+/// A temporary storage of the pointer.
+///
+/// This, unlike [`Guard`](struct.Guard.html), does not block any write operations and is usually
+/// faster than loading the full `Arc`. However, this holds only if each thread keeps only small
+/// number of `Lease`s around and if too many are held, the following ones will just fall back to
+/// creating the `Arc` internally.
+pub struct Lease<T: RefCnt> {
+    ptr: *const T::Base,
+    debt: Option<&'static Debt>,
+    _data: PhantomData<T>,
+}
+
+impl<T: RefCnt> Lease<T> {
+    /// Loads a full `Arc` from the lease.
+    pub fn upgrade(guard: &Self) -> T {
+        let res = unsafe { T::from_ptr(guard.ptr) };
+        T::inc(&res);
+        res
+    }
+    /// Returns access to the data held.
+    ///
+    /// This returns `Option` even when it can't hold `NULL` internally, to keep the interface the
+    /// same. But there's also the `Deref` trait for the non-`NULL` cases, which is usually more
+    /// comfortable.
+    pub fn get_ref(lease: &Self) -> Option<&T::Base> {
+        unsafe { lease.ptr.as_ref() }
+    }
+}
+
+impl<T: NonNull> Deref for Lease<T> {
+    type Target = T::Base;
+    fn deref(&self) -> &T::Base {
+        unsafe { self.ptr.as_ref().unwrap() }
+    }
+}
+
+impl<T> Debug for Lease<T>
+where
+    T: RefCnt,
+    T::Base: Debug,
+{
+    fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
+        let l = Lease::get_ref(&self);
+        if T::can_null() {
+            l.fmt(formatter)
+        } else {
+            l.unwrap().fmt(formatter)
+        }
+    }
+}
+
+impl<T> Display for Lease<T>
+where
+    T: NonNull,
+    T::Base: Display,
+{
+    fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
+        self.deref().fmt(formatter)
+    }
+}
+
+impl<T: RefCnt> Drop for Lease<T> {
+    fn drop(&mut self) {
+        if let Some(debt) = self.debt {
+            if debt.pay::<T>(self.ptr) {
+                return;
+            }
+        }
+        unsafe { T::dec(self.ptr) };
+    }
+}
+
+/// Store count for 2 newest generations (others must always be 0)
+const GEN_CNT: usize = 2;
+
+#[derive(Copy, Clone)]
+enum SignalSafety {
+    Safe,
+    Unsafe,
+}
+
+static GEN_IDX: AtomicUsize = AtomicUsize::new(0);
 
 /// Number of shards (see [`Shard`]).
 const SHARD_CNT: usize = 9;
@@ -372,6 +535,7 @@ macro_rules! sh {
     };
 }
 
+/// The global shards.
 static SHARDS: [Shard; SHARD_CNT] = [
     sh!(),
     sh!(),
@@ -479,12 +643,8 @@ impl<T: RefCnt> From<T> for ArcSwapAny<T> {
 
 impl<T: RefCnt> Drop for ArcSwapAny<T> {
     fn drop(&mut self) {
-        // Note that by now we are visible only by one thread (otherwise we couldn't get `&mut`),
-        // so we can abandon all these atomic-ordering madnesses.
-
-        // We hold one reference in the Arc, but it's hidden. Convert us back to Arc and drop that
-        // Arc instead of us, which will clear the ref.
         let ptr = *self.ptr.get_mut();
+        self.wait_for_readers(ptr);
         // We are getting rid of the one stored ref count
         unsafe { T::dec(ptr) };
     }
@@ -549,7 +709,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
         }
     }
 
-    /// Loans the value for a short time.
+    /// Provides a peek inside the held value.
     ///
     /// This returns a temporary borrow of the object currently held inside. This is slightly
     /// faster than [`load`](#method.load), but it is not suitable for holding onto for longer
@@ -562,8 +722,11 @@ impl<T: RefCnt> ArcSwapAny<T> {
     ///
     /// This currently prevents the pointer inside from being replaced. Any [`swap`](#method.swap),
     /// [`store`](#method.store) or [`rcu`](#method.rcu) will busy-loop while waiting for the proxy
-    /// object to be destroyed. Therefore, this is suitable only for things like reading a
-    /// (reasonably small) configuration value, but not for eg. computations on the held values.
+    /// object to be destroyed, even on unrelated objects. Therefore, this is suitable only for
+    /// things like reading a (reasonably small) configuration value, but not for eg. computations
+    /// on the held values.
+    ///
+    /// If you want to do anything non-trivial, prefer [`lease`](#method.lease).
     ///
     /// If you are not sure what is better, benchmarking is recommended.
     ///
@@ -588,6 +751,22 @@ impl<T: RefCnt> ArcSwapAny<T> {
     /// spend too much time holding the returned guard.
     pub fn peek_signal_safe(&self) -> Guard<T> {
         self.peek_inner(SignalSafety::Safe)
+    }
+
+    /// Provides a temporary borrow of the object inside.
+    ///
+    /// This returns a proxy object allowing access to the thing held inside and it is *usually*
+    /// as fast as an uncontented [`load`](#method.load) (loads gets slower when multiple threads
+    /// access the same value at the same time). Unlike the [`peek`](#method.peek), there's no
+    /// performance penalty to holding onto the object for arbitrary time span.  On the other hand,
+    /// this gets slower with the number of existing leases in the current thread and at some point
+    /// it falls back to doing full loads under the hood.
+    ///
+    /// This is therefore a good choice to use for eg. searching a data structure or juggling the
+    /// pointers around a bit, but not as something to store in larger amounts. The rule of thumb
+    /// is this is suited for local variables on stack, but not in structures.
+    pub fn lease(&self) -> Lease<T> {
+        Guard::lease(&self.peek())
     }
 
     /// Replaces the value inside this instance.
@@ -625,7 +804,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
         //
         // SeqCst to synchronize the time lines with the group counters.
         let old = self.ptr.swap(new, Ordering::SeqCst);
-        self.wait_for_readers();
+        self.wait_for_readers(old);
         unsafe { T::from_ptr(old) }
     }
 
@@ -642,7 +821,8 @@ impl<T: RefCnt> ArcSwapAny<T> {
     /// [`swap`](#method.swap), otherwise it acts like [`load`](#method.load) (including the
     /// limitations).
     ///
-    /// The `current` can be specified as `&Arc`, [`&Guard`](struct.Guard.html) or as a raw pointer.
+    /// The `current` can be specified as `&Arc`, [`Guard`](struct.Guard.html),
+    /// [`&Lease`](struct.Lease.html) or as a raw pointer.
     pub fn compare_and_swap<C: AsRaw<T::Base>>(&self, current: C, new: T) -> T {
         let current = current.as_raw();
         let new = T::into_ptr(new);
@@ -651,9 +831,9 @@ impl<T: RefCnt> ArcSwapAny<T> {
         // which ones upfront, so we need to implement safety measures for both.
         let gen = GenLock::new(SignalSafety::Unsafe);
 
-        let previous = self.ptr.compare_and_swap(current, new, Ordering::SeqCst);
-        let swapped = ptr::eq(current, previous);
-        let previous = unsafe { T::from_ptr(previous) };
+        let previous_ptr = self.ptr.compare_and_swap(current, new, Ordering::SeqCst);
+        let swapped = ptr::eq(current, previous_ptr);
+        let previous = unsafe { T::from_ptr(previous_ptr) };
 
         if swapped {
             // New went in, previous out, but their ref counts are correct. So nothing to do here.
@@ -669,7 +849,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
         if swapped {
             // We swapped. Before releasing the (possibly only) ref count of previous to user, wait
             // for all readers to make sure there are no more untracked copies of it.
-            self.wait_for_readers();
+            self.wait_for_readers(previous_ptr);
         } else {
             // We didn't swap, so new is black-holed.
             unsafe { T::dec(new) };
@@ -679,7 +859,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
     }
 
     /// Wait until all readers go away.
-    fn wait_for_readers(&self) {
+    fn wait_for_readers(&self, old: *const T::Base) {
         let mut seen_group = [false; GEN_CNT];
         let mut iter = 0usize;
         while !seen_group.iter().all(|seen| *seen) {
@@ -706,6 +886,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
                 atomic::spin_loop_hint();
             }
         }
+        Debt::pay_all::<T>(old);
     }
 
     /// Read-Copy-Update of the pointer inside.
@@ -833,6 +1014,8 @@ impl<T: RefCnt> ArcSwapAny<T> {
         F: FnMut(&T) -> R,
         R: Into<T>,
     {
+        // TODO: We probably could be using leases here instead. Even the compare_and_swap could be
+        // using them.
         let mut cur = self.load();
         loop {
             let new = f(&cur).into();
@@ -1151,5 +1334,74 @@ mod tests {
         let shared = ArcSwap::from(Arc::new(0));
         assert!(panic::catch_unwind(|| shared.rcu(|_| -> usize { panic!() })).is_err());
         assert_eq!(1, Arc::strong_count(&shared.swap(Arc::new(42))));
+    }
+
+    /// Accessing the value inside ArcSwap with Lease (and checks for the reference counts).
+    #[test]
+    fn lease_cnt() {
+        let a = Arc::new(0);
+        let shared = ArcSwap::from(Arc::clone(&a));
+        // One in shared, one in a
+        assert_eq!(2, Arc::strong_count(&a));
+        let lease = shared.lease();
+        assert_eq!(0, *lease);
+        // The lease doesn't have its own ref count now
+        assert_eq!(2, Arc::strong_count(&a));
+        let lease_2 = shared.lease();
+        // Unlike with guard, this does not deadlock
+        shared.store(Arc::new(1));
+        // But now, each lease got a full Arc inside it
+        assert_eq!(3, Arc::strong_count(&a));
+        // And when we get rid of them, they disappear
+        drop(lease_2);
+        assert_eq!(2, Arc::strong_count(&a));
+        let _b = Lease::upgrade(&lease);
+        assert_eq!(3, Arc::strong_count(&a));
+        // We can drop the lease it came from
+        drop(lease);
+        assert_eq!(2, Arc::strong_count(&a));
+        let lease = shared.lease();
+        assert_eq!(1, *lease);
+        drop(shared);
+        // We can still use the lease after the shared disappears
+        assert_eq!(1, *lease);
+        let ptr = Lease::upgrade(&lease);
+        // One in shared, one in lease
+        assert_eq!(2, Arc::strong_count(&ptr));
+        drop(lease);
+        assert_eq!(1, Arc::strong_count(&ptr));
+    }
+
+    /// There can be only limited amount of leases on one thread. Following ones are created, but
+    /// contain full Arcs.
+    #[test]
+    fn lease_overflow() {
+        let a = Arc::new(0);
+        let shared = ArcSwap::from(Arc::clone(&a));
+        assert_eq!(2, Arc::strong_count(&a));
+        let mut leases = (0..1000)
+            .into_iter()
+            .map(|_| shared.lease())
+            .collect::<Vec<_>>();
+        let count = Arc::strong_count(&a);
+        assert!(count > 2);
+        let lease = shared.lease();
+        assert_eq!(count + 1, Arc::strong_count(&a));
+        drop(lease);
+        assert_eq!(count, Arc::strong_count(&a));
+        // When we delete the first one, it didn't have an Arc in it, so the ref count doesn't drop
+        leases.swap_remove(0);
+        // But new one reuses now vacant the slot and doesn't create a new Arc
+        let _lease = shared.lease();
+        assert_eq!(count, Arc::strong_count(&a));
+    }
+
+    #[test]
+    fn lease_null() {
+        let shared = ArcSwapOption::<usize>::from(None);
+        let lease = shared.lease();
+        assert!(Lease::get_ref(&lease).is_none());
+        shared.store(Some(Arc::new(42)));
+        assert_eq!(42, *Lease::get_ref(&shared.lease()).unwrap());
     }
 }

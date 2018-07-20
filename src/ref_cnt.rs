@@ -16,6 +16,14 @@ use std::sync::Arc;
 /// Implementing it for `Rc` is possible, but not useful (because the `ArcSwap` then would not be
 /// `Send` nor `Sync`, so there's very little advantage of using it if it can't be shared between
 /// threads).
+///
+/// Aside from the obvious properties (like that incrementing and decrementing a reference count
+/// cancel each out and that having less references tracked than how many things actually point to
+/// the value is fine as long as the count doesn't drop to 0), it also must satisfy that if two
+/// pointers have the same value, they point to the same object. This is specifically not true for
+/// ZSTs, but it is true for `Arc`s of ZSTs, because they have the reference counts just after the
+/// value. It would be fine to point to a type-erased version of the same object, though (if one
+/// could use this trait with unsized types in the first place).
 pub unsafe trait RefCnt: Clone {
     /// The base type the pointer points to.
     type Base;
