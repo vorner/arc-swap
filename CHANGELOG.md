@@ -1,3 +1,7 @@
+* Made the ArcSwap as small as the pointer itself, by making the shards/counters
+  and generation ID global. This comes at a theoretical cost of more contention
+  when different threads use different instances.
+
 # 0.2.0
 
 * Added an `ArcSwapOption`, which allows storing NULL values (as None) as well

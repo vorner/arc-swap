@@ -49,10 +49,6 @@
 //! without any locking or waiting (though they can slow each other down by accessing the same
 //! memory locations under circumstances).
 //!
-//! However, the data structure is a bit large so it probably is not suitable to have a lot of them
-//! around. It is more aimed to „anchor“ a global immutable data structure than building complex
-//! atomic data structures with many pointers inside them.
-//!
 //! # RCU
 //!
 //! This also offers an [RCU implementation](struct.ArcSwapAny.html#method.rcu), for read-heavy
@@ -224,6 +220,32 @@ struct GenLock {
     gen: usize,
 }
 
+impl GenLock {
+    /// Creates a generation lock.
+    fn new(signal_safe: SignalSafety) -> GenLock {
+        let shard = match signal_safe {
+            SignalSafety::Safe => 0,
+            SignalSafety::Unsafe => Shard::choose(),
+        };
+        let gen = GEN_IDX.load(Ordering::Relaxed) % GEN_CNT;
+        // Unlike the real Arc, we don't have to check for the ref count overflow. Nobody can drop
+        // a reader.
+        //
+        // SeqCst: Acquire, so the dangerous section stays in. SeqCst to sync timelines with the
+        // swap on the ptr in writer thread.
+        SHARDS[shard].0[gen].fetch_add(1, Ordering::SeqCst);
+        GenLock { shard, gen }
+    }
+
+    /// Removes a generation lock.
+    fn unlock(self) {
+        // Release, so the dangerous section stays in.
+        SHARDS[self.shard].0[self.gen].fetch_sub(1, Ordering::Release);
+        // Disarm the drop-bomb
+        mem::forget(self);
+    }
+}
+
 /// A bomb so one doesn't forget to unlock generations.
 #[cfg(debug_assertions)] // The bomb actually makes it ~20% slower, so don't put it into production
 impl Drop for GenLock {
@@ -242,8 +264,8 @@ where
     T::Base: 'a,
 {
     lock: Option<GenLock>,
-    arc_swap: &'a ArcSwapAny<T>,
     ptr: *const T::Base,
+    _arc_swap: PhantomData<&'a ArcSwapAny<T>>,
 }
 
 impl<'a, T: RefCnt> Guard<'a, T> {
@@ -304,7 +326,7 @@ impl<'a, T: NonNull> Deref for Guard<'a, T> {
 
 impl<'a, T: RefCnt> Drop for Guard<'a, T> {
     fn drop(&mut self) {
-        self.arc_swap.gen_unlock(self.lock.take().unwrap());
+        self.lock.take().unwrap().unlock();
     }
 }
 
@@ -315,6 +337,20 @@ const GEN_CNT: usize = 2;
 enum SignalSafety {
     Safe,
     Unsafe,
+}
+
+static GEN_IDX: AtomicUsize = AtomicUsize::new(0);
+
+/// Global counter of threads.
+///
+/// We specifically don't use ThreadId here, because it is opaque and doesn't give us a number :-(.
+static THREAD_ID_GEN: AtomicUsize = AtomicUsize::new(0);
+
+thread_local! {
+    /// A shard a thread has chosen.
+    ///
+    /// The default value is just a marker it hasn't been set.
+    static THREAD_SHARD: Cell<usize> = Cell::new(SHARD_CNT);
 }
 
 /// Number of shards (see [`Shard`]).
@@ -330,17 +366,23 @@ const SHARD_CNT: usize = 9;
 #[derive(Default)]
 struct Shard([AtomicUsize; GEN_CNT]);
 
-/// Global counter of threads.
-///
-/// We specifically don't use ThreadId here, because it is opaque and doesn't give us a number :-(.
-static THREAD_ID_GEN: AtomicUsize = AtomicUsize::new(0);
-
-thread_local! {
-    /// A shard a thread has chosen.
-    ///
-    /// The default value is just a marker it hasn't been set.
-    static THREAD_SHARD: Cell<usize> = Cell::new(SHARD_CNT);
+macro_rules! sh {
+    () => {
+        Shard([AtomicUsize::new(0), AtomicUsize::new(0)])
+    };
 }
+
+static SHARDS: [Shard; SHARD_CNT] = [
+    sh!(),
+    sh!(),
+    sh!(),
+    sh!(),
+    sh!(),
+    sh!(),
+    sh!(),
+    sh!(),
+    sh!(),
+];
 
 impl Shard {
     /// Chooses which shard to use.
@@ -412,17 +454,10 @@ const YIELD_EVERY: usize = 16;
 ///
 /// [`Arc`]: https://doc.rust-lang.org/std/sync/struct.Arc.html
 /// [`from`]: https://doc.rust-lang.org/nightly/std/convert/trait.From.html#tymethod.from
-#[repr(align(64))]
 pub struct ArcSwapAny<T: RefCnt> {
     // Notes: AtomicPtr needs Sized
     /// The actual pointer, extracted from the Arc.
     ptr: AtomicPtr<T::Base>,
-
-    /// The current generation. Module by their count to discover the groups.
-    gen_idx: AtomicUsize,
-
-    /// Count of readers in either generation per shard.
-    shards: [Shard; SHARD_CNT],
 
     /// We are basically an Arc in disguise. Inherit parameters from Arc by pretending to contain
     /// it.
@@ -437,8 +472,6 @@ impl<T: RefCnt> From<T> for ArcSwapAny<T> {
         let ptr = T::into_ptr(val);
         Self {
             ptr: AtomicPtr::new(ptr),
-            gen_idx: AtomicUsize::new(0),
-            shards: Default::default(),
             _phantom_arc: PhantomData,
         }
     }
@@ -506,12 +539,12 @@ impl<T: RefCnt> ArcSwapAny<T> {
     }
 
     fn peek_inner(&self, signal_safe: SignalSafety) -> Guard<T> {
-        let gen = self.gen_lock(signal_safe);
+        let gen = GenLock::new(signal_safe);
         let ptr = self.ptr.load(Ordering::Acquire);
 
         Guard {
             lock: Some(gen),
-            arc_swap: self,
+            _arc_swap: PhantomData,
             ptr,
         }
     }
@@ -616,7 +649,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
 
         // As noted above, this method has either semantics of load or of store. We don't know
         // which ones upfront, so we need to implement safety measures for both.
-        let gen = self.gen_lock(SignalSafety::Unsafe);
+        let gen = GenLock::new(SignalSafety::Unsafe);
 
         let previous = self.ptr.compare_and_swap(current, new, Ordering::SeqCst);
         let swapped = ptr::eq(current, previous);
@@ -631,7 +664,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
             T::inc(&previous);
         }
 
-        self.gen_unlock(gen);
+        gen.unlock();
 
         if swapped {
             // We swapped. Before releasing the (possibly only) ref count of previous to user, wait
@@ -652,10 +685,8 @@ impl<T: RefCnt> ArcSwapAny<T> {
         while !seen_group.iter().all(|seen| *seen) {
             // Note that we don't need the snapshot to be consistent. We just need to see both
             // halves being zero, not necessarily at the same time.
-            let gen = self.gen_idx.load(Ordering::Relaxed);
-            // TODO: Would it possibly be faster to track the generations separately per each
-            // shard?
-            let groups = self.shards.iter().fold([0, 0], |[a1, a2], s| {
+            let gen = GEN_IDX.load(Ordering::Relaxed);
+            let groups = SHARDS.iter().fold([0, 0], |[a1, a2], s| {
                 let [v1, v2] = s.snapshot();
                 [a1 + v1, a2 + v2]
             });
@@ -663,8 +694,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
             let next_gen = gen.wrapping_add(1);
             if groups[next_gen % GEN_CNT] == 0 {
                 // Replace it only if someone else didn't do it in the meantime
-                self.gen_idx
-                    .compare_and_swap(gen, next_gen, Ordering::Relaxed);
+                GEN_IDX.compare_and_swap(gen, next_gen, Ordering::Relaxed);
             }
             for i in 0..GEN_CNT {
                 seen_group[i] = seen_group[i] || (groups[i] == 0);
@@ -676,30 +706,6 @@ impl<T: RefCnt> ArcSwapAny<T> {
                 atomic::spin_loop_hint();
             }
         }
-    }
-
-    /// Creates a generation lock.
-    fn gen_lock(&self, signal_safe: SignalSafety) -> GenLock {
-        let shard = match signal_safe {
-            SignalSafety::Safe => 0,
-            SignalSafety::Unsafe => Shard::choose(),
-        };
-        let gen = self.gen_idx.load(Ordering::Relaxed) % GEN_CNT;
-        // Unlike the real Arc, we don't have to check for the ref count overflow. Nobody can drop
-        // a reader.
-        //
-        // SeqCst: Acquire, so the dangerous section stays in. SeqCst to sync timelines with the
-        // swap on the ptr in writer thread.
-        self.shards[shard].0[gen].fetch_add(1, Ordering::SeqCst);
-        GenLock { shard, gen }
-    }
-
-    /// Removes a generation lock.
-    fn gen_unlock(&self, lock: GenLock) {
-        // Release, so the dangerous section stays in.
-        self.shards[lock.shard].0[lock.gen].fetch_sub(1, Ordering::Release);
-        // Disarm the drop-bomb
-        mem::forget(lock);
     }
 
     /// Read-Copy-Update of the pointer inside.
