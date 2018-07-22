@@ -1022,7 +1022,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
     ///     let cnt = ArcSwap::from(Arc::new(0));
     ///     thread::scope(|scope| {
     ///         for _ in 0..10 {
-    ///             scope.spawn(|| cnt.rcu(|inner| *inner + 1));
+    ///             scope.spawn(|| cnt.rcu(|inner| **inner + 1));
     ///         }
     ///     });
     ///     assert_eq!(10, *cnt.load());
@@ -1087,15 +1087,14 @@ impl<T: RefCnt> ArcSwapAny<T> {
     /// what you need.
     pub fn rcu<R, F>(&self, mut f: F) -> T
     where
-        F: FnMut(Lease<T>) -> R,
+        F: FnMut(&Lease<T>) -> R,
         R: Into<T>,
     {
         let mut cur = self.lease();
         loop {
-            let cur_ptr = cur.ptr;
-            let new = f(cur).into();
-            let prev = self.compare_and_swap(cur_ptr, new);
-            let swapped = ptr::eq(cur_ptr, prev.ptr);
+            let new = f(&cur).into();
+            let prev = self.compare_and_swap(&cur, new);
+            let swapped = ptr_eq(&cur, &prev);
             if swapped {
                 return Lease::into_upgrade(prev);
             } else {
@@ -1364,7 +1363,7 @@ mod tests {
             for _ in 0..THREADS {
                 scope.spawn(|| {
                     for _ in 0..ITERATIONS {
-                        shared.rcu(|old| *old + 1);
+                        shared.rcu(|old| **old + 1);
                     }
                 });
             }
@@ -1413,10 +1412,10 @@ mod tests {
         let shared = ArcSwap::from(Arc::new(0));
 
         shared.rcu(|i| {
-            if *i < 10 {
-                shared.rcu(|i| *i + 1);
+            if **i < 10 {
+                shared.rcu(|i| **i + 1);
             }
-            *i
+            **i
         });
         assert_eq!(10, *shared.peek());
         assert_eq!(2, Arc::strong_count(&shared.load()));
