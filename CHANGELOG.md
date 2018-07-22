@@ -1,3 +1,5 @@
+# 0.3.0
+
 * `compare_and_swap` no longer takes `&Guard` as current as that is a sure way
   to create a deadlock.
 * Introduced `Lease` for temporary storage, which doesn't suffer from contention
