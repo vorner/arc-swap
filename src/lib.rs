@@ -452,6 +452,24 @@ impl<T: RefCnt> Lease<T> {
         T::inc(&res);
         res
     }
+
+    /// A consuming version of [`upgrade`](#method.upgrade).
+    ///
+    /// This is a bit faster in certain situations, but consumes the lease.
+    // Associated function on purpose, because of deref
+    #[cfg_attr(feature = "cargo-clippy", allow(wrong_self_convention))]
+    pub fn into_upgrade(lease: Self) -> T {
+        let res = unsafe { T::from_ptr(lease.ptr) };
+        if let Some(debt) = lease.debt {
+            T::inc(&res);
+            if !debt.pay::<T>(lease.ptr) {
+                unsafe { T::dec(lease.ptr) };
+            }
+        }
+        mem::forget(lease);
+        res
+    }
+
     /// Returns access to the data held.
     ///
     /// This returns `Option` even when it can't hold `NULL` internally, to keep the interface the
@@ -460,6 +478,24 @@ impl<T: RefCnt> Lease<T> {
     pub fn get_ref(lease: &Self) -> Option<&T::Base> {
         unsafe { lease.ptr.as_ref() }
     }
+
+    /// Checks if it contains a null pointer.
+    ///
+    /// Note that for non-`NULL` `T`, this always returns `false`.
+    pub fn is_null(lease: &Self) -> bool {
+        lease.ptr.is_null()
+    }
+}
+
+/// Comparison of two pointer-like things.
+pub fn ptr_eq<Base, A, B>(a: A, b: B) -> bool
+where
+    A: AsRaw<Base>,
+    B: AsRaw<Base>,
+{
+    let a = a.as_raw();
+    let b = b.as_raw();
+    ptr::eq(a, b)
 }
 
 impl<T: NonNull> Deref for Lease<T> {
@@ -823,7 +859,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
     ///
     /// The `current` can be specified as `&Arc`, [`Guard`](struct.Guard.html),
     /// [`&Lease`](struct.Lease.html) or as a raw pointer.
-    pub fn compare_and_swap<C: AsRaw<T::Base>>(&self, current: C, new: T) -> T {
+    pub fn compare_and_swap<C: AsRaw<T::Base>>(&self, current: C, new: T) -> Lease<T> {
         let current = current.as_raw();
         let new = T::into_ptr(new);
 
@@ -833,16 +869,25 @@ impl<T: RefCnt> ArcSwapAny<T> {
 
         let previous_ptr = self.ptr.compare_and_swap(current, new, Ordering::SeqCst);
         let swapped = ptr::eq(current, previous_ptr);
-        let previous = unsafe { T::from_ptr(previous_ptr) };
 
-        if swapped {
+        let debt = if swapped {
             // New went in, previous out, but their ref counts are correct. So nothing to do here.
+            None
         } else {
             // Previous is a new copy of what is inside (and it stays there as well), so bump its
             // ref count. New is thrown away so dec its ref count (but do it outside of the
             // gen-lock).
-            T::inc(&previous);
-        }
+            //
+            // We try to do that by registering a debt and only if that fails by actually bumping
+            // the ref.
+            let debt = Debt::new(previous_ptr as usize);
+            if debt.is_none() {
+                let previous = unsafe { T::from_ptr(previous_ptr) };
+                T::inc(&previous);
+                T::into_ptr(previous);
+            }
+            debt
+        };
 
         gen.unlock();
 
@@ -855,7 +900,11 @@ impl<T: RefCnt> ArcSwapAny<T> {
             unsafe { T::dec(new) };
         }
 
-        previous
+        Lease {
+            ptr: previous_ptr,
+            debt,
+            _data: PhantomData,
+        }
     }
 
     /// Wait until all readers go away.
@@ -946,7 +995,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
     ///     let cnt = ArcSwap::from(Arc::new(0));
     ///     thread::scope(|scope| {
     ///         for _ in 0..10 {
-    ///             scope.spawn(|| cnt.rcu(|inner| **inner + 1));
+    ///             scope.spawn(|| cnt.rcu(|inner| *inner + 1));
     ///         }
     ///     });
     ///     assert_eq!(10, *cnt.load());
@@ -988,7 +1037,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
     ///     let result = expensive_computation(x);
     ///     CACHE.rcu(|cache| {
     ///         // The cheaper clone of the cache can be retried if need be.
-    ///         let mut cache = HashMap::clone(cache);
+    ///         let mut cache = HashMap::clone(&cache);
     ///         cache.insert(x, result);
     ///         cache
     ///     });
@@ -1011,18 +1060,17 @@ impl<T: RefCnt> ArcSwapAny<T> {
     /// what you need.
     pub fn rcu<R, F>(&self, mut f: F) -> T
     where
-        F: FnMut(&T) -> R,
+        F: FnMut(Lease<T>) -> R,
         R: Into<T>,
     {
-        // TODO: We probably could be using leases here instead. Even the compare_and_swap could be
-        // using them.
-        let mut cur = self.load();
+        let mut cur = self.lease();
         loop {
-            let new = f(&cur).into();
-            let prev = self.compare_and_swap(&cur, new);
-            let swapped = ptr::eq(T::as_ptr(&cur), T::as_ptr(&prev));
+            let cur_ptr = cur.ptr;
+            let new = f(cur).into();
+            let prev = self.compare_and_swap(cur_ptr, new);
+            let swapped = ptr::eq(cur_ptr, prev.ptr);
             if swapped {
-                return prev;
+                return Lease::into_upgrade(prev);
             } else {
                 cur = prev;
             }
@@ -1227,29 +1275,48 @@ mod tests {
         for i in 0..ITERATIONS {
             let orig = shared.load();
             assert_eq!(i, *orig);
-            // One for orig, one for shared
-            assert_eq!(2, Arc::strong_count(&orig));
+            if i % 2 == 1 {
+                // One for orig, one for shared
+                assert_eq!(2, Arc::strong_count(&orig));
+            }
             let n1 = Arc::new(i + 1);
+            // Fill up the slots sometimes
+            let fillup = || {
+                if i % 2 == 0 {
+                    Some(
+                        (0..50)
+                            .into_iter()
+                            .map(|_| shared.lease())
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    None
+                }
+            };
+            let leases = fillup();
             // Success
             let prev = shared.compare_and_swap(&orig, Arc::clone(&n1));
-            assert!(Arc::ptr_eq(&orig, &prev));
+            assert!(ptr_eq(&orig, &prev));
+            drop(leases);
             // One for orig, one for prev
             assert_eq!(2, Arc::strong_count(&orig));
             // One for n1, one for shared
             assert_eq!(2, Arc::strong_count(&n1));
-            assert_eq!(i + 1, *shared.load());
+            assert_eq!(i + 1, *shared.peek());
             let n2 = Arc::new(i);
             drop(prev);
+            let leases = fillup();
             // Failure
-            let prev = shared.compare_and_swap(&orig, Arc::clone(&n2));
-            assert!(Arc::ptr_eq(&n1, &prev));
+            let prev = Lease::into_upgrade(shared.compare_and_swap(&orig, Arc::clone(&n2)));
+            drop(leases);
+            assert!(ptr_eq(&n1, &prev));
             // One for orig
             assert_eq!(1, Arc::strong_count(&orig));
             // One for n1, one for shared, one for prev
             assert_eq!(3, Arc::strong_count(&n1));
             // n2 didn't get increased
             assert_eq!(1, Arc::strong_count(&n2));
-            assert_eq!(i + 1, *shared.load());
+            assert_eq!(i + 1, *shared.peek());
         }
 
         let a = shared.load();
@@ -1270,7 +1337,7 @@ mod tests {
             for _ in 0..THREADS {
                 scope.spawn(|| {
                     for _ in 0..ITERATIONS {
-                        shared.rcu(|old| **old + 1);
+                        shared.rcu(|old| *old + 1);
                     }
                 });
             }
@@ -1306,11 +1373,11 @@ mod tests {
         assert!(null.is_none());
         let a = Arc::new(42);
         let orig = shared.compare_and_swap(ptr::null(), Some(Arc::clone(&a)));
-        assert!(orig.is_none());
+        assert!(Lease::is_null(&orig));
         assert_eq!(2, Arc::strong_count(&a));
-        let orig = shared.compare_and_swap(&None::<Arc<_>>, None);
+        let orig = Lease::into_upgrade(shared.compare_and_swap(&None::<Arc<_>>, None));
         assert_eq!(3, Arc::strong_count(&a));
-        assert!(Arc::ptr_eq(&a, &orig.unwrap()));
+        assert!(ptr_eq(&a, &orig));
     }
 
     /// We have a callback in RCU. Check what happens if we access the value from within.
@@ -1319,10 +1386,10 @@ mod tests {
         let shared = ArcSwap::from(Arc::new(0));
 
         shared.rcu(|i| {
-            if **i < 10 {
-                shared.rcu(|i| **i + 1);
+            if *i < 10 {
+                shared.rcu(|i| *i + 1);
             }
-            **i
+            *i
         });
         assert_eq!(10, *shared.peek());
         assert_eq!(2, Arc::strong_count(&shared.load()));

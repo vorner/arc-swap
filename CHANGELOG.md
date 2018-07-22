@@ -3,6 +3,7 @@
 * Introduced `Lease` for temporary storage, which doesn't suffer from contention
   like `load`, but doesn't block writes like `Guard`. The downside is it slows
   down with number of held by the current thread.
+* `compare_and_swap` and `rcu` uses leases.
 * Made the `ArcSwap` as small as the pointer itself, by making the
   shards/counters and generation ID global. This comes at a theoretical cost of
   more contention when different threads use different instances.

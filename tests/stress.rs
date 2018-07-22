@@ -60,7 +60,7 @@ fn storm_link_list(node_cnt: usize, iters: usize) {
                     bar.wait(); // Start synchronously
                     for n in nodes.iter().rev() {
                         head.rcu(|head| {
-                            n.next.store(head.clone()); // Cloning the optional Arc
+                            n.next.store(Lease::into_upgrade(head)); // Cloning the optional Arc
                             Some(Arc::clone(n))
                         });
                     }
@@ -172,7 +172,7 @@ fn storm_unroll(node_cnt: usize, iters: usize) {
                             live_cnt,
                         });
                         head.rcu(|head| {
-                            Arc::get_mut(&mut node).unwrap().next = head.clone();
+                            Arc::get_mut(&mut node).unwrap().next = Lease::into_upgrade(head);
                             Arc::clone(&node)
                         });
                     }
@@ -182,7 +182,7 @@ fn storm_unroll(node_cnt: usize, iters: usize) {
                     let mut last_seen = vec![node_cnt; cpus];
                     let mut cnt = 0;
                     while let Some(node) =
-                        head.rcu(|head| head.as_ref().and_then(|h| h.next.clone()))
+                        head.rcu(|head| Lease::get_ref(&head).and_then(|h| h.next.clone()))
                     {
                         assert!(last_seen[node.owner] > node.num);
                         last_seen[node.owner] = node.num;
