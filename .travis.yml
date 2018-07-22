@@ -11,7 +11,7 @@ os:
 before_script:
     - |
       (travis_wait rustup component add rustfmt-preview || true) &&
-      (test "$TRAVIS_RUST_VERSION" != nightly || travis_wait cargo install --force clippy || true)
+      (test "$TRAVIS_RUST_VERSION" != nightly || travis_wait rustup component add clippy-preview || true)
 
 script:
     - |
@@ -25,7 +25,3 @@ script:
       (test "$TRAVIS_RUST_VERSION" != nightly || cargo test --release --benches) &&
       (test "$TRAVIS_RUST_VERSION" != nightly || cargo clippy -- --deny clippy) &&
       (test "$TRAVIS_RUST_VERSION" != nightly || cargo fmt)
-
-matrix:
-    allow_failures:
-        - rust: nightly
