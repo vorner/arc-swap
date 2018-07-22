@@ -680,6 +680,7 @@ impl<T: RefCnt> From<T> for ArcSwapAny<T> {
 impl<T: RefCnt> Drop for ArcSwapAny<T> {
     fn drop(&mut self) {
         let ptr = *self.ptr.get_mut();
+        // To pay any possible debts
         self.wait_for_readers(ptr);
         // We are getting rid of the one stored ref count
         unsafe { T::dec(ptr) };
@@ -719,6 +720,20 @@ where
 }
 
 impl<T: RefCnt> ArcSwapAny<T> {
+    /// Constructs a new value.
+    pub fn new(val: T) -> Self {
+        Self::from(val)
+    }
+
+    /// Extracts the value inside.
+    pub fn into_inner(mut self) -> T {
+        let ptr = *self.ptr.get_mut();
+        // To pay all the debts
+        self.wait_for_readers(ptr);
+        mem::forget(self);
+        unsafe { T::from_ptr(ptr) }
+    }
+
     /// Loads the value.
     ///
     /// This makes another copy (reference) and returns it, atomically (it is safe even when other
@@ -1470,5 +1485,17 @@ mod tests {
         assert!(Lease::get_ref(&lease).is_none());
         shared.store(Some(Arc::new(42)));
         assert_eq!(42, *Lease::get_ref(&shared.lease()).unwrap());
+    }
+
+    #[test]
+    fn from_into() {
+        let a = Arc::new(42);
+        let shared = ArcSwap::new(a);
+        let lease = shared.lease();
+        let a = shared.into_inner();
+        assert_eq!(42, *a);
+        assert_eq!(2, Arc::strong_count(&a));
+        drop(lease);
+        assert_eq!(1, Arc::strong_count(&a));
     }
 }
