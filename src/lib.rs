@@ -488,6 +488,9 @@ impl<T: RefCnt> Lease<T> {
 }
 
 /// Comparison of two pointer-like things.
+// A and B are likely to *be* references, or thin wrappers around that. Calling that with extra
+// reference is just annoying.
+#[cfg_attr(feature = "cargo-clippy", allow(needless_pass_by_value))]
 pub fn ptr_eq<Base, A, B>(a: A, b: B) -> bool
 where
     A: AsRaw<Base>,
@@ -875,15 +878,24 @@ impl<T: RefCnt> ArcSwapAny<T> {
     /// The `current` can be specified as `&Arc`, [`Guard`](struct.Guard.html),
     /// [`&Lease`](struct.Lease.html) or as a raw pointer.
     pub fn compare_and_swap<C: AsRaw<T::Base>>(&self, current: C, new: T) -> Lease<T> {
-        let current = current.as_raw();
+        let cur_ptr = current.as_raw();
         let new = T::into_ptr(new);
 
         // As noted above, this method has either semantics of load or of store. We don't know
         // which ones upfront, so we need to implement safety measures for both.
         let gen = GenLock::new(SignalSafety::Unsafe);
 
-        let previous_ptr = self.ptr.compare_and_swap(current, new, Ordering::SeqCst);
-        let swapped = ptr::eq(current, previous_ptr);
+        let previous_ptr = self.ptr.compare_and_swap(cur_ptr, new, Ordering::SeqCst);
+        let swapped = ptr::eq(cur_ptr, previous_ptr);
+
+        // Drop it here, because:
+        // * We can't drop it before the compare_and_swap ‒ in such case, it could get recycled,
+        //   put into the pointer by another thread with a different value and create a fake
+        //   success.
+        // * We drop it before waiting for readers, because it could have been a Guard. In such
+        //   case, the caller doesn't have it any more and can't check if it succeeded, but that's
+        //   OK.
+        drop(current);
 
         let debt = if swapped {
             // New went in, previous out, but their ref counts are correct. So nothing to do here.
