@@ -21,8 +21,10 @@ maintenance = { status = "actively-developed" }
 crossbeam-utils = "~0.4"
 itertools = "~0.7"
 lazy_static = "~1"
+model = "~0.0.4"
 num_cpus = "~1"
 version-sync = "~0.5"
+proptest = "~0.7"
 
 [profile.bench]
 debug = true

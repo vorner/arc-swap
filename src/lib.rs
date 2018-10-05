@@ -3,6 +3,7 @@
     test(attr(deny(warnings)))
 )]
 #![deny(missing_docs, warnings)]
+#![allow(renamed_and_removed_lints)]
 
 //! Making [`Arc`] itself atomic
 //!

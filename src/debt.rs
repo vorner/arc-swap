@@ -95,7 +95,8 @@ impl Debt {
                     } else {
                         None
                     }
-                }).unwrap_or_else(|| {
+                })
+                .unwrap_or_else(|| {
                     let node = Box::leak(Box::new(Node::default()));
                     node.in_use.store(true, Ordering::Relaxed);
                     let mut head = DEBT_HEAD.load(Ordering::Relaxed);

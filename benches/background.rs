@@ -61,7 +61,9 @@ macro_rules! method {
 
 macro_rules! noise {
     () => {
-        use super::{scoped, test, Arc, AtomicBool, Bencher, Mutex, MutexGuard, Ordering, PoisonError, ITERS};
+        use super::{
+            scoped, test, Arc, AtomicBool, Bencher, Mutex, MutexGuard, Ordering, PoisonError, ITERS,
+        };
 
         lazy_static! {
             static ref LOCK: Mutex<()> = Mutex::new(());
@@ -74,7 +76,6 @@ macro_rules! noise {
         fn lock() -> MutexGuard<'static, ()> {
             LOCK.lock().unwrap_or_else(PoisonError::into_inner)
         }
-
 
         fn noise<F: Fn()>(b: &mut Bencher, readers: usize, peekers: usize, writers: usize, f: F) {
             let _lock = lock();
