@@ -1,3 +1,6 @@
+* Few convenience constructors.
+* More tests (some randomized property testing).
+
 # 0.3.0
 
 * `compare_and_swap` no longer takes `&Guard` as current as that is a sure way

@@ -1112,6 +1112,13 @@ impl<T: RefCnt> ArcSwapAny<T> {
 pub type ArcSwap<T> = ArcSwapAny<Arc<T>>;
 
 impl<T> ArcSwap<T> {
+    /// A convenience constructor directly from the pointed-to value.
+    ///
+    /// Direct equivalent for `ArcSwap::new(Arc::new(val))`.
+    pub fn from_pointee(val: T) -> Self {
+        Self::from(Arc::new(val))
+    }
+
     /// An [`rcu`](#method.rcu) which waits to be the sole owner of the original value and unwraps
     /// it.
     ///
@@ -1168,6 +1175,39 @@ impl<T> ArcSwap<T> {
 /// assert_eq!(42, *shared.load().unwrap());
 /// ```
 pub type ArcSwapOption<T> = ArcSwapAny<Option<Arc<T>>>;
+
+impl<T> ArcSwapOption<T> {
+    /// A convenience constructor directly from a pointed-to value.
+    ///
+    /// This just allocates the `Arc` under the hood.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use arc_swap::ArcSwapOption;
+    ///
+    /// let empty: ArcSwapOption<usize> = ArcSwapOption::from_pointee(None);
+    /// assert!(empty.load().is_none());
+    /// let non_empty: ArcSwapOption<usize> = ArcSwapOption::from_pointee(42);
+    /// assert_eq!(42, *non_empty.load().unwrap());
+    /// ```
+    pub fn from_pointee<V: Into<Option<T>>>(val: V) -> Self {
+        ArcSwapOption::new(val.into().map(Arc::new))
+    }
+
+    /// A convenience constructor for an empty value.
+    ///
+    /// This is equivalent to `ArcSwapOption::new(none)`.
+    pub fn empty() -> Self {
+        ArcSwapOption::new(None)
+    }
+}
+
+impl<T> Default for ArcSwapOption<T> {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
 
 #[cfg(test)]
 mod tests {

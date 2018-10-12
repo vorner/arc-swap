@@ -62,7 +62,7 @@ macro_rules! method {
 macro_rules! noise {
     () => {
         use super::{
-            thread, test, Arc, AtomicBool, Bencher, Mutex, MutexGuard, Ordering, PoisonError, ITERS,
+            test, thread, Arc, AtomicBool, Bencher, Mutex, MutexGuard, Ordering, PoisonError, ITERS,
         };
 
         lazy_static! {
