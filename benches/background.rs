@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use arc_swap::{ArcSwap, ArcSwapOption, Guard, Lease};
-use crossbeam_utils::scoped;
+use crossbeam_utils::thread;
 use test::Bencher;
 
 const ITERS: usize = 100_000;
@@ -62,7 +62,7 @@ macro_rules! method {
 macro_rules! noise {
     () => {
         use super::{
-            scoped, test, Arc, AtomicBool, Bencher, Mutex, MutexGuard, Ordering, PoisonError, ITERS,
+            thread, test, Arc, AtomicBool, Bencher, Mutex, MutexGuard, Ordering, PoisonError, ITERS,
         };
 
         lazy_static! {
@@ -80,7 +80,7 @@ macro_rules! noise {
         fn noise<F: Fn()>(b: &mut Bencher, readers: usize, peekers: usize, writers: usize, f: F) {
             let _lock = lock();
             let flag = Arc::new(AtomicBool::new(true));
-            scoped::scope(|s| {
+            thread::scope(|s| {
                 for _ in 0..readers {
                     s.spawn(|| {
                         while flag.load(Ordering::Relaxed) {

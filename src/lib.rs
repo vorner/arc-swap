@@ -122,7 +122,7 @@
 //! use std::sync::Arc;
 //!
 //! use arc_swap::ArcSwap;
-//! use crossbeam_utils::scoped as thread;
+//! use crossbeam_utils::thread;
 //!
 //! fn main() {
 //!     let config = ArcSwap::from(Arc::new(String::default()));
@@ -989,7 +989,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
     /// use std::sync::Arc;
     ///
     /// use arc_swap::ArcSwap;
-    /// use crossbeam_utils::scoped as thread;
+    /// use crossbeam_utils::thread;
     ///
     /// fn main() {
     ///     let cnt = ArcSwap::from(Arc::new(0));
@@ -1017,7 +1017,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
     /// use std::sync::Arc;
     ///
     /// use arc_swap::ArcSwap;
-    /// use crossbeam_utils::scoped as thread;
+    /// use crossbeam_utils::thread;
     ///
     /// fn main() {
     ///     let cnt = ArcSwap::from(Arc::new(0));
@@ -1177,7 +1177,7 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::Barrier;
 
-    use self::crossbeam_utils::scoped as thread;
+    use self::crossbeam_utils::thread;
     use super::*;
 
     /// Similar to the one in doc tests of the lib, but more times and more intensive (we want to

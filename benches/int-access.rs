@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use arc_swap::ArcSwap;
-use crossbeam_utils::scoped as thread;
+use crossbeam_utils::thread;
 
 fn test_run<R, W>(
     name: &str,

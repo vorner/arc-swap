@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex, MutexGuard, PoisonError};
 
 use arc_swap::{ArcSwap, ArcSwapOption, Lease};
-use crossbeam_utils::scoped;
+use crossbeam_utils::thread;
 use itertools::Itertools;
 
 lazy_static! {
@@ -42,7 +42,7 @@ fn storm_link_list(node_cnt: usize, iters: usize) {
     let cpus = num_cpus::get();
     // FIXME: If one thread fails, but others don't, it'll deadlock.
     let bar = Barrier::new(cpus);
-    scoped::scope(|scope| {
+    thread::scope(|scope| {
         for thread in 0..cpus {
             // We want to borrow these, but that kind-of conflicts with the move closure mode
             let bar = &bar;
@@ -153,7 +153,7 @@ fn storm_unroll(node_cnt: usize, iters: usize) {
     // We plan to create this many nodes during the whole test.
     let live_cnt = AtomicUsize::new(cpus * node_cnt * iters);
     let head = ArcSwapOption::from(None);
-    scoped::scope(|scope| {
+    thread::scope(|scope| {
         for thread in 0..cpus {
             // Borrow these instead of moving.
             let head = &head;
@@ -215,7 +215,7 @@ fn lease_parallel(iters: usize) {
     let _lock = lock();
     let cpus = num_cpus::get();
     let shared = ArcSwap::from(Arc::new(0));
-    scoped::scope(|scope| {
+    thread::scope(|scope| {
         scope.spawn(|| {
             for i in 0..iters {
                 shared.store(Arc::new(i));
