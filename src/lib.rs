@@ -802,8 +802,8 @@ impl<T: RefCnt> ArcSwapAny<T> {
     /// the signal handler. Unless it is upgraded (which is *not* recommended in a signal handler),
     /// there's also no way the signal handler would have to drop the pointed to value.
     ///
-    /// The same performance warning about writer methods applies, so it is recommended not to
-    /// spend too much time holding the returned guard.
+    /// The same performance warning about writer methods of [`peek`](#method.peek) applies, so it
+    /// is recommended not to spend too much time holding the returned guard.
     pub fn peek_signal_safe(&self) -> Guard<T> {
         self.peek_inner(SignalSafety::Safe)
     }
@@ -1119,12 +1119,12 @@ impl<T> ArcSwap<T> {
         Self::from(Arc::new(val))
     }
 
-    /// An [`rcu`](#method.rcu) which waits to be the sole owner of the original value and unwraps
-    /// it.
+    /// An [`rcu`](struct.ArcSwapAny.html#method.rcu) which waits to be the sole owner of the
+    /// original value and unwraps it.
     ///
-    /// This one works the same way as the [`rcu`](#method.rcu) method, but works on the inner type
-    /// instead of `Arc`. After replacing the original, it waits until there are no other owners of
-    /// the arc and unwraps it.
+    /// This one works the same way as the [`rcu`](struct.ArcSwapAny.html#method.rcu) method, but
+    /// works on the inner type instead of `Arc`. After replacing the original, it waits until
+    /// there are no other owners of the arc and unwraps it.
     ///
     /// Possible use case might be an RCU with a structure that is rather slow to drop ‒ if it was
     /// left to random reader (the last one to hold the old value), it could cause a timeout or
