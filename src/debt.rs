@@ -83,7 +83,9 @@ impl Debt {
     ///
     /// This is technically lock-free on the first call in a given thread and wait-free on all the
     /// other accesses.
-    #[allow(clippy::new_ret_no_self)]
+    // Turn the lint off in clippy, but don't complain anywhere else. clippy::new_ret_no_self
+    // doesn't work yet, that thing is not stabilized.
+    #[allow(unknown_lints, new_ret_no_self)]
     pub(crate) fn new(ptr: usize) -> Option<&'static Self> {
         THREAD_HEAD
             .try_with(|head| {
