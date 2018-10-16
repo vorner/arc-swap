@@ -83,6 +83,7 @@ impl Debt {
     ///
     /// This is technically lock-free on the first call in a given thread and wait-free on all the
     /// other accesses.
+    #[allow(clippy::new_ret_no_self)]
     pub(crate) fn new(ptr: usize) -> Option<&'static Self> {
         THREAD_HEAD
             .try_with(|head| {
