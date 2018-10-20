@@ -49,6 +49,7 @@ struct DebtHead(Cell<Option<&'static Node>>);
 impl Drop for DebtHead {
     fn drop(&mut self) {
         if let Some(node) = self.0.get() {
+            // Nothing synchronized by this atomic.
             assert!(node.in_use.swap(false, Ordering::Relaxed));
         }
     }
@@ -64,6 +65,11 @@ thread_local! {
 /// This traverses the linked list, calling the closure on each node. If the closure returns
 /// `Some`, it terminates with that value early, otherwise it runs to the end.
 fn traverse<R, F: FnMut(&'static Node) -> Option<R>>(mut f: F) -> Option<R> {
+    // Acquire ‒ we want to make sure we read the correct version of data at the end of the
+    // pointer. Any write to the DEBT_HEAD is with Release.
+    //
+    // Note that the other pointers in the chain never change and are *ordinary* pointers. The
+    // whole linked list is synchronized through the head.
     let mut current = unsafe { DEBT_HEAD.load(Ordering::Acquire).as_ref() };
     while let Some(node) = current {
         let result = f(node);
@@ -86,27 +92,35 @@ impl Debt {
     pub(crate) fn new(ptr: usize) -> Option<&'static Self> {
         THREAD_HEAD
             .try_with(|head| {
+                // Already have my own node?
                 if let Some(node) = head.0.get() {
                     return node;
                 }
+                // Try to find an unused one in the chain and reuse it.
                 let new_node = traverse(|node| {
+                    // Try to claim this node. Nothing is synchronized through this atomic, we only
+                    // track if someone claims ownership of it.
                     if !node.in_use.compare_and_swap(false, true, Ordering::Relaxed) {
                         Some(node)
                     } else {
                         None
                     }
                 })
+                // If that didn't work, create a new one and prepend to the list.
                 .unwrap_or_else(|| {
                     let node = Box::leak(Box::new(Node::default()));
+                    // Not shared between threads yet, so ordinary write would be fine too.
                     node.in_use.store(true, Ordering::Relaxed);
+                    // We don't want to read any data in addition to the head, Relaxed is fine
+                    // here.
                     let mut head = DEBT_HEAD.load(Ordering::Relaxed);
                     loop {
                         node.next = unsafe { head.as_ref() };
                         if let Err(old) = DEBT_HEAD.compare_exchange(
                             head,
                             node,
-                            Ordering::Release,
-                            Ordering::Relaxed,
+                            Ordering::Release, // Make sure others see the content of our node
+                            Ordering::Relaxed, // Nothing changed, go next round of the loop.
                         ) {
                             head = old;
                         } else {
@@ -119,9 +133,15 @@ impl Debt {
             })
             .ok()
             .and_then(|node| {
-                debug_assert!(node.in_use.load(Ordering::Relaxed));
+                debug_assert!(node.in_use.load(Ordering::Relaxed)); // Check it is in use by *us*
                 node.slots.iter().find(|slot| {
                     slot.0
+                        // Try to claim one of the slots. If it doesn't work and we change nothing,
+                        // Relaxed is enough.
+                        //
+                        // This Acquire is like locking a Mutex ‒ the dangerous stuff stays after
+                        // this and can't be reordered before it. The acquire works, part of this
+                        // is a load.
                         .compare_exchange(NO_DEBT, ptr, Ordering::Acquire, Ordering::Relaxed)
                         .is_ok()
                 })
@@ -145,6 +165,10 @@ impl Debt {
     ///   through `ArcSwap<T>` and someone else with `ArcSwapOption<T>` will work.
     pub(crate) fn pay<T: RefCnt>(&self, ptr: *const T::Base) -> bool {
         self.0
+            // If we don't change anything because there's something else, Relaxed is fine.
+            //
+            // The Release works as kind of Mutex. We make sure nothing from the debt-protected
+            // sections leaks below this point.
             .compare_exchange(ptr as usize, NO_DEBT, Ordering::Release, Ordering::Relaxed)
             .is_ok()
     }

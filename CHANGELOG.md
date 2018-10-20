@@ -1,3 +1,13 @@
+# 0.3.3
+
+* Increased potentially weak ordering (probably without any practical effect).
+
+# 0.3.2
+
+* Documentation link fix.
+
+# 0.3.1
+
 * Few convenience constructors.
 * More tests (some randomized property testing).
 

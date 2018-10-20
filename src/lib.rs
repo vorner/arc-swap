@@ -1,5 +1,5 @@
 #![doc(
-    html_root_url = "https://docs.rs/arc-swap/0.3.2/arc-swap/",
+    html_root_url = "https://docs.rs/arc-swap/0.3.3/arc-swap/",
     test(attr(deny(warnings)))
 )]
 #![deny(missing_docs, warnings)]
@@ -188,7 +188,7 @@ pub use ref_cnt::{NonNull, RefCnt};
 // caller, handing it the ownership of the Arc and allowing possible bad things (like being
 // destroyed) to happen to it.
 //
-// Because bumping the reference count can cause contention and slow things down, there's another
+// Because bumping the reference count can cause contention and slows things down, there's another
 // way to track missing reference counts. There's a global registry of debts and each lease of a
 // missing reference count is written there. If someone wants to replace the pointer inside, it
 // traverses the whole registry and pays all the debts (by incrementing the reference counts) ‒
@@ -234,7 +234,7 @@ pub use ref_cnt::{NonNull, RefCnt};
 //
 // Instead of incrementing the reference count, the pointer reference can be owed. In such case, it
 // is recorded into a global storage. As each thread has its own storage (the global storage is
-// composed of multiple thread storages), the readers don't contend. When the pointer in no longer
+// composed of multiple thread storages), the readers don't contend. When the pointer is no longer
 // in use, the debt is erased.
 //
 // The writer pays all the existing debts, therefore the reader have the full Arc with ref count at
@@ -252,7 +252,9 @@ pub use ref_cnt::{NonNull, RefCnt};
 // count needs to stay between incrementing and decrementing the reader count (in either group). To
 // accomplish that, using Acquire on the increment and Release on the decrement would be enough.
 // The loads in the writer use Acquire to complete the edge and make sure no part of the dangerous
-// area leaks outside of it in the writers view.
+// area leaks outside of it in the writers view. This Acquire, however, forms the edge only with
+// the *latest* decrement. By making both the increment and decrement AcqRel, we effectively chain
+// the edges together.
 //
 // Now the hard part :-). We need to ensure that whatever zero a writer sees is not stale in the
 // sense that it happened before the switch of the pointer. In other words, we need to make sure
@@ -263,7 +265,7 @@ pub use ref_cnt::{NonNull, RefCnt};
 // swap), making a base line for the following operations (load of the pointer or looking for
 // zeroes).
 //
-// # Memory orders around around debts
+// # Memory orders around debts
 //
 // The linked list of debt nodes only grows. The shape of the list (existence of nodes) is
 // synchronized through Release on creation and Acquire on load on the head pointer.
@@ -276,8 +278,11 @@ pub use ref_cnt::{NonNull, RefCnt};
 // destroyed too soon. The writer traverses all the slots, therefore they don't need to synchronize
 // with each other.
 //
-// The synchronization on the generations make sure all the debt recording stays within a reader
-// lock.
+// # Orderings on the rest
+//
+// We don't really care much if we use a stale generation number ‒ it only works to route the
+// readers into one or another bucket, but even if it was completely wrong, it would only slow the
+// waiting for 0 down. So, the increments of it are just hints.
 //
 // All other operations can be Relaxed (they either only claim something, which doesn't need to
 // synchronize with anything else, or they are failed attempts at something ‒ and another attempt
@@ -309,7 +314,7 @@ impl GenLock {
     /// Removes a generation lock.
     fn unlock(self) {
         // Release, so the dangerous section stays in.
-        SHARDS[self.shard].0[self.gen].fetch_sub(1, Ordering::Release);
+        SHARDS[self.shard].0[self.gen].fetch_sub(1, Ordering::AcqRel);
         // Disarm the drop-bomb
         mem::forget(self);
     }
