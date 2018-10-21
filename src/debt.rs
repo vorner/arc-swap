@@ -116,13 +116,18 @@ impl Debt {
                     node.in_use.store(true, Ordering::Relaxed);
                     // We don't want to read any data in addition to the head, Relaxed is fine
                     // here.
+                    //
+                    // We do need to release the data to others, but for that, we acquire in the
+                    // compare_exchange below.
                     let mut head = DEBT_HEAD.load(Ordering::Relaxed);
                     loop {
                         node.next = unsafe { head.as_ref() };
-                        if let Err(old) = DEBT_HEAD.compare_exchange(
+                        if let Err(old) = DEBT_HEAD.compare_exchange_weak(
                             head,
                             node,
-                            Ordering::Release, // Make sure others see the content of our node
+                            // We need to release *the whole chain* here. For that, we need to
+                            // acquire it first.
+                            Ordering::AcqRel,
                             Ordering::Relaxed, // Nothing changed, go next round of the loop.
                         ) {
                             head = old;

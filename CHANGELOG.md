@@ -1,3 +1,8 @@
+# 0.3.4
+
+* Another potentially weak ordering discovered (with even less practical effect
+  than the previous).
+
 # 0.3.3
 
 * Increased potentially weak ordering (probably without any practical effect).
