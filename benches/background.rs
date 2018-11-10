@@ -28,32 +28,47 @@ macro_rules! method {
 
             #[bench]
             fn r1(b: &mut Bencher) {
-                noise(b, 1, 0, 0, super::$name);
+                noise(b, 1, 0, 0, 0, super::$name);
             }
 
             #[bench]
             fn r3(b: &mut Bencher) {
-                noise(b, 3, 0, 0, super::$name);
+                noise(b, 3, 0, 0, 0, super::$name);
             }
 
             #[bench]
             fn p1(b: &mut Bencher) {
-                noise(b, 0, 1, 0, super::$name);
+                noise(b, 0, 1, 0, 0, super::$name);
             }
 
             #[bench]
             fn p3(b: &mut Bencher) {
-                noise(b, 0, 3, 0, super::$name);
+                noise(b, 0, 3, 0, 0, super::$name);
+            }
+
+            #[bench]
+            fn l1(b: &mut Bencher) {
+                noise(b, 0, 0, 1, 0, super::$name);
+            }
+
+            #[bench]
+            fn l3(b: &mut Bencher) {
+                noise(b, 0, 0, 3, 0, super::$name);
             }
 
             #[bench]
             fn rw(b: &mut Bencher) {
-                noise(b, 1, 0, 1, super::$name);
+                noise(b, 1, 0, 0, 1, super::$name);
             }
 
             #[bench]
             fn pw(b: &mut Bencher) {
-                noise(b, 0, 1, 1, super::$name);
+                noise(b, 0, 1, 0, 1, super::$name);
+            }
+
+            #[bench]
+            fn lw(b: &mut Bencher) {
+                noise(b, 0, 0, 1, 1, super::$name);
             }
         }
     };
@@ -77,7 +92,14 @@ macro_rules! noise {
             LOCK.lock().unwrap_or_else(PoisonError::into_inner)
         }
 
-        fn noise<F: Fn()>(b: &mut Bencher, readers: usize, peekers: usize, writers: usize, f: F) {
+        fn noise<F: Fn()>(
+            b: &mut Bencher,
+            readers: usize,
+            peekers: usize,
+            leasers: usize,
+            writers: usize,
+            f: F,
+        ) {
             let _lock = lock();
             let flag = Arc::new(AtomicBool::new(true));
             thread::scope(|s| {
@@ -92,6 +114,13 @@ macro_rules! noise {
                     s.spawn(|| {
                         while flag.load(Ordering::Relaxed) {
                             peek();
+                        }
+                    });
+                }
+                for _ in 0..leasers {
+                    s.spawn(|| {
+                        while flag.load(Ordering::Relaxed) {
+                            lease();
                         }
                     });
                 }
@@ -210,6 +239,12 @@ mod mutex {
         }
     }
 
+    fn lease() {
+        for _ in 0..ITERS {
+            test::black_box(**M.lock().unwrap());
+        }
+    }
+
     fn read() {
         for _ in 0..ITERS {
             test::black_box(Arc::clone(&*M.lock().unwrap()));
@@ -237,6 +272,12 @@ mod rwlock {
     }
 
     fn peek() {
+        for _ in 0..ITERS {
+            test::black_box(**L.read().unwrap());
+        }
+    }
+
+    fn lease() {
         for _ in 0..ITERS {
             test::black_box(**L.read().unwrap());
         }
