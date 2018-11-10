@@ -33,6 +33,49 @@ impl Default for Node {
     }
 }
 
+impl Node {
+    fn get() -> &'static Self {
+        // Try to find an unused one in the chain and reuse it.
+        traverse(|node| {
+            // Try to claim this node. Nothing is synchronized through this atomic, we only
+            // track if someone claims ownership of it.
+            if !node.in_use.compare_and_swap(false, true, Ordering::Relaxed) {
+                Some(node)
+            } else {
+                None
+            }
+        })
+        // If that didn't work, create a new one and prepend to the list.
+        .unwrap_or_else(|| {
+            let node = Box::leak(Box::new(Node::default()));
+            // Not shared between threads yet, so ordinary write would be fine too.
+            node.in_use.store(true, Ordering::Relaxed);
+            // We don't want to read any data in addition to the head, Relaxed is fine
+            // here.
+            //
+            // We do need to release the data to others, but for that, we acquire in the
+            // compare_exchange below.
+            let mut head = DEBT_HEAD.load(Ordering::Relaxed);
+            loop {
+                node.next = unsafe { head.as_ref() };
+                if let Err(old) = DEBT_HEAD.compare_exchange_weak(
+                    head,
+                    node,
+                    // We need to release *the whole chain* here. For that, we need to
+                    // acquire it first.
+                    Ordering::AcqRel,
+                    Ordering::Relaxed, // Nothing changed, go next round of the loop.
+                ) {
+                    head = old;
+                } else {
+                    return node;
+                }
+            }
+        })
+    }
+
+}
+
 /// The value of pointer `1` should be pretty safe, for two reasons:
 ///
 /// * It's an odd number, but the pointers we have are likely aligned at least to the word size,
@@ -92,6 +135,7 @@ impl Debt {
     // Turn the lint off in clippy, but don't complain anywhere else. clippy::new_ret_no_self
     // doesn't work yet, that thing is not stabilized.
     #[allow(unknown_lints, new_ret_no_self)]
+    #[inline]
     pub(crate) fn new(ptr: usize) -> Option<&'static Self> {
         THREAD_HEAD
             .try_with(|head| {
@@ -99,43 +143,7 @@ impl Debt {
                 if let Some(node) = head.0.get() {
                     return node;
                 }
-                // Try to find an unused one in the chain and reuse it.
-                let new_node = traverse(|node| {
-                    // Try to claim this node. Nothing is synchronized through this atomic, we only
-                    // track if someone claims ownership of it.
-                    if !node.in_use.compare_and_swap(false, true, Ordering::Relaxed) {
-                        Some(node)
-                    } else {
-                        None
-                    }
-                })
-                // If that didn't work, create a new one and prepend to the list.
-                .unwrap_or_else(|| {
-                    let node = Box::leak(Box::new(Node::default()));
-                    // Not shared between threads yet, so ordinary write would be fine too.
-                    node.in_use.store(true, Ordering::Relaxed);
-                    // We don't want to read any data in addition to the head, Relaxed is fine
-                    // here.
-                    //
-                    // We do need to release the data to others, but for that, we acquire in the
-                    // compare_exchange below.
-                    let mut head = DEBT_HEAD.load(Ordering::Relaxed);
-                    loop {
-                        node.next = unsafe { head.as_ref() };
-                        if let Err(old) = DEBT_HEAD.compare_exchange_weak(
-                            head,
-                            node,
-                            // We need to release *the whole chain* here. For that, we need to
-                            // acquire it first.
-                            Ordering::AcqRel,
-                            Ordering::Relaxed, // Nothing changed, go next round of the loop.
-                        ) {
-                            head = old;
-                        } else {
-                            return node;
-                        }
-                    }
-                });
+                let new_node = Node::get();
                 head.0.set(Some(new_node));
                 new_node
             })
@@ -171,6 +179,7 @@ impl Debt {
     /// * It also relies on the fact the same thing is not stuffed both inside an `Arc` and `Rc` or
     ///   something like that, but that sounds like a reasonable assumption. Someone storing it
     ///   through `ArcSwap<T>` and someone else with `ArcSwapOption<T>` will work.
+    #[inline]
     pub(crate) fn pay<T: RefCnt>(&self, ptr: *const T::Base) -> bool {
         self.0
             // If we don't change anything because there's something else, Relaxed is fine.

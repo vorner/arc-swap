@@ -825,6 +825,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
         self.peek_inner(SignalSafety::Safe)
     }
 
+    #[inline]
     fn lease_fallible(&self) -> Option<Lease<T>> {
         // Relaxed is good enough here, see the Acquire below
         let ptr = self.ptr.load(Ordering::Relaxed);
@@ -862,6 +863,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
     /// pointers around a bit, but not as something to store in larger amounts. The rule of thumb
     /// is this is suited for local variables on stack, but not in structures.
     #[allow(deprecated)] // Allow Guard::lease internally
+    #[inline]
     pub fn lease(&self) -> Lease<T> {
         self.lease_fallible()
             .unwrap_or_else(|| Guard::lease(&self.peek()))
