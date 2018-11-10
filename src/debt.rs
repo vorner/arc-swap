@@ -150,7 +150,7 @@ impl Debt {
                         // This Acquire is like locking a Mutex ‒ the dangerous stuff stays after
                         // this and can't be reordered before it. The acquire works, part of this
                         // is a load.
-                        .compare_exchange(NO_DEBT, ptr, Ordering::Acquire, Ordering::Relaxed)
+                        .compare_exchange(NO_DEBT, ptr, Ordering::SeqCst, Ordering::Relaxed)
                         .is_ok()
                 })
             })

@@ -47,10 +47,12 @@
 //! Furthermore, this implementation doesn't suffer from contention. Specifically, arbitrary number
 //! of readers can access the shared value and won't block each other, and are not blocked by
 //! writers. The writers will be somewhat slower when there are active readers at the same time,
-//! but won't be stopped indefinitely. Readers always perform the same number of instructions,
-//! without any locking or waiting, with the exception of the first
-//! [`lease`](struct.ArcSwapAny.html#method.lease) in each thread (though they can slow each other
-//! down by accessing the same memory locations under circumstances).
+//! but won't be stopped indefinitely.
+//!
+//! Readers always perform the same number of instructions, without any locking or waiting, with
+//! the exception of the first [`lease`](struct.ArcSwapAny.html#method.lease) in each thread
+//! (though they can slow each other down by accessing the same memory locations under
+//! circumstances).
 //!
 //! ## What reading operation to choose
 //!
@@ -63,16 +65,16 @@
 //!   result.
 //! * [`lease`](struct.ArcSwapAny.html#method.lease) is suitable for short-term storage or
 //!   manipulation during some algorithm, for example
-//!   during some lookup. The creation is relatively fast and doesn't suffer from contention, but
-//!   there's only limited number of fast active leases possible per thread (currently 6). When the
-//!   number is exceeded, it falls back to the equivalent of
-//!   [`load`](struct.ArcSwapAny.html#method.load) internally.
-//! * [`peek`](struct.ArcSwapAny.html#method.peek) is the fastest. However, existing
-//!   [`Guard`](struct.Guard.html), as returned by the method, prevents all writer methods from
-//!   completing (globally, even on unrelated `ArcSwap`s). Therefore, it is possible to create a
-//!   deadlock with careless usage and hurt the performance by holding onto it for too long. It is
-//!   suitable for very quick operations only, like reading a single value from configuration. Do
-//!   not store it and do not call non-trivial methods on the returned value.
+//!   during some lookup. The is relatively fast and doesn't suffer from contention, but there's
+//!   only limited number of fast active leases possible per thread (currently 6). When the number
+//!   is exceeded, it falls back to the equivalent of [`load`](struct.ArcSwapAny.html#method.load)
+//!   internally.
+//! * [`peek`](struct.ArcSwapAny.html#method.peek) is the fastest (but only by a short margin).
+//!   However, existing [`Guard`](struct.Guard.html), as returned by the method, prevents all writer
+//!   methods from completing (globally, even on unrelated `ArcSwap`s). Therefore, it is possible
+//!   to create a deadlock with careless usage and hurt the performance by holding onto it for too
+//!   long. It is suitable for very quick operations only, like reading a single value from
+//!   configuration. Do not store it and do not call non-trivial methods on the returned value.
 //!
 //! The faster but shorter-term proxy objects allow upgrading to the longer-term ones, so it is
 //! possible to first do some checks for an optimistic case and obtain the longer-term object in
@@ -182,11 +184,21 @@ pub use ref_cnt::{NonNull, RefCnt};
 // drop to 0, get destroyed and we would be trying to bump ref counts in a ghost, which would be
 // totally broken.
 //
-// To prevent this, the readers work as usual, but register themselves so they can be tracked. Each
-// writer first switches the pointer. Then it takes a snapshot of all the current readers and waits
-// until all of them confirm bumping their reference count. Only then the writer returns to the
-// caller, handing it the ownership of the Arc and allowing possible bad things (like being
-// destroyed) to happen to it.
+// To prevent this, we actually use two approaches in a hybrid manner.
+//
+// The first one is based on hazard pointers idea, but slightly modified. There's a global
+// repository of pointers that owe a reference. When someone swaps a pointer, it walks this list
+// and pays all the debts (and takes them).
+//
+// If storing into the repository fails (because the thread used up all its own slots, or because
+// the pointer got replaced in just the wrong moment and it can't confirm the reservation), unlike
+// the full hazard-pointers approach, we don't retry, but fall back onto secondary strategy.
+//
+// Each reader registers itself so it can be tracked, but only as a number. Each writer first
+// switches the pointer. Then it takes a snapshot of all the current readers and waits until all of
+// them confirm bumping their reference count. Only then the writer returns to the caller, handing
+// it the ownership of the Arc and allowing possible bad things (like being destroyed) to happen to
+// it. This has its own disadvantages, so it is only the second opportunity.
 //
 // Because bumping the reference count can cause contention and slows things down, there's another
 // way to track missing reference counts. There's a global registry of debts and each lease of a
@@ -242,11 +254,13 @@ pub use ref_cnt::{NonNull, RefCnt};
 //
 // # Memory orders
 //
-// We need to make sure several things happen or don't.
+// ## Synchronizing the data pointed to by the pointer.
 //
-// First, we have to guarantee the target of the pointer is visible in whatever thread receives a
-// copy of the Arc. Having AcqRel on the swap (because it can both publish and read the pointer)
-// and Acquire on the load is enough for this purpose.
+// We have AcqRel (well, SeqCst, but that's included) on the swap and Acquire on the loads. In case
+// of the double read around the debt allocation, we do that on the *second*, because of ABA.
+// That's also why that SeqCst on the allocation itself is not enough.
+//
+// ## The generation lock
 //
 // Second, the dangerous area when we borrowed the pointer but haven't yet incremented its ref
 // count needs to stay between incrementing and decrementing the reader count (in either group). To
@@ -380,18 +394,16 @@ impl<'a, T: RefCnt> Guard<'a, T> {
 
     /// Upgrades the guard to a [`Lease`](struct.Lease.html).
     ///
-    /// This is useful for cases when the value needs to be held for intermediate time spans, like
-    /// when manipulating a data structure.
+    /// This is preserved here for backwards compatibility. Use [`upgrade`](#method.upgrade)
+    /// instead (it has the same cost).
+    #[deprecated = "Use upgrade instead"]
     pub fn lease(guard: &Self) -> Lease<T> {
-        let debt = Debt::new(guard.ptr as usize);
-        if debt.is_none() {
-            let res = unsafe { T::from_ptr(guard.ptr) };
-            T::inc(&res);
-            T::into_ptr(res);
-        }
+        let res = unsafe { T::from_ptr(guard.ptr) };
+        T::inc(&res);
+        T::into_ptr(res);
         Lease {
             ptr: guard.ptr,
-            debt,
+            debt: None,
             _data: PhantomData,
         }
     }
@@ -813,6 +825,30 @@ impl<T: RefCnt> ArcSwapAny<T> {
         self.peek_inner(SignalSafety::Safe)
     }
 
+    fn lease_fallible(&self) -> Option<Lease<T>> {
+        // Relaxed is good enough here, see the Acquire below
+        let ptr = self.ptr.load(Ordering::Relaxed);
+        // Try to get a debt slot. If not possible, fail.
+        let debt = Debt::new(ptr as usize)?;
+
+        let confirm = self.ptr.load(Ordering::Acquire);
+        if ptr == confirm {
+            Some(Lease {
+                ptr,
+                debt: Some(debt),
+                _data: PhantomData,
+            })
+        } else if debt.pay::<T>(ptr) {
+            None
+        } else {
+            Some(Lease {
+                ptr,
+                debt: None,
+                _data: PhantomData,
+            })
+        }
+    }
+
     /// Provides a temporary borrow of the object inside.
     ///
     /// This returns a proxy object allowing access to the thing held inside and it is *usually*
@@ -825,8 +861,10 @@ impl<T: RefCnt> ArcSwapAny<T> {
     /// This is therefore a good choice to use for eg. searching a data structure or juggling the
     /// pointers around a bit, but not as something to store in larger amounts. The rule of thumb
     /// is this is suited for local variables on stack, but not in structures.
+    #[allow(deprecated)] // Allow Guard::lease internally
     pub fn lease(&self) -> Lease<T> {
-        Guard::lease(&self.peek())
+        self.lease_fallible()
+            .unwrap_or_else(|| Guard::lease(&self.peek()))
     }
 
     /// Replaces the value inside this instance.
