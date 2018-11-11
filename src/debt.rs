@@ -73,7 +73,6 @@ impl Node {
             }
         })
     }
-
 }
 
 /// The value of pointer `1` should be pretty safe, for two reasons:

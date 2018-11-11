@@ -37,17 +37,27 @@
 //!
 //! # Performance characteristics
 //!
-//! The data structure is optimised for read-heavy situations with only occasional writes.
+//! The data structure is optimised for read-heavy situations with only occasional writes ‒
+//! configuration that updates only from time to time, but is read repeatedly through the program,
+//! or some in-memory database that needs to be updated occasionally.
 //!
 //! Only very basic benchmarks were done so far (you can find them in the git repository). These
 //! suggest reading operations are faster than using a mutex, in a contended situation by a large
 //! margin, but about 2-3 times slower on writes than mutex (it is still faster than `RwLock` on
 //! writes and mutex gets much slower on contended writes).
 //!
-//! Furthermore, this implementation doesn't suffer from contention. Specifically, arbitrary number
+//! Furthermore, this implementation doesn't block on readers. Specifically, arbitrary number
 //! of readers can access the shared value and won't block each other, and are not blocked by
-//! writers. The writers will be somewhat slower when there are active readers at the same time,
-//! but won't be stopped indefinitely.
+//! writers.
+//!
+//! The [`peek`](struct.ArcSwapAny.html#method.peek) and
+//! [`load`](struct.ArcSwapAny.html#method.load) are always wait-free (but the latter suffers from
+//! contention on the reference count), the [`lease`](struct.ArcSwapAny.html) is usually almost as
+//! fast as [`peek`](struct.ArcSwapAny.html#method.lease). It is lock-free on the first use
+//! (globally) in each thread, and wait-free on all the others.
+//!
+//! The writers still can be blocked by the readers, but steady stream of readers won't block them
+//! forever like is the case with `RwLock`).
 //!
 //! Readers always perform the same number of instructions, without any locking or waiting, with
 //! the exception of the first [`lease`](struct.ArcSwapAny.html#method.lease) in each thread
@@ -55,6 +65,9 @@
 //! circumstances).
 //!
 //! ## What reading operation to choose
+//!
+//! You should probably default to [`lease`](struct.ArcSwapAny.html#method.lease), but here is some
+//! more info about them.
 //!
 //! There are actually three different ways to read the data, with different characteristics.
 //!
@@ -64,17 +77,18 @@
 //!   cache line with reference counts. Therefore, this is suitable for long-term storage of the
 //!   result.
 //! * [`lease`](struct.ArcSwapAny.html#method.lease) is suitable for short-term storage or
-//!   manipulation during some algorithm, for example
-//!   during some lookup. The is relatively fast and doesn't suffer from contention, but there's
-//!   only limited number of fast active leases possible per thread (currently 6). When the number
-//!   is exceeded, it falls back to the equivalent of [`load`](struct.ArcSwapAny.html#method.load)
-//!   internally.
+//!   manipulation during some algorithm, for example during some lookup. The is relatively fast
+//!   and doesn't suffer from contention, but there's only limited number of fast active leases
+//!   possible per thread (currently 6). When the number is exceeded, it falls back to the
+//!   equivalent of [`load`](struct.ArcSwapAny.html#method.load) internally.
 //! * [`peek`](struct.ArcSwapAny.html#method.peek) is the fastest (but only by a short margin).
 //!   However, existing [`Guard`](struct.Guard.html), as returned by the method, prevents all writer
 //!   methods from completing (globally, even on unrelated `ArcSwap`s). Therefore, it is possible
 //!   to create a deadlock with careless usage and hurt the performance by holding onto it for too
-//!   long. It is suitable for very quick operations only, like reading a single value from
+//!   long. It is suitable for very quick operations only, like reading a single scalar value from
 //!   configuration. Do not store it and do not call non-trivial methods on the returned value.
+//!   Some of the downsides can be worked around with the [`type.IndependentArcSwap.html`] or the
+//!   tools in the [`gen_lock`](gen_lock/) module.
 //!
 //! The faster but shorter-term proxy objects allow upgrading to the longer-term ones, so it is
 //! possible to first do some checks for an optimistic case and obtain the longer-term object in
@@ -114,6 +128,18 @@
 //!
 //! It is also possible to support other types similar to `Arc` by implementing the
 //! [`RefCnt`](trait.RefCnt.html) trait.
+//!
+//! # Customization
+//!
+//! While the default [`ArcSwap`](type.ArcSwap.html) and
+//! [`lease`](struct.ArcSwapAny.html#method.lease) is probably good enough for most of the needs,
+//! the library allows a wide range of customizations:
+//!
+//! * It allows storing nullable (`Option<Arc<_>>`) and non-nullable pointers.
+//! * It is possible to store other reference counted pointers (eg. if you want to use it with a
+//!   hypothetical `Arc` that doesn't have weak counts).
+//! * It allows choosing internal locking strategy by the
+//!   [`LockStorage`](gen_lock/trait.LockStorage.html) trait.
 //!
 //! # Examples
 //!
@@ -155,20 +181,21 @@
 
 mod as_raw;
 mod debt;
+pub mod gen_lock;
 mod ref_cnt;
 
-use std::cell::Cell;
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;
 use std::ptr;
-use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
+use std::sync::atomic::{self, AtomicPtr, Ordering};
 use std::sync::Arc;
 use std::thread;
 
 pub use as_raw::AsRaw;
 use debt::Debt;
+use gen_lock::{Global, LockStorage, GEN_CNT};
 pub use ref_cnt::{NonNull, RefCnt};
 
 // # Implementation details
@@ -303,32 +330,37 @@ pub use ref_cnt::{NonNull, RefCnt};
 // will be made, the successful one will do the necessary synchronization).
 
 /// Generation lock, to abstract locking and unlocking readers.
-struct GenLock {
+struct GenLock<'a, S: LockStorage> {
     shard: usize,
     gen: usize,
+    lock_storage: &'a S,
 }
 
-impl GenLock {
+impl<'a, S: LockStorage> GenLock<'a, S> {
     /// Creates a generation lock.
-    fn new(signal_safe: SignalSafety) -> GenLock {
+    fn new(signal_safe: SignalSafety, lock_storage: &'a S) -> Self {
         let shard = match signal_safe {
             SignalSafety::Safe => 0,
-            SignalSafety::Unsafe => Shard::choose(),
+            SignalSafety::Unsafe => lock_storage.choose_shard(),
         };
-        let gen = GEN_IDX.load(Ordering::Relaxed) % GEN_CNT;
+        let gen = lock_storage.gen_idx().load(Ordering::Relaxed) % GEN_CNT;
         // Unlike the real Arc, we don't have to check for the ref count overflow. Nobody can drop
         // a reader.
         //
         // SeqCst: Acquire, so the dangerous section stays in. SeqCst to sync timelines with the
         // swap on the ptr in writer thread.
-        SHARDS[shard].0[gen].fetch_add(1, Ordering::SeqCst);
-        GenLock { shard, gen }
+        lock_storage.shards().as_ref()[shard].0[gen].fetch_add(1, Ordering::SeqCst);
+        GenLock {
+            shard,
+            gen,
+            lock_storage,
+        }
     }
 
     /// Removes a generation lock.
     fn unlock(self) {
         // Release, so the dangerous section stays in.
-        SHARDS[self.shard].0[self.gen].fetch_sub(1, Ordering::AcqRel);
+        self.lock_storage.shards().as_ref()[self.shard].0[self.gen].fetch_sub(1, Ordering::AcqRel);
         // Disarm the drop-bomb
         mem::forget(self);
     }
@@ -336,7 +368,7 @@ impl GenLock {
 
 /// A bomb so one doesn't forget to unlock generations.
 #[cfg(debug_assertions)] // The bomb actually makes it ~20% slower, so don't put it into production
-impl Drop for GenLock {
+impl<'a, S: LockStorage> Drop for GenLock<'a, S> {
     fn drop(&mut self) {
         unreachable!("Forgot to unlock generation");
     }
@@ -352,16 +384,16 @@ impl Drop for GenLock {
 ///
 /// Do not store or keep around for a long time, as this prevents all the writer methods from
 /// completing on all the swap objects in the whole program from completing.
-pub struct Guard<'a, T: RefCnt + 'a>
+pub struct Guard<'a, T: RefCnt + 'a, S: LockStorage = Global>
 where
     T::Base: 'a,
 {
-    lock: Option<GenLock>,
+    lock: Option<GenLock<'a, S>>,
     ptr: *const T::Base,
     _arc_swap: PhantomData<&'a ArcSwapAny<T>>,
 }
 
-impl<'a, T: RefCnt> Guard<'a, T> {
+impl<'a, T: RefCnt, S: LockStorage> Guard<'a, T, S> {
     /// Upgrades the guard to a real `Arc`.
     ///
     /// This shares the reference count with all the `Arc` inside the corresponding `ArcSwap`. Use
@@ -426,29 +458,17 @@ impl<'a, T: RefCnt> Guard<'a, T> {
     }
 }
 
-impl<'a, T: NonNull> Deref for Guard<'a, T> {
+impl<'a, T: NonNull, S: LockStorage> Deref for Guard<'a, T, S> {
     type Target = T::Base;
     fn deref(&self) -> &T::Base {
         unsafe { self.ptr.as_ref().unwrap() }
     }
 }
 
-impl<'a, T: RefCnt> Drop for Guard<'a, T> {
+impl<'a, T: RefCnt, S: LockStorage> Drop for Guard<'a, T, S> {
     fn drop(&mut self) {
         self.lock.take().unwrap().unlock();
     }
-}
-
-/// Global counter of threads.
-///
-/// We specifically don't use ThreadId here, because it is opaque and doesn't give us a number :-(.
-static THREAD_ID_GEN: AtomicUsize = AtomicUsize::new(0);
-
-thread_local! {
-    /// A shard a thread has chosen.
-    ///
-    /// The default value is just a marker it hasn't been set.
-    static THREAD_SHARD: Cell<usize> = Cell::new(SHARD_CNT);
 }
 
 /// A temporary storage of the pointer.
@@ -562,75 +582,10 @@ impl<T: RefCnt> Drop for Lease<T> {
     }
 }
 
-/// Store count for 2 newest generations (others must always be 0)
-const GEN_CNT: usize = 2;
-
 #[derive(Copy, Clone)]
 enum SignalSafety {
     Safe,
     Unsafe,
-}
-
-static GEN_IDX: AtomicUsize = AtomicUsize::new(0);
-
-/// Number of shards (see [`Shard`]).
-const SHARD_CNT: usize = 9;
-
-/// A single shard.
-///
-/// To avoid contention and sharing of the counters between readers, we don't have one pair of
-/// generation counters, but several. The reader picks one shard and uses that, while the writer
-/// looks through all of them. This is still not perfect (two threads may choose the same ID), but
-/// it helps.
-#[repr(align(64))]
-#[derive(Default)]
-struct Shard([AtomicUsize; GEN_CNT]);
-
-macro_rules! sh {
-    () => {
-        Shard([AtomicUsize::new(0), AtomicUsize::new(0)])
-    };
-}
-
-/// The global shards.
-static SHARDS: [Shard; SHARD_CNT] = [
-    sh!(),
-    sh!(),
-    sh!(),
-    sh!(),
-    sh!(),
-    sh!(),
-    sh!(),
-    sh!(),
-    sh!(),
-];
-
-impl Shard {
-    /// Chooses which shard to use.
-    ///
-    /// Caches the decision in thread local storage.
-    ///
-    /// Note that all the orderings around here are Relaxed. That is OK ‒ we just want to have *a*
-    /// number (that is likely different than someone else has right now).
-    fn choose() -> usize {
-        THREAD_SHARD
-            .try_with(|ts| {
-                let mut val = ts.get();
-                if val >= SHARD_CNT {
-                    val = THREAD_ID_GEN.fetch_add(1, Ordering::Relaxed) % SHARD_CNT;
-                    ts.set(val);
-                }
-                val
-            })
-            .unwrap_or(0)
-    }
-    /// Takes a snapshot of current values (with Acquire ordering)
-    fn snapshot(&self) -> [usize; GEN_CNT] {
-        [
-            self.0[0].load(Ordering::Acquire),
-            self.0[1].load(Ordering::Acquire),
-        ]
-    }
 }
 
 /// When waiting to something, yield the thread every so many iterations so something else might
@@ -675,7 +630,7 @@ const YIELD_EVERY: usize = 16;
 ///
 /// [`Arc`]: https://doc.rust-lang.org/std/sync/struct.Arc.html
 /// [`from`]: https://doc.rust-lang.org/nightly/std/convert/trait.From.html#tymethod.from
-pub struct ArcSwapAny<T: RefCnt> {
+pub struct ArcSwapAny<T: RefCnt, S: LockStorage = Global> {
     // Notes: AtomicPtr needs Sized
     /// The actual pointer, extracted from the Arc.
     ptr: AtomicPtr<T::Base>,
@@ -683,9 +638,11 @@ pub struct ArcSwapAny<T: RefCnt> {
     /// We are basically an Arc in disguise. Inherit parameters from Arc by pretending to contain
     /// it.
     _phantom_arc: PhantomData<T>,
+
+    lock_storage: S,
 }
 
-impl<T: RefCnt> From<T> for ArcSwapAny<T> {
+impl<T: RefCnt, S: LockStorage> From<T> for ArcSwapAny<T, S> {
     fn from(val: T) -> Self {
         // The AtomicPtr requires *mut in its interface. We are more like *const, so we cast it.
         // However, we always go back to *const right away when we get the pointer on the other
@@ -694,11 +651,12 @@ impl<T: RefCnt> From<T> for ArcSwapAny<T> {
         Self {
             ptr: AtomicPtr::new(ptr),
             _phantom_arc: PhantomData,
+            lock_storage: S::default(),
         }
     }
 }
 
-impl<T: RefCnt> Drop for ArcSwapAny<T> {
+impl<T: RefCnt, S: LockStorage> Drop for ArcSwapAny<T, S> {
     fn drop(&mut self) {
         let ptr = *self.ptr.get_mut();
         // To pay any possible debts
@@ -708,13 +666,13 @@ impl<T: RefCnt> Drop for ArcSwapAny<T> {
     }
 }
 
-impl<T: RefCnt> Clone for ArcSwapAny<T> {
+impl<T: RefCnt, S: LockStorage> Clone for ArcSwapAny<T, S> {
     fn clone(&self) -> Self {
         Self::from(self.load())
     }
 }
 
-impl<T> Debug for ArcSwapAny<T>
+impl<T, S: LockStorage> Debug for ArcSwapAny<T, S>
 where
     T: RefCnt,
     T::Base: Debug,
@@ -730,7 +688,7 @@ where
     }
 }
 
-impl<T> Display for ArcSwapAny<T>
+impl<T, S: LockStorage> Display for ArcSwapAny<T, S>
 where
     T: NonNull,
     T::Base: Display,
@@ -740,7 +698,7 @@ where
     }
 }
 
-impl<T: RefCnt> ArcSwapAny<T> {
+impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// Constructs a new value.
     pub fn new(val: T) -> Self {
         Self::from(val)
@@ -770,8 +728,8 @@ impl<T: RefCnt> ArcSwapAny<T> {
         Guard::upgrade(&self.peek())
     }
 
-    fn peek_inner(&self, signal_safe: SignalSafety) -> Guard<T> {
-        let gen = GenLock::new(signal_safe);
+    fn peek_inner(&self, signal_safe: SignalSafety) -> Guard<T, S> {
+        let gen = GenLock::new(signal_safe, &self.lock_storage);
         let ptr = self.ptr.load(Ordering::Acquire);
 
         Guard {
@@ -805,7 +763,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
     /// # Signal safety
     ///
     /// For an async-signal-safe version, use [`peek_signal_safe`](#method.peek_signal_safe).
-    pub fn peek(&self) -> Guard<T> {
+    pub fn peek(&self) -> Guard<T, S> {
         self.peek_inner(SignalSafety::Unsafe)
     }
 
@@ -821,7 +779,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
     ///
     /// The same performance warning about writer methods of [`peek`](#method.peek) applies, so it
     /// is recommended not to spend too much time holding the returned guard.
-    pub fn peek_signal_safe(&self) -> Guard<T> {
+    pub fn peek_signal_safe(&self) -> Guard<T, S> {
         self.peek_inner(SignalSafety::Safe)
     }
 
@@ -929,7 +887,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
 
         // As noted above, this method has either semantics of load or of store. We don't know
         // which ones upfront, so we need to implement safety measures for both.
-        let gen = GenLock::new(SignalSafety::Unsafe);
+        let gen = GenLock::new(SignalSafety::Unsafe, &self.lock_storage);
 
         let previous_ptr = self.ptr.compare_and_swap(cur_ptr, new, Ordering::SeqCst);
         let swapped = ptr::eq(cur_ptr, previous_ptr);
@@ -987,16 +945,23 @@ impl<T: RefCnt> ArcSwapAny<T> {
         while !seen_group.iter().all(|seen| *seen) {
             // Note that we don't need the snapshot to be consistent. We just need to see both
             // halves being zero, not necessarily at the same time.
-            let gen = GEN_IDX.load(Ordering::Relaxed);
-            let groups = SHARDS.iter().fold([0, 0], |[a1, a2], s| {
-                let [v1, v2] = s.snapshot();
-                [a1 + v1, a2 + v2]
-            });
+            let gen = self.lock_storage.gen_idx().load(Ordering::Relaxed);
+            let groups = self
+                .lock_storage
+                .shards()
+                .as_ref()
+                .iter()
+                .fold([0, 0], |[a1, a2], s| {
+                    let [v1, v2] = s.snapshot();
+                    [a1 + v1, a2 + v2]
+                });
             // Should we increment the generation? Is the next one empty?
             let next_gen = gen.wrapping_add(1);
             if groups[next_gen % GEN_CNT] == 0 {
                 // Replace it only if someone else didn't do it in the meantime
-                GEN_IDX.compare_and_swap(gen, next_gen, Ordering::Relaxed);
+                self.lock_storage
+                    .gen_idx()
+                    .compare_and_swap(gen, next_gen, Ordering::Relaxed);
             }
             for i in 0..GEN_CNT {
                 seen_group[i] = seen_group[i] || (groups[i] == 0);
@@ -1156,7 +1121,7 @@ impl<T: RefCnt> ArcSwapAny<T> {
 /// [`ArcSwapAny`](struct.ArcSwapAny.html).
 pub type ArcSwap<T> = ArcSwapAny<Arc<T>>;
 
-impl<T> ArcSwap<T> {
+impl<T, S: LockStorage> ArcSwapAny<Arc<T>, S> {
     /// A convenience constructor directly from the pointed-to value.
     ///
     /// Direct equivalent for `ArcSwap::new(Arc::new(val))`.
@@ -1221,7 +1186,7 @@ impl<T> ArcSwap<T> {
 /// ```
 pub type ArcSwapOption<T> = ArcSwapAny<Option<Arc<T>>>;
 
-impl<T> ArcSwapOption<T> {
+impl<T, S: LockStorage> ArcSwapAny<Option<Arc<T>>, S> {
     /// A convenience constructor directly from a pointed-to value.
     ///
     /// This just allocates the `Arc` under the hood.
@@ -1237,20 +1202,20 @@ impl<T> ArcSwapOption<T> {
     /// assert_eq!(42, *non_empty.load().unwrap());
     /// ```
     pub fn from_pointee<V: Into<Option<T>>>(val: V) -> Self {
-        ArcSwapOption::new(val.into().map(Arc::new))
+        Self::new(val.into().map(Arc::new))
     }
 
     /// A convenience constructor for an empty value.
     ///
     /// This is equivalent to `ArcSwapOption::new(none)`.
     pub fn empty() -> Self {
-        ArcSwapOption::new(None)
+        Self::new(None)
     }
 }
 
-impl<T> Default for ArcSwapOption<T> {
+impl<T: RefCnt + Default, S: LockStorage> Default for ArcSwapAny<T, S> {
     fn default() -> Self {
-        Self::empty()
+        Self::new(T::default())
     }
 }
 
@@ -1263,6 +1228,7 @@ mod tests {
     use std::sync::Barrier;
 
     use self::crossbeam_utils::thread;
+
     use super::*;
 
     /// Similar to the one in doc tests of the lib, but more times and more intensive (we want to
@@ -1273,7 +1239,7 @@ mod tests {
     #[test]
     fn publish() {
         for _ in 0..100 {
-            let config = ArcSwap::from(Arc::new(String::default()));
+            let config = ArcSwap::<String>::default();
             let ended = AtomicUsize::new(0);
             thread::scope(|scope| {
                 for _ in 0..20 {
@@ -1577,7 +1543,7 @@ mod tests {
 
     #[test]
     fn lease_null() {
-        let shared = ArcSwapOption::<usize>::from(None);
+        let shared = ArcSwapOption::<usize>::default();
         let lease = shared.lease();
         assert!(Lease::get_ref(&lease).is_none());
         shared.store(Some(Arc::new(42)));

@@ -13,7 +13,8 @@ extern crate num_cpus;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex, MutexGuard, PoisonError};
 
-use arc_swap::{ArcSwap, ArcSwapOption, Lease};
+use arc_swap::gen_lock::{Global, LockStorage, PrivateUnsharded};
+use arc_swap::{ArcSwapAny, ArcSwapOption, Lease};
 use crossbeam_utils::thread;
 use itertools::Itertools;
 
@@ -30,7 +31,7 @@ fn lock() -> MutexGuard<'static, ()> {
 ///
 /// The idea here is to stress-test the RCU implementation and see that no items get lost and that
 /// the ref counts are correct afterwards.
-fn storm_link_list(node_cnt: usize, iters: usize) {
+fn storm_link_list<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) {
     struct LLNode {
         next: ArcSwapOption<LLNode>,
         num: usize,
@@ -38,7 +39,7 @@ fn storm_link_list(node_cnt: usize, iters: usize) {
     }
 
     let _lock = lock();
-    let head = ArcSwapOption::from(None::<Arc<LLNode>>);
+    let head = ArcSwapAny::<_, S>::from(None::<Arc<LLNode>>);
     let cpus = num_cpus::get();
     // FIXME: If one thread fails, but others don't, it'll deadlock.
     let bar = Barrier::new(cpus);
@@ -50,7 +51,7 @@ fn storm_link_list(node_cnt: usize, iters: usize) {
             scope.spawn(move || {
                 let nodes = (0..node_cnt)
                     .map(|i| LLNode {
-                        next: ArcSwapOption::from(None),
+                        next: ArcSwapAny::from(None),
                         num: i,
                         owner: thread,
                     })
@@ -121,17 +122,28 @@ fn storm_link_list(node_cnt: usize, iters: usize) {
 
 #[test]
 fn storm_link_list_small() {
-    storm_link_list(100, 5);
+    storm_link_list::<Global>(100, 5);
+}
+
+#[test]
+fn storm_link_list_small_private() {
+    storm_link_list::<PrivateUnsharded>(100, 5);
 }
 
 #[test]
 #[ignore]
 fn storm_list_link_large() {
-    storm_link_list(10_000, 50);
+    storm_link_list::<Global>(10_000, 50);
+}
+
+#[test]
+#[ignore]
+fn storm_list_link_large_private() {
+    storm_link_list::<PrivateUnsharded>(10_000, 50);
 }
 
 /// Test where we build and then deconstruct a linked list using multiple threads.
-fn storm_unroll(node_cnt: usize, iters: usize) {
+fn storm_unroll<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) {
     struct LLNode<'a> {
         next: Option<Arc<LLNode<'a>>>,
         num: usize,
@@ -152,7 +164,7 @@ fn storm_unroll(node_cnt: usize, iters: usize) {
     let global_cnt = AtomicUsize::new(0);
     // We plan to create this many nodes during the whole test.
     let live_cnt = AtomicUsize::new(cpus * node_cnt * iters);
-    let head = ArcSwapOption::from(None);
+    let head = ArcSwapAny::<_, S>::from(None);
     thread::scope(|scope| {
         for thread in 0..cpus {
             // Borrow these instead of moving.
@@ -202,19 +214,30 @@ fn storm_unroll(node_cnt: usize, iters: usize) {
 
 #[test]
 fn storm_unroll_small() {
-    storm_unroll(100, 5);
+    storm_unroll::<Global>(100, 5);
+}
+
+#[test]
+fn storm_unroll_small_private() {
+    storm_unroll::<PrivateUnsharded>(100, 5);
 }
 
 #[test]
 #[ignore]
 fn storm_unroll_large() {
-    storm_unroll(10_000, 50);
+    storm_unroll::<Global>(10_000, 50);
 }
 
-fn lease_parallel(iters: usize) {
+#[test]
+#[ignore]
+fn storm_unroll_large_private() {
+    storm_unroll::<PrivateUnsharded>(10_000, 50);
+}
+
+fn lease_parallel<S: LockStorage + Send + Sync>(iters: usize) {
     let _lock = lock();
     let cpus = num_cpus::get();
-    let shared = ArcSwap::from(Arc::new(0));
+    let shared = ArcSwapAny::<_, S>::from(Arc::new(0));
     thread::scope(|scope| {
         scope.spawn(|| {
             for i in 0..iters {
@@ -241,11 +264,22 @@ fn lease_parallel(iters: usize) {
 
 #[test]
 fn lease_parallel_small() {
-    lease_parallel(1000);
+    lease_parallel::<Global>(1000);
+}
+
+#[test]
+fn lease_parallel_small_private() {
+    lease_parallel::<PrivateUnsharded>(1000);
 }
 
 #[test]
 #[ignore]
 fn lease_parallel_large() {
-    lease_parallel(100_000);
+    lease_parallel::<Global>(100_000);
+}
+
+#[test]
+#[ignore]
+fn lease_parallel_large_private() {
+    lease_parallel::<PrivateUnsharded>(100_000);
 }
