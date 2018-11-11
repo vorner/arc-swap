@@ -34,10 +34,16 @@ pub(crate) const GEN_CNT: usize = 2;
 
 /// A single shard.
 ///
+/// This is one copy of place where the library keeps tracks of generation locks. It consists of a
+/// pair of counters and allows double-buffering readers (therefore, even if there's a never-ending
+/// stream of readers coming in, writer will get through eventually).
+///
 /// To avoid contention and sharing of the counters between readers, we don't have one pair of
 /// generation counters, but several. The reader picks one shard and uses that, while the writer
 /// looks through all of them. This is still not perfect (two threads may choose the same ID), but
 /// it helps.
+///
+/// Each [`LockStorage`](trait.LockStorage.html) must provide a (non-empty) array of these.
 #[repr(align(64))]
 #[derive(Default)]
 pub struct Shard(pub(crate) [AtomicUsize; GEN_CNT]);
@@ -56,8 +62,9 @@ impl Shard {
 ///
 /// The trait is unsafe because if the trait messes up with the values stored in there in any way
 /// (or makes the values available to something else that messes them up), this can cause UB and
-/// daemons and such. The library expects it is the only one storing values there. In other words,
-/// it is expected the trait is only a dumb storage and doesn't actively do anything.
+/// daemons and discomfort to users and such. The library expects it is the only one storing values
+/// there. In other words, it is expected the trait is only a dumb storage and doesn't actively do
+/// anything.
 pub unsafe trait LockStorage: Default {
     /// The type for keeping several shards.
     ///
@@ -122,9 +129,9 @@ thread_local! {
 /// The default, global lock.
 ///
 /// The lock is stored out-of-band, globally. This means that one `ArcSwap` with this lock storage
-/// is only one machine word large, but a lock on blocks the other, independent ones.
+/// is only one machine word large, but a lock on one instance blocks the other, independent ones.
 ///
-/// It has several shards so threads are less likely to collide on them.
+/// It has several shards so threads are less likely to collide (HW-contend) on them.
 #[derive(Default)]
 pub struct Global;
 
