@@ -1,3 +1,11 @@
+# 0.3.5
+
+* Updates to documentation, made it hopefully easier to digest.
+* Added the ability to separate gen-locks of one ArcSwapAny from others.
+* Some speed improvements by inlining.
+* Simplified the `lease` method internally, making it faster in optimistic
+  cases.
+
 # 0.3.4
 
 * Another potentially weak ordering discovered (with even less practical effect
