@@ -412,7 +412,7 @@ impl<'a, S: LockStorage> Drop for GenLock<'a, S> {
 ///
 /// Do not store or keep around for a long time, as this prevents all the writer methods from
 /// completing on all the swap objects in the whole program from completing.
-pub struct Guard<'a, T: RefCnt + 'a, S: LockStorage = Global>
+pub struct Guard<'a, T: RefCnt + 'a, S: LockStorage + 'a = Global>
 where
     T::Base: 'a,
 {
