@@ -77,8 +77,8 @@
 //! performance even when read by many threads in parallel.
 //!
 //! Write operations are considered expensive. A write operation is more expensive than access to
-//! an *uncontended* [`Mutex`][Mutex]. However, under the same amount of contention, it is still
-//! faster than [`RwLock`][RwLock].
+//! an *uncontended* [`Mutex`][Mutex] and on some architectures even slower than uncontended
+//! [`RwLock`][RwLock]. However, it is faster than either when contended.
 //!
 //! There are some (very unscientific) [benchmarks] within the source code of the library.
 //!
