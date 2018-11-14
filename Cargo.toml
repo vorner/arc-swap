@@ -24,6 +24,7 @@ lazy_static = "~1"
 model = "~0.0.4"
 num_cpus = "~1"
 version-sync = "~0.5"
+parking_lot = "~0.6"
 proptest = "~0.7"
 
 [profile.bench]

@@ -4,6 +4,7 @@ extern crate arc_swap;
 extern crate crossbeam_utils;
 #[macro_use]
 extern crate lazy_static;
+extern crate parking_lot;
 extern crate test;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -264,6 +265,44 @@ mod mutex {
     method!(write);
 }
 
+mod parking_mutex {
+    use parking_lot::Mutex as ParkingMutex;
+
+    lazy_static! {
+        static ref M: ParkingMutex<Arc<usize>> = ParkingMutex::new(Arc::new(0));
+    }
+
+    fn peek() {
+        for _ in 0..ITERS {
+            test::black_box(**M.lock());
+        }
+    }
+
+    fn lease() {
+        for _ in 0..ITERS {
+            test::black_box(**M.lock());
+        }
+    }
+
+    fn read() {
+        for _ in 0..ITERS {
+            test::black_box(Arc::clone(&*M.lock()));
+        }
+    }
+
+    fn write() {
+        for _ in 0..ITERS {
+            test::black_box(*M.lock() = Arc::new(42));
+        }
+    }
+
+    noise!();
+
+    method!(peek);
+    method!(read);
+    method!(write);
+}
+
 mod rwlock {
     use std::sync::RwLock;
 
@@ -292,6 +331,44 @@ mod rwlock {
     fn write() {
         for _ in 0..ITERS {
             test::black_box(*L.write().unwrap() = Arc::new(42));
+        }
+    }
+
+    noise!();
+
+    method!(peek);
+    method!(read);
+    method!(write);
+}
+
+mod parking_rwlock {
+    use parking_lot::RwLock;
+
+    lazy_static! {
+        static ref L: RwLock<Arc<usize>> = RwLock::new(Arc::new(0));
+    }
+
+    fn peek() {
+        for _ in 0..ITERS {
+            test::black_box(**L.read());
+        }
+    }
+
+    fn lease() {
+        for _ in 0..ITERS {
+            test::black_box(**L.read());
+        }
+    }
+
+    fn read() {
+        for _ in 0..ITERS {
+            test::black_box(Arc::clone(&*L.read()));
+        }
+    }
+
+    fn write() {
+        for _ in 0..ITERS {
+            test::black_box(*L.write() = Arc::new(42));
         }
     }
 
