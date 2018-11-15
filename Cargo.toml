@@ -18,6 +18,7 @@ maintenance = { status = "actively-developed" }
 [dependencies]
 
 [dev-dependencies]
+crossbeam = "~0.5"
 crossbeam-utils = "~0.5"
 itertools = "~0.7"
 lazy_static = "~1"

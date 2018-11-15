@@ -1,6 +1,7 @@
 #![feature(test)]
 
 extern crate arc_swap;
+extern crate crossbeam;
 extern crate crossbeam_utils;
 #[macro_use]
 extern crate lazy_static;
@@ -375,6 +376,43 @@ mod parking_rwlock {
     noise!();
 
     method!(peek);
+    method!(read);
+    method!(write);
+}
+
+mod arc_cell {
+    use crossbeam::atomic::ArcCell;
+
+    lazy_static! {
+        static ref A: ArcCell<usize> = ArcCell::new(Arc::new(0));
+    }
+
+    fn peek() {
+        for _ in 0..ITERS {
+            test::black_box(*A.get());
+        }
+    }
+
+    fn lease() {
+        for _ in 0..ITERS {
+            test::black_box(A.get());
+        }
+    }
+
+    fn read() {
+        for _ in 0..ITERS {
+            test::black_box(A.get());
+        }
+    }
+
+    fn write() {
+        for _ in 0..ITERS {
+            test::black_box(A.set(Arc::new(42)));
+        }
+    }
+
+    noise!();
+
     method!(read);
     method!(write);
 }
