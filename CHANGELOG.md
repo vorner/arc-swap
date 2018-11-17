@@ -1,3 +1,7 @@
+* Another locking store (`PrivateSharded`) to complement the global and private
+  unsharded ones.
+* Comparison to other crates/approaches in the docs.
+
 # 0.3.5
 
 * Updates to documentation, made it hopefully easier to digest.

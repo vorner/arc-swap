@@ -13,7 +13,7 @@ extern crate num_cpus;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex, MutexGuard, PoisonError};
 
-use arc_swap::gen_lock::{Global, LockStorage, PrivateUnsharded};
+use arc_swap::gen_lock::{Global, LockStorage, PrivateSharded, PrivateUnsharded, Shard};
 use arc_swap::{ArcSwapAny, ArcSwapOption, Lease};
 use crossbeam_utils::thread;
 use itertools::Itertools;
@@ -131,6 +131,11 @@ fn storm_link_list_small_private() {
 }
 
 #[test]
+fn storm_link_list_small_private_sharded() {
+    storm_link_list::<PrivateSharded<[Shard; 3]>>(100, 5);
+}
+
+#[test]
 #[ignore]
 fn storm_list_link_large() {
     storm_link_list::<Global>(10_000, 50);
@@ -140,6 +145,12 @@ fn storm_list_link_large() {
 #[ignore]
 fn storm_list_link_large_private() {
     storm_link_list::<PrivateUnsharded>(10_000, 50);
+}
+
+#[test]
+#[ignore]
+fn storm_link_list_large_private_sharded() {
+    storm_link_list::<PrivateSharded<[Shard; 3]>>(10_000, 50);
 }
 
 /// Test where we build and then deconstruct a linked list using multiple threads.
@@ -223,6 +234,11 @@ fn storm_unroll_small_private() {
 }
 
 #[test]
+fn storm_unroll_small_private_sharded() {
+    storm_unroll::<PrivateSharded<[Shard; 3]>>(100, 5);
+}
+
+#[test]
 #[ignore]
 fn storm_unroll_large() {
     storm_unroll::<Global>(10_000, 50);
@@ -232,6 +248,12 @@ fn storm_unroll_large() {
 #[ignore]
 fn storm_unroll_large_private() {
     storm_unroll::<PrivateUnsharded>(10_000, 50);
+}
+
+#[test]
+#[ignore]
+fn storm_unroll_large_private_sharded() {
+    storm_unroll::<PrivateSharded<[Shard; 3]>>(10_000, 50);
 }
 
 fn lease_parallel<S: LockStorage + Send + Sync>(iters: usize) {
@@ -273,6 +295,11 @@ fn lease_parallel_small_private() {
 }
 
 #[test]
+fn lease_parallel_small_private_sharded() {
+    lease_parallel::<PrivateSharded<[Shard; 3]>>(1000);
+}
+
+#[test]
 #[ignore]
 fn lease_parallel_large() {
     lease_parallel::<Global>(100_000);
@@ -282,4 +309,10 @@ fn lease_parallel_large() {
 #[ignore]
 fn lease_parallel_large_private() {
     lease_parallel::<PrivateUnsharded>(100_000);
+}
+
+#[test]
+#[ignore]
+fn lease_parallel_large_private_sharded() {
+    lease_parallel::<PrivateSharded<[Shard; 3]>>(100_000);
 }

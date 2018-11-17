@@ -212,6 +212,56 @@ unsafe impl LockStorage for PrivateUnsharded {
     }
 }
 
+/// An alternative to [`PrivateUnsharded`], but with configurable number of shards.
+///
+/// The [`PrivateUnsharded`] is almost identical to `PrivateSharded<[Shard; 1]>` (the
+/// implementation takes advantage of some details to avoid a little bit of overhead). It allows
+/// the user to choose the trade-of between contention during locking and size of the pointer and
+/// speed during writes.
+///
+/// [`PrivateUnsharded`]: struct.PrivateUnsharded.html
+///
+/// # Note on `AsRef<[Shard]>`
+///
+/// Rust provides the `AsRef` trait (or, actually any trait) up to arrays of 32 elements. If you
+/// need something bigger, you have to work around it with a newtype.
+#[derive(Default)]
+pub struct PrivateSharded<S> {
+    gen_idx: AtomicUsize,
+    shards: S,
+}
+
+/// Global counter of threads.
+///
+/// We specifically don't use ThreadId here, because it is opaque and doesn't give us a number :-(.
+static PRIV_THREAD_ID_GEN: AtomicUsize = AtomicUsize::new(0);
+
+thread_local! {
+    /// A shard a thread has chosen.
+    static PRIV_THREAD_ID: usize = PRIV_THREAD_ID_GEN.fetch_add(1, Ordering::Relaxed);
+}
+
+unsafe impl<S: AsRef<[Shard]> + Default> LockStorage for PrivateSharded<S> {
+    type Shards = S;
+
+    #[inline]
+    fn gen_idx(&self) -> &AtomicUsize {
+        &self.gen_idx
+    }
+
+    #[inline]
+    fn shards(&self) -> &Self::Shards {
+        &self.shards
+    }
+
+    #[inline]
+    fn choose_shard(&self) -> usize {
+        PRIV_THREAD_ID
+            .try_with(|id| id % self.shards.as_ref().len())
+            .unwrap_or(0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate crossbeam_utils;
@@ -254,5 +304,15 @@ mod tests {
     #[test]
     fn basic_check_private_unsharded() {
         basic_check::<PrivateUnsharded>();
+    }
+
+    #[test]
+    fn basic_check_private_sharded_2() {
+        basic_check::<PrivateSharded<[Shard; 2]>>();
+    }
+
+    #[test]
+    fn basic_check_private_sharded_63() {
+        basic_check::<PrivateSharded<[Shard; 31]>>();
     }
 }
