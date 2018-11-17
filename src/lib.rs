@@ -188,6 +188,43 @@
 //! }
 //! ```
 //!
+//! # Alternatives
+//!
+//! There are other means to get similar functionality you might want to consider:
+//!
+//! ## `Mutex<Arc<_>>` and `RwLock<Arc<_>>`
+//!
+//! They have significantly worse performance in the contented scenario but are comparable in
+//! uncontended cases. They are directly in the standard library, which means better testing and
+//! less dependencies.
+//!
+//! ## The same, but with [parking_lot]
+//!
+//! Parking lot contains alternative implementations of `Mutex` and `RwLock` that are faster than
+//! the standard library primitives. They still suffer from contention.
+//!
+//! ## [`crossbeam::atomic::ArcCell`]
+//!
+//! This internally contains a spin-lock equivalent and is very close to the characteristics of
+//! `parking_lot::Mutex<Arc<_>>`. This is unofficially deprecated. See the
+//! [relevant issue](https://github.com/crossbeam-rs/crossbeam/issues/160).
+//!
+//! ## [`crossbeam-arccell`]
+//!
+//! It is mentioned here because of the name. Despite of the name, this does something very
+//! different (which *might* possibly solve similar problems). It's API is not centric to `Arc` or
+//! any kind of pointer, but rather it has snapshots of its internal value that can be exchanged
+//! very fast.
+//!
+//! ## [`AtomicArc`]
+//!
+//! This one is probably the closest thing to [`ArcSwap`][ArcSwap] on the API level. Both read and
+//! write operations are [lock-free], but neither is [wait-free], and the performance of reads and
+//! writes are more balanced ‒ while [`ArcSwap`][ArcSwap] is optimized for reading, [`AtomicArc`]
+//! is „balanced“.
+//!
+//! The biggest current downside is, it is in a prototype stage and not released yet.
+//!
 //! [Arc]: https://doc.rust-lang.org/std/sync/struct.Arc.html
 //! [RwLock]: https://doc.rust-lang.org/std/sync/struct.RwLock.html
 //! [Mutex]: https://doc.rust-lang.org/std/sync/struct.Mutex.html
@@ -206,6 +243,10 @@
 //! [RefCnt]: trait.RefCnt.hmtl
 //! [LockStorage]: gen_lock/trait.LockStorage.html
 //! [benchmarks]: https://github.com/vorner/arc-swap/tree/master/benches
+//! [parking_lot]: https://docs.rs/parking_lot
+//! [`crossbeam::atomic::ArcCell`]: https://docs.rs/crossbeam/0.5.0/crossbeam/atomic/struct.ArcCell.html
+//! [`crossbeam-arccell`]: https://docs.rs/crossbeam-arccell/
+//! [`AtomicArc`]: https://github.com/stjepang/atomic/blob/master/src/atomic_arc.rs#L20
 
 mod as_raw;
 mod debt;
