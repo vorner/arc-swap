@@ -1,5 +1,5 @@
 #![doc(
-    html_root_url = "https://docs.rs/arc-swap/0.3.6/arc-swap/",
+    html_root_url = "https://docs.rs/arc-swap/0.3.7/arc-swap/",
     test(attr(deny(warnings)))
 )]
 #![deny(missing_docs, warnings)]
@@ -497,7 +497,7 @@ impl<'a, T: RefCnt, S: LockStorage> Guard<'a, T, S> {
     ///
     /// This is preserved here for backwards compatibility. Use [`upgrade`](#method.upgrade)
     /// instead (it has the same cost).
-    #[deprecated = "Use upgrade instead"]
+    #[deprecated(note = "Use upgrade instead")]
     pub fn lease(guard: &Self) -> Lease<T> {
         let res = unsafe { T::from_ptr(guard.ptr) };
         T::inc(&res);

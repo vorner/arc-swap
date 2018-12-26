@@ -1,3 +1,7 @@
+# 0.3.7
+
+* Use the correct `#[deprecated]` syntax.
+
 # 0.3.6
 
 * Another locking store (`PrivateSharded`) to complement the global and private
