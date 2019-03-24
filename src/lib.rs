@@ -554,8 +554,8 @@ pub struct Lease<T: RefCnt> {
 
 impl<T: RefCnt> Lease<T> {
     /// Loads a full `Arc` from the lease.
-    pub fn upgrade(guard: &Self) -> T {
-        let res = unsafe { T::from_ptr(guard.ptr) };
+    pub fn upgrade(lease: &Self) -> T {
+        let res = unsafe { T::from_ptr(lease.ptr) };
         T::inc(&res);
         res
     }
@@ -591,6 +591,63 @@ impl<T: RefCnt> Lease<T> {
     /// Note that for non-`NULL` `T`, this always returns `false`.
     pub fn is_null(lease: &Self) -> bool {
         lease.ptr.is_null()
+    }
+}
+
+impl<T: NonNull> Lease<Option<T>> {
+    /// Like [`unwrap`][Lease::unwrap], but with a panic message.
+    ///
+    /// # Panics
+    ///
+    /// If the lease contains a NULL pointer.
+    pub fn expect(self, msg: &str) -> Lease<T> {
+        assert!(
+            !Self::is_null(&self),
+            "Expect on NULL arc-swap Lease: {}",
+            msg
+        );
+        let ptr = self.ptr;
+        let debt = self.debt;
+        // Ownership passed into the new result, don't drop this one.
+        mem::forget(self);
+        Lease {
+            ptr,
+            debt,
+            _data: PhantomData,
+        }
+    }
+
+    /// Asserts the lease contains non-NULL content and gets direct access to it.
+    ///
+    /// This is very much like [`Option::unwrap`].
+    ///
+    /// # Panics
+    ///
+    /// If the lease contains a NULL pointer.
+    pub fn unwrap(self) -> Lease<T> {
+        assert!(!Self::is_null(&self), "Unwrap of NULL arc-swap Lease");
+        self.expect("")
+    }
+
+    /// Transposes the `Lease<Option<RefCnt>>` into `Option<Lease<RefCnt>>`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use arc_swap::ArcSwapOption;
+    /// let shared = ArcSwapOption::from_pointee(42);
+    /// if let Some(ptr) = shared.lease().into_option() {
+    ///     println!("It is {}", ptr);
+    /// } else {
+    ///     println!("Nothing present");
+    /// }
+    /// ```
+    pub fn into_option(self) -> Option<Lease<T>> {
+        if Self::is_null(&self) {
+            None
+        } else {
+            Some(self.unwrap())
+        }
     }
 }
 
@@ -1723,5 +1780,31 @@ mod tests {
             })
             .unwrap();
         }
+    }
+
+    #[test]
+    fn lease_unwrap() {
+        let shared = ArcSwapOption::from_pointee(42);
+
+        assert_eq!(42, *shared.lease().unwrap());
+        assert_eq!(42, *shared.lease().expect("Failed"));
+    }
+
+    #[test]
+    fn lease_unwrap_none() {
+        let shared: ArcSwapOption<usize> = ArcSwapOption::empty();
+        panic::catch_unwind(|| shared.lease().unwrap()).unwrap_err();
+        panic::catch_unwind(|| shared.lease().expect("Failed")).unwrap_err();
+    }
+
+    #[test]
+    fn lease_option() {
+        let shared = ArcSwapOption::from_pointee(42);
+        // The type here is not needed in real code, it's just addition test the type matches.
+        let opt: Option<_> = shared.lease().into_option();
+        assert_eq!(42, *opt.unwrap());
+
+        shared.store(None);
+        assert!(shared.lease().into_option().is_none());
     }
 }

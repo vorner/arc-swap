@@ -1,3 +1,8 @@
+# 0.3.8
+
+* `Lease<Option<_>>::unwrap()`, `expect()` and `into_option()` for convenient
+  use.
+
 # 0.3.7
 
 * Use the correct `#[deprecated]` syntax.
