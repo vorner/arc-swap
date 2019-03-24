@@ -36,20 +36,21 @@ fn test_run<R, W>(
     let before = Instant::now();
     thread::scope(|scope| {
         for _ in 0..read_threads {
-            scope.spawn(|| {
+            scope.spawn(|_| {
                 for _ in 0..iterations {
                     test::black_box(r());
                 }
             });
         }
         for _ in 0..write_threads {
-            scope.spawn(|| {
+            scope.spawn(|_| {
                 for i in 0..iterations {
                     test::black_box(w(i));
                 }
             });
         }
-    });
+    })
+    .unwrap();
     let duration = Instant::now() - before;
     println!(
         "{:03}.{:03}s",

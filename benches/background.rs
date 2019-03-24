@@ -106,28 +106,28 @@ macro_rules! noise {
             let flag = Arc::new(AtomicBool::new(true));
             thread::scope(|s| {
                 for _ in 0..readers {
-                    s.spawn(|| {
+                    s.spawn(|_| {
                         while flag.load(Ordering::Relaxed) {
                             read();
                         }
                     });
                 }
                 for _ in 0..peekers {
-                    s.spawn(|| {
+                    s.spawn(|_| {
                         while flag.load(Ordering::Relaxed) {
                             peek();
                         }
                     });
                 }
                 for _ in 0..leasers {
-                    s.spawn(|| {
+                    s.spawn(|_| {
                         while flag.load(Ordering::Relaxed) {
                             lease();
                         }
                     });
                 }
                 for _ in 0..writers {
-                    s.spawn(|| {
+                    s.spawn(|_| {
                         while flag.load(Ordering::Relaxed) {
                             write();
                         }
@@ -135,7 +135,8 @@ macro_rules! noise {
                 }
                 b.iter(f);
                 flag.store(false, Ordering::Relaxed);
-            });
+            })
+            .unwrap();
         }
     };
 }

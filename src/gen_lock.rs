@@ -282,7 +282,7 @@ mod tests {
             thread::scope(|scope| {
                 for i in 0..2 {
                     let shared = &shared;
-                    scope.spawn(move || {
+                    scope.spawn(move |_| {
                         for j in 0..50 {
                             if j % 2 == i {
                                 while *shared.peek() != j {}
@@ -292,7 +292,8 @@ mod tests {
                         }
                     });
                 }
-            });
+            })
+            .unwrap();
         }
     }
 

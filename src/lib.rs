@@ -169,12 +169,12 @@
 //! fn main() {
 //!     let config = ArcSwap::from(Arc::new(String::default()));
 //!     thread::scope(|scope| {
-//!         scope.spawn(|| {
+//!         scope.spawn(|_| {
 //!             let new_conf = Arc::new("New configuration".to_owned());
 //!             config.store(new_conf);
 //!         });
 //!         for _ in 0..10 {
-//!             scope.spawn(|| {
+//!             scope.spawn(|_| {
 //!                 loop {
 //!                     let cfg = config.lease();
 //!                     if !cfg.is_empty() {
@@ -184,7 +184,7 @@
 //!                 }
 //!             });
 //!         }
-//!     });
+//!     }).unwrap();
 //! }
 //! ```
 //!
@@ -1081,14 +1081,14 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     ///     let cnt = ArcSwap::from(Arc::new(0));
     ///     thread::scope(|scope| {
     ///         for _ in 0..10 {
-    ///             scope.spawn(|| {
+    ///             scope.spawn(|_| {
     ///                 let inner = cnt.load();
     ///                 // Another thread might have stored some other number than what we have
     ///                 // between the load and store.
     ///                 cnt.store(Arc::new(*inner + 1));
     ///             });
     ///         }
-    ///     });
+    ///     }).unwrap();
     ///     // This will likely fail:
     ///     // assert_eq!(10, *cnt.load());
     /// }
@@ -1109,9 +1109,9 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     ///     let cnt = ArcSwap::from(Arc::new(0));
     ///     thread::scope(|scope| {
     ///         for _ in 0..10 {
-    ///             scope.spawn(|| cnt.rcu(|inner| **inner + 1));
+    ///             scope.spawn(|_| cnt.rcu(|inner| **inner + 1));
     ///         }
-    ///     });
+    ///     }).unwrap();
     ///     assert_eq!(10, *cnt.load());
     /// }
     /// ```
@@ -1342,7 +1342,7 @@ mod tests {
             let ended = AtomicUsize::new(0);
             thread::scope(|scope| {
                 for _ in 0..20 {
-                    scope.spawn(|| loop {
+                    scope.spawn(|_| loop {
                         let cfg = config.load();
                         if !cfg.is_empty() {
                             assert_eq!(*cfg, "New configuration");
@@ -1352,11 +1352,12 @@ mod tests {
                         atomic::spin_loop_hint();
                     });
                 }
-                scope.spawn(|| {
+                scope.spawn(|_| {
                     let new_conf = Arc::new("New configuration".to_owned());
                     config.store(new_conf);
                 });
-            });
+            })
+            .unwrap();
             assert_eq!(20, ended.load(Ordering::Relaxed));
             assert_eq!(2, Arc::strong_count(&config.load()));
             assert_eq!(0, Arc::weak_count(&config.load()));
@@ -1406,7 +1407,7 @@ mod tests {
                 let barrier = &barrier;
                 let shared = &shared;
                 let first_value = &first_value;
-                scope.spawn(move || {
+                scope.spawn(move |_| {
                     for _ in 0..ITERATIONS {
                         barrier.wait();
                         shared.store(Arc::clone(&first_value));
@@ -1418,7 +1419,7 @@ mod tests {
                 });
             }
             for _ in 0..READER_CNT {
-                scope.spawn(|| {
+                scope.spawn(|_| {
                     for _ in 0..ITERATIONS {
                         barrier.wait();
                         barrier.wait();
@@ -1441,7 +1442,8 @@ mod tests {
                     }
                 });
             }
-        });
+        })
+        .unwrap();
     }
 
     #[test]
@@ -1512,13 +1514,14 @@ mod tests {
         let shared = ArcSwap::from(Arc::new(0));
         thread::scope(|scope| {
             for _ in 0..THREADS {
-                scope.spawn(|| {
+                scope.spawn(|_| {
                     for _ in 0..ITERATIONS {
                         shared.rcu(|old| **old + 1);
                     }
                 });
             }
-        });
+        })
+        .unwrap();
         assert_eq!(THREADS * ITERATIONS, *shared.load());
     }
 
@@ -1530,13 +1533,14 @@ mod tests {
         let shared = ArcSwap::from(Arc::new(0));
         thread::scope(|scope| {
             for _ in 0..THREADS {
-                scope.spawn(|| {
+                scope.spawn(|_| {
                     for _ in 0..ITERATIONS {
                         shared.rcu_unwrap(|old| *old + 1);
                     }
                 });
             }
-        });
+        })
+        .unwrap();
         assert_eq!(THREADS * ITERATIONS, *shared.load());
     }
 

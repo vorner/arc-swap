@@ -48,7 +48,7 @@ fn storm_link_list<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) 
             // We want to borrow these, but that kind-of conflicts with the move closure mode
             let bar = &bar;
             let head = &head;
-            scope.spawn(move || {
+            scope.spawn(move |_| {
                 let nodes = (0..node_cnt)
                     .map(|i| LLNode {
                         next: ArcSwapAny::from(None),
@@ -117,7 +117,8 @@ fn storm_link_list<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) 
                 }
             });
         }
-    });
+    })
+    .unwrap();
 }
 
 #[test]
@@ -183,7 +184,7 @@ fn storm_unroll<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) {
             let bar = &bar;
             let global_cnt = &global_cnt;
             let live_cnt = &live_cnt;
-            scope.spawn(move || {
+            scope.spawn(move |_| {
                 for _ in 0..iters {
                     bar.wait();
                     // Create bunch of nodes and put them into the list.
@@ -218,7 +219,8 @@ fn storm_unroll<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) {
                 }
             });
         }
-    });
+    })
+    .unwrap();
     // Everything got destroyed properly.
     assert_eq!(0, live_cnt.load(Ordering::Relaxed));
 }
@@ -261,13 +263,13 @@ fn lease_parallel<S: LockStorage + Send + Sync>(iters: usize) {
     let cpus = num_cpus::get();
     let shared = ArcSwapAny::<_, S>::from(Arc::new(0));
     thread::scope(|scope| {
-        scope.spawn(|| {
+        scope.spawn(|_| {
             for i in 0..iters {
                 shared.store(Arc::new(i));
             }
         });
         for _ in 0..cpus {
-            scope.spawn(|| {
+            scope.spawn(|_| {
                 for _ in 0..iters {
                     let leases = (0..256)
                         .into_iter()
@@ -279,7 +281,8 @@ fn lease_parallel<S: LockStorage + Send + Sync>(iters: usize) {
                 }
             });
         }
-    });
+    })
+    .unwrap();
     let v = shared.load();
     assert_eq!(2, Arc::strong_count(&v));
 }
