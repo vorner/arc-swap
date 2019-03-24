@@ -1664,4 +1664,64 @@ mod tests {
         drop(lease);
         assert_eq!(1, Arc::strong_count(&a));
     }
+
+    /// Interaction of two threads about a lease and dropping it.
+    ///
+    /// We make sure everything works in timely manner (eg. dropping of stuff) even if multiple
+    /// threads interact.
+    ///
+    /// The idea is:
+    /// * Thread 1 leases a value.
+    /// * Thread 2 replaces the shared value. The original value is not destroyed.
+    /// * Thread 1 drops the lease. The value is destroyed and this is observable in both threads.
+    #[test]
+    fn lease_drop_in_thread() {
+        // Note on the Relaxed order here. This should be enough, because there's that barrier.wait
+        // in between that should do the synchronization of happens-before for us. And using SeqCst
+        // would probably not help either, as there's nothing else with SeqCst here in this test to
+        // relate it to.
+        const ITERATIONS: usize = 50;
+        #[derive(Default)]
+        struct ReportDrop(Arc<AtomicUsize>);
+        impl Drop for ReportDrop {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        for _ in 0..ITERATIONS {
+            let cnt = Arc::new(AtomicUsize::new(0));
+
+            let shared = ArcSwap::from_pointee(ReportDrop(cnt.clone()));
+            assert_eq!(cnt.load(Ordering::Relaxed), 0, "Dropped prematurely");
+            // We need the threads to wait for each other at places.
+            let sync = Barrier::new(2);
+
+            thread::scope(|scope| {
+                scope.spawn(|_| {
+                    let lease = shared.lease();
+                    sync.wait();
+                    // Thread 2 replaces the shared value. We wait for it to confirm.
+                    sync.wait();
+                    drop(lease);
+                    assert_eq!(cnt.load(Ordering::Relaxed), 1, "Value not dropped");
+                    // Let thread 2 know we already dropped it.
+                    sync.wait();
+                });
+
+                scope.spawn(|_| {
+                    // Thread 1 leases, we wait for that
+                    sync.wait();
+                    shared.store(Default::default());
+                    assert_eq!(cnt.load(Ordering::Relaxed), 0, "Dropped while still leased");
+                    // Let thread 2 know we replaced it
+                    sync.wait();
+                    // Thread 1 drops its lease. We wait for it to confirm.
+                    sync.wait();
+                    assert_eq!(cnt.load(Ordering::Relaxed), 1, "Value not dropped");
+                });
+            })
+            .unwrap();
+        }
+    }
 }
