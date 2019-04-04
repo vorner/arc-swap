@@ -1,3 +1,6 @@
+* Fix Send/Sync for Guard and Lease (they were broken in the safe but
+  uncomfortable direction ‒ not implementing them even if they could).
+
 # 0.3.8
 
 * `Lease<Option<_>>::unwrap()`, `expect()` and `into_option()` for convenient

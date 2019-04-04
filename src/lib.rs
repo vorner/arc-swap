@@ -249,6 +249,7 @@
 //! [`AtomicArc`]: https://github.com/stjepang/atomic/blob/master/src/atomic_arc.rs#L20
 
 mod as_raw;
+mod compile_fail_tests;
 mod debt;
 pub mod gen_lock;
 mod ref_cnt;
@@ -459,7 +460,7 @@ where
 {
     lock: Option<GenLock<'a, S>>,
     ptr: *const T::Base,
-    _arc_swap: PhantomData<&'a ArcSwapAny<T>>,
+    _arc_swap: PhantomData<&'a T::Base>,
 }
 
 impl<'a, T: RefCnt, S: LockStorage> Guard<'a, T, S> {
@@ -538,6 +539,32 @@ impl<'a, T: RefCnt, S: LockStorage> Drop for Guard<'a, T, S> {
     fn drop(&mut self) {
         self.lock.take().unwrap().unlock();
     }
+}
+
+// We contain a raw pointer, therefore we are automatically not Send.
+//
+// We act mostly as a reference. So, if T is Sync, we are Send.
+// This is fine, because we use the shards for locking and it doesn't matter what thread unlocks
+// the shard ‒ we keep the shard index in a private variable, don't use the thread ID again to
+// regenerate it.
+//
+// However, through some gymnastics it would be possible to extract the original T::Base out of it,
+// so it could be used to smuggle it between threads. We need Send of our T::Base too.
+unsafe impl<'a, T, S> Send for Guard<'a, T, S>
+where
+    T: RefCnt + Send + Sync,
+    S: LockStorage,
+    T::Base: Send + Sync,
+{
+}
+
+// The same reasoning as above.
+unsafe impl<'a, T, S> Sync for Guard<'a, T, S>
+where
+    T: RefCnt + Send + Sync,
+    S: LockStorage,
+    T::Base: Send + Sync,
+{
 }
 
 /// A temporary storage of the pointer.
@@ -706,6 +733,24 @@ impl<T: RefCnt> Drop for Lease<T> {
         }
         unsafe { T::dec(self.ptr) };
     }
+}
+
+// The same reasoning as for Guard.
+//
+// Note that paying a debt from a different thread is fine as well (it actually is done as part of
+// swapping the content of the pointer there).
+unsafe impl<T> Send for Lease<T>
+where
+    T: RefCnt + Send + Sync,
+    T::Base: Send + Sync,
+{
+}
+
+unsafe impl<T> Sync for Lease<T>
+where
+    T: RefCnt + Send + Sync,
+    T::Base: Send + Sync,
+{
 }
 
 #[derive(Copy, Clone)]
@@ -1722,6 +1767,20 @@ mod tests {
         assert_eq!(1, Arc::strong_count(&a));
     }
 
+    // Note on the Relaxed order here. This should be enough, because there's that barrier.wait
+    // in between that should do the synchronization of happens-before for us. And using SeqCst
+    // would probably not help either, as there's nothing else with SeqCst here in this test to
+    // relate it to.
+    #[derive(Default)]
+    struct ReportDrop(Arc<AtomicUsize>);
+    impl Drop for ReportDrop {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    const ITERATIONS: usize = 50;
+
     /// Interaction of two threads about a lease and dropping it.
     ///
     /// We make sure everything works in timely manner (eg. dropping of stuff) even if multiple
@@ -1733,19 +1792,6 @@ mod tests {
     /// * Thread 1 drops the lease. The value is destroyed and this is observable in both threads.
     #[test]
     fn lease_drop_in_thread() {
-        // Note on the Relaxed order here. This should be enough, because there's that barrier.wait
-        // in between that should do the synchronization of happens-before for us. And using SeqCst
-        // would probably not help either, as there's nothing else with SeqCst here in this test to
-        // relate it to.
-        const ITERATIONS: usize = 50;
-        #[derive(Default)]
-        struct ReportDrop(Arc<AtomicUsize>);
-        impl Drop for ReportDrop {
-            fn drop(&mut self) {
-                self.0.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-
         for _ in 0..ITERATIONS {
             let cnt = Arc::new(AtomicUsize::new(0));
 
@@ -1782,6 +1828,54 @@ mod tests {
         }
     }
 
+    /// Check dropping a lease in a different thread than it was created doesn't cause any
+    /// problems.
+    #[test]
+    fn lease_drop_in_another_thread() {
+        for _ in 0..ITERATIONS {
+            let cnt = Arc::new(AtomicUsize::new(0));
+            let shared = ArcSwap::from_pointee(ReportDrop(cnt.clone()));
+            assert_eq!(cnt.load(Ordering::Relaxed), 0, "Dropped prematurely");
+            let lease = shared.lease();
+
+            drop(shared);
+            assert_eq!(cnt.load(Ordering::Relaxed), 0, "Dropped prematurely");
+
+            thread::scope(|scope| {
+                scope.spawn(|_| {
+                    drop(lease);
+                });
+            })
+            .unwrap();
+
+            assert_eq!(cnt.load(Ordering::Relaxed), 1, "Not dropped");
+        }
+    }
+
+    /// Similar, but for peek guard.
+    #[test]
+    fn guard_drop_in_another_thread() {
+        for _ in 0..ITERATIONS {
+            let cnt = Arc::new(AtomicUsize::new(0));
+            let shared = ArcSwap::from_pointee(ReportDrop(cnt.clone()));
+            assert_eq!(cnt.load(Ordering::Relaxed), 0, "Dropped prematurely");
+            let guard = shared.peek();
+
+            // We can't drop here, sorry. Or, not even replace, as that would deadlock.
+
+            thread::scope(|scope| {
+                scope.spawn(|_| {
+                    drop(guard);
+                });
+
+                assert_eq!(cnt.load(Ordering::Relaxed), 0, "Dropped prematurely");
+                shared.swap(Default::default());
+                assert_eq!(cnt.load(Ordering::Relaxed), 1, "Not dropped");
+            })
+            .unwrap();
+        }
+    }
+
     #[test]
     fn lease_unwrap() {
         let shared = ArcSwapOption::from_pointee(42);
@@ -1806,5 +1900,30 @@ mod tests {
 
         shared.store(None);
         assert!(shared.lease().into_option().is_none());
+    }
+
+    // The following "tests" are not run, only compiled. They check that things that should be
+    // Send/Sync actually are.
+    fn _check_stuff_is_send_sync() {
+        let shared = ArcSwap::from_pointee(42);
+        let moved = ArcSwap::from_pointee(42);
+        let shared_ref = &shared;
+        let lease = shared.lease();
+        let lease_ref = &lease;
+        let lease = shared.lease();
+        let guard = shared.peek();
+        let guard_ref = &guard;
+        let guard = shared.peek();
+        thread::scope(|s| {
+            s.spawn(move |_| {
+                drop(guard);
+                drop(guard_ref);
+                drop(lease);
+                drop(lease_ref);
+                drop(shared_ref);
+                drop(moved);
+            });
+        })
+        .unwrap();
     }
 }
