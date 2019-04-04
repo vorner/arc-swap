@@ -14,6 +14,14 @@ This is a cross-breed between the two ‒ an [`ArcSwap`] can be seeded with an
 [`Arc`] and the [`Arc`] can be simultaneously replaced and read by multiple
 threads.
 
+Read [the documentation](https://docs.rs/arc-swap) before using.
+
+## Rust version policy
+
+There's no hard policy yet. However, currently the crate builds with Rust 1.26
+and is tested for that. There would have to be a very good reason to increase
+the required version.
+
 ## License
 
 Licensed under either of
