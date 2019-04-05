@@ -1,3 +1,5 @@
+# 0.3.9
+
 * Fix Send/Sync for Guard and Lease (they were broken in the safe but
   uncomfortable direction ‒ not implementing them even if they could).
 
