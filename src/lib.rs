@@ -249,6 +249,7 @@
 //! [`AtomicArc`]: https://github.com/stjepang/atomic/blob/master/src/atomic_arc.rs#L20
 
 mod as_raw;
+pub mod cache;
 mod compile_fail_tests;
 mod debt;
 pub mod gen_lock;
