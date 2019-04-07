@@ -11,6 +11,7 @@ extern crate test;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use arc_swap::cache::Cache;
 use arc_swap::{ArcSwap, ArcSwapOption, Guard, Lease};
 use crossbeam_utils::thread;
 use test::Bencher;
@@ -71,6 +72,11 @@ macro_rules! method {
             #[bench]
             fn lw(b: &mut Bencher) {
                 noise(b, 0, 0, 1, 1, super::$name);
+            }
+
+            #[bench]
+            fn w2(b: &mut Bencher) {
+                noise(b, 0, 0, 0, 2, super::$name);
             }
         }
     };
@@ -229,6 +235,46 @@ mod arc_swap_option {
     method!(read);
     method!(write);
     method!(lease);
+}
+
+mod arc_swap_cached {
+    use super::{ArcSwap, Cache};
+
+    lazy_static! {
+        static ref A: ArcSwap<usize> = ArcSwap::from_pointee(0);
+    }
+
+    fn peek() {
+        let mut cache = Cache::from(&A as &ArcSwap<usize>);
+        for _ in 0..ITERS {
+            test::black_box(**cache.load());
+        }
+    }
+
+    fn read() {
+        let mut cache = Cache::from(&A as &ArcSwap<usize>);
+        for _ in 0..ITERS {
+            test::black_box(Arc::clone(cache.load()));
+        }
+    }
+
+    fn lease() {
+        for _ in 0..ITERS {
+            test::black_box(*A.lease());
+        }
+    }
+
+    fn write() {
+        for _ in 0..ITERS {
+            test::black_box(A.store(Arc::new(0)));
+        }
+    }
+
+    noise!();
+
+    method!(peek);
+    method!(read);
+    method!(write);
 }
 
 mod mutex {
