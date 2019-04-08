@@ -1,3 +1,6 @@
+* Tweak slot allocation to take smaller performance hit if some leases are held.
+* Increase the number of lease slots per thread to 8.
+
 # 0.3.9
 
 * Fix Send/Sync for Guard and Lease (they were broken in the safe but

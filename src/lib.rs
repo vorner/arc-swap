@@ -107,7 +107,7 @@
 //!   upgraded to full [`Arc`][Arc] later on if needed. There's no limit on how long it can live
 //!   around. However, it internally comes at two flavors, one cheap and one containing a full
 //!   [`Arc`][Arc] in it. Each thread is entitled to only limited total number of cheap ones at a
-//!   given time (currently 6) and if more are constructed, the others fall back on the full
+//!   given time (currently 8) and if more are constructed, the others fall back on the full
 //!   version (which then uses [`load`][load] internally). Therefore, [`lease`][lease] can be fast
 //!   (almost as fast as [`peek`][peek]) but only as long as the thread calling it doesn't have too
 //!   many leases around at the time.

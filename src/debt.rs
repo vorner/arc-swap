@@ -4,9 +4,10 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 
 use super::RefCnt;
 
-const DEBT_SLOT_CNT: usize = 6;
+const DEBT_SLOT_CNT: usize = 8;
 
 /// One debt slot.
+#[repr(transparent)]
 pub(crate) struct Debt(AtomicUsize);
 
 impl Default for Debt {
@@ -15,12 +16,16 @@ impl Default for Debt {
     }
 }
 
-/// One thread-local node for debts.
 #[repr(align(64))]
+#[derive(Default)]
+struct Slots([Debt; DEBT_SLOT_CNT]);
+
+/// One thread-local node for debts.
+#[repr(C)]
 struct Node {
+    slots: Slots,
     next: Option<&'static Node>,
     in_use: AtomicBool,
-    slots: [Debt; DEBT_SLOT_CNT],
 }
 
 impl Default for Node {
@@ -86,11 +91,18 @@ pub(crate) const NO_DEBT: usize = 1;
 static DEBT_HEAD: AtomicPtr<Node> = AtomicPtr::new(ptr::null_mut());
 
 /// A wrapper around a node pointer, to un-claim the node on thread shutdown.
-struct DebtHead(Cell<Option<&'static Node>>);
+struct DebtHead {
+    // Node for this thread.
+    node: Cell<Option<&'static Node>>,
+    // The next slot in round-robin rotation. Heuristically tries to balance the load across them
+    // instead of having all of them stuffed towards the start of the array which gets
+    // unsuccessfully iterated through every time.
+    offset: Cell<usize>,
+}
 
 impl Drop for DebtHead {
     fn drop(&mut self) {
-        if let Some(node) = self.0.get() {
+        if let Some(node) = self.node.get() {
             // Nothing synchronized by this atomic.
             assert!(node.in_use.swap(false, Ordering::Relaxed));
         }
@@ -99,7 +111,10 @@ impl Drop for DebtHead {
 
 thread_local! {
     /// A debt node assigned to this thread.
-    static THREAD_HEAD: DebtHead = DebtHead(Cell::new(None));
+    static THREAD_HEAD: DebtHead = DebtHead {
+        node: Cell::new(None),
+        offset: Cell::new(0),
+    };
 }
 
 /// Goes through the debt linked list.
@@ -138,29 +153,42 @@ impl Debt {
     pub(crate) fn new(ptr: usize) -> Option<&'static Self> {
         THREAD_HEAD
             .try_with(|head| {
-                // Already have my own node?
-                if let Some(node) = head.0.get() {
-                    return node;
+                let node = match head.node.get() {
+                    // Already have my own node (most likely)?
+                    Some(node) => node,
+                    // No node yet, called for the first time in this thread. Set one up.
+                    None => {
+                        let new_node = Node::get();
+                        head.node.set(Some(new_node));
+                        new_node
+                    }
+                };
+                // Check it is in use by *us*
+                debug_assert!(node.in_use.load(Ordering::Relaxed));
+                // Trick with offsets: we rotate through the slots (save the value from last time)
+                // so successive leases are likely to succeed on the first attempt (or soon after)
+                // instead of going through the list of already held ones.
+                let offset = head.offset.get();
+                let len = node.slots.0.len();
+                for i in 0..len {
+                    let i = (i + offset) % len;
+                    // Note: the indexing check is almost certainly optimised out because the len
+                    // is used above. And using .get_unchecked was actually *slower*.
+                    let got_it = node.slots.0[i]
+                        .0
+                        // Try to acquire the slot. Relaxed if it doesn't work is fine, as we don't
+                        // synchronize by it.
+                        .compare_exchange(NO_DEBT, ptr, Ordering::SeqCst, Ordering::Relaxed)
+                        .is_ok();
+                    if got_it {
+                        head.offset.set(i + 1);
+                        return Some(&node.slots.0[i]);
+                    }
                 }
-                let new_node = Node::get();
-                head.0.set(Some(new_node));
-                new_node
+                None
             })
             .ok()
-            .and_then(|node| {
-                debug_assert!(node.in_use.load(Ordering::Relaxed)); // Check it is in use by *us*
-                node.slots.iter().find(|slot| {
-                    slot.0
-                        // Try to claim one of the slots. If it doesn't work and we change nothing,
-                        // Relaxed is enough.
-                        //
-                        // This Acquire is like locking a Mutex ‒ the dangerous stuff stays after
-                        // this and can't be reordered before it. The acquire works, part of this
-                        // is a load.
-                        .compare_exchange(NO_DEBT, ptr, Ordering::SeqCst, Ordering::Relaxed)
-                        .is_ok()
-                })
-            })
+            .and_then(|new| new)
     }
 
     /// Tries to pay the given debt.
@@ -194,7 +222,7 @@ impl Debt {
         let val = unsafe { T::from_ptr(ptr) };
         T::inc(&val);
         traverse::<(), _>(|node| {
-            for slot in &node.slots {
+            for slot in &node.slots.0 {
                 if slot
                     .0
                     .compare_exchange(ptr as usize, NO_DEBT, Ordering::AcqRel, Ordering::Relaxed)
