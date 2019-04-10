@@ -1,3 +1,5 @@
+* Added a cache for faster access by keeping an already loaded instance around.
+
 # 0.3.9
 
 * Fix Send/Sync for Guard and Lease (they were broken in the safe but
