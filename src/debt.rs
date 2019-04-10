@@ -7,7 +7,6 @@ use super::RefCnt;
 const DEBT_SLOT_CNT: usize = 8;
 
 /// One debt slot.
-#[repr(transparent)]
 pub(crate) struct Debt(AtomicUsize);
 
 impl Default for Debt {
