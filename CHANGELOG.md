@@ -1,3 +1,5 @@
+# 0.3.10
+
 * Tweak slot allocation to take smaller performance hit if some leases are held.
 * Increase the number of lease slots per thread to 8.
 * Added a cache for faster access by keeping an already loaded instance around.
