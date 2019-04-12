@@ -27,10 +27,9 @@ use super::ArcSwapAny;
 ///   there's one global instance, but starts being tricky with eg. data structures build from
 ///   them.
 /// * As it keeps a copy of the [Arc] inside the cache, the old value may be kept alive for longer
-///   period of time ‒ it is replaced by the new value on [load][Cache::load] or
-///   [revalidate][Cache::revalidate]. You may not want to use this if dropping the old value in
-///   timely manner is important (possibly because of releasing large amount of RAM or because of
-///   closing file handles).
+///   period of time ‒ it is replaced by the new value on [load][Cache::load]. You may not want to
+///   use this if dropping the old value in timely manner is important (possibly because of
+///   releasing large amount of RAM or because of closing file handles).
 ///
 /// # Examples
 ///
