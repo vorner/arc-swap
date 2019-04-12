@@ -120,6 +120,10 @@
 //!   In general, this is suitable for very fast things ‒ like reading a single scalar value out of
 //!   a configuration, but not keeping it around or doing expensive lookups in data.
 //!
+//! Additionally, it is possible to use [cache handles](cache/index.html) to get further speed
+//! improvement at the cost of less comfortable API and possibly keeping the older values alive for
+//! longer than necessary.
+//!
 //! # RCU
 //!
 //! This also offers an [RCU implementation][rcu], for read-heavy
@@ -249,6 +253,7 @@
 //! [`AtomicArc`]: https://github.com/stjepang/atomic/blob/master/src/atomic_arc.rs#L20
 
 mod as_raw;
+pub mod cache;
 mod compile_fail_tests;
 mod debt;
 pub mod gen_lock;
