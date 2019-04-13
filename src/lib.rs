@@ -1,5 +1,5 @@
 #![doc(
-    html_root_url = "https://docs.rs/arc-swap/0.3.10/arc-swap/",
+    html_root_url = "https://docs.rs/arc-swap/0.3.11/arc-swap/",
     test(attr(deny(warnings)))
 )]
 #![deny(missing_docs, warnings)]
@@ -260,9 +260,11 @@ pub mod gen_lock;
 mod ref_cnt;
 
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
+use std::isize;
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;
+use std::process;
 use std::ptr;
 use std::sync::atomic::{self, AtomicPtr, Ordering};
 use std::sync::Arc;
@@ -400,6 +402,8 @@ pub use ref_cnt::{NonNull, RefCnt};
 // synchronize with anything else, or they are failed attempts at something ‒ and another attempt
 // will be made, the successful one will do the necessary synchronization).
 
+const MAX_GUARDS: usize = (isize::MAX) as usize;
+
 /// Generation lock, to abstract locking and unlocking readers.
 struct GenLock<'a, S: LockStorage + 'a> {
     shard: usize,
@@ -415,12 +419,13 @@ impl<'a, S: LockStorage> GenLock<'a, S> {
             SignalSafety::Unsafe => lock_storage.choose_shard(),
         };
         let gen = lock_storage.gen_idx().load(Ordering::Relaxed) % GEN_CNT;
-        // Unlike the real Arc, we don't have to check for the ref count overflow. Nobody can drop
-        // a reader.
-        //
         // SeqCst: Acquire, so the dangerous section stays in. SeqCst to sync timelines with the
         // swap on the ptr in writer thread.
-        lock_storage.shards().as_ref()[shard].0[gen].fetch_add(1, Ordering::SeqCst);
+        let old = lock_storage.shards().as_ref()[shard].0[gen].fetch_add(1, Ordering::SeqCst);
+        // The trick is taken from Arc.
+        if old > MAX_GUARDS {
+            process::abort();
+        }
         GenLock {
             shard,
             gen,

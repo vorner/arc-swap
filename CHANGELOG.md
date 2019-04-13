@@ -1,3 +1,9 @@
+# 0.3.11
+
+* Prevention against UB due to dropping Guards and overflowing the guard
+  counter (aborting instead, such problem is very degenerate anyway and wouldn't
+  work in the first place).
+
 # 0.3.10
 
 * Tweak slot allocation to take smaller performance hit if some leases are held.
