@@ -15,31 +15,19 @@ travis-ci = { repository = "vorner/arc-swap" }
 appveyor = { repository = "vorner/arc-swap" }
 maintenance = { status = "actively-developed" }
 
+[workspace]
+members = ["benchmarks"]
+
 [dependencies]
 
 [dev-dependencies]
-crossbeam = "~0.5" # Outdated on purpose, benchmarking something that no longer exists
 crossbeam-utils = "~0.6"
 itertools = "~0.8"
 lazy_static = "~1"
 model = "~0.0.4"
 num_cpus = "~1"
 version-sync = "~0.7"
-parking_lot = "~0.7"
 proptest = "~0.7"
 
 [profile.bench]
 debug = true
-
-[[bench]]
-name = "atomics"
-path = "benches/atomics.rs"
-
-[[bench]]
-name = "background"
-path = "benches/background.rs"
-
-[[bench]]
-name = "int-access"
-path = "benches/int-access.rs"
-harness = false
