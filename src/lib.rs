@@ -928,8 +928,8 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// Provides a peek inside the held value.
     ///
     /// This returns a temporary borrow of the object currently held inside. This is slightly
-    /// faster than [`load`](#method.load), but it is not suitable for holding onto for longer
-    /// periods of time.
+    /// faster than [`load`](#method.load) or [`lease`](#method.lease), but it is not suitable for
+    /// holding onto for longer periods of time.
     ///
     /// If you discover later on that you need to hold onto it for longer, you can
     /// [`Guard::upgrade`](struct.Guard.html#method.upgrade) it.
@@ -937,10 +937,10 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// # Warning
     ///
     /// This currently prevents the pointer inside from being replaced. Any [`swap`](#method.swap),
-    /// [`store`](#method.store) or [`rcu`](#method.rcu) will busy-loop while waiting for the proxy
-    /// object to be destroyed, even on unrelated objects. Therefore, this is suitable only for
-    /// things like reading a (reasonably small) configuration value, but not for eg. computations
-    /// on the held values.
+    /// [`store`](#method.store), [`compare_and_swap`](#method.compare_and_swap) or
+    /// [`rcu`](#method.rcu) will busy-loop while waiting for the proxy object to be destroyed,
+    /// even on unrelated objects. Therefore, this is suitable only for things like reading a
+    /// (reasonably small) configuration value, but not for eg. computations on the held values.
     ///
     /// If you want to do anything non-trivial, prefer [`lease`](#method.lease).
     ///

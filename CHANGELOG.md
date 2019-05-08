@@ -1,3 +1,6 @@
+* Splitting benchmarks into a separate sub-crate.
+* Minor documentation improvements.
+
 # 0.3.11
 
 * Prevention against UB due to dropping Guards and overflowing the guard
