@@ -23,9 +23,9 @@ script:
       export RUST_BACKTRACE=1 &&
       export CARGO_INCREMENTAL=1 &&
       cargo build &&
-      cargo test --release --all &&
+      cargo test --release &&
       cargo test --release -- --ignored &&
       cargo doc --no-deps &&
       (test "$TRAVIS_RUST_VERSION" != nightly || cargo test --all --release --benches) &&
-      (test "$TRAVIS_RUST_VERSION" == 1.26.0 || cargo clippy --all -- --deny clippy::all) &&
+      (test "$TRAVIS_RUST_VERSION" == 1.26.0 || cargo clippy -- --deny clippy::all) &&
       (test "$TRAVIS_RUST_VERSION" == 1.26.0 || cargo fmt --all -- --check)
