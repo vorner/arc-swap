@@ -12,7 +12,7 @@
 //!
 //! * [`ArcSwap`][ArcSwap], which operates on [`Arc<T>`][Arc].
 //! * [`ArcSwapOption`][ArcSwapOption], which operates on `Option<Arc<T>>`.
-//! * [`IndependentArcSwap`][IndependentArcSwap], which uses slightly different trade-of decisions
+//! * [`IndependentArcSwap`][IndependentArcSwap], which uses slightly different trade-off decisions
 //!   ‒ see below.
 //!
 //! Note that as these are *type aliases*, the useful methods are defined on
