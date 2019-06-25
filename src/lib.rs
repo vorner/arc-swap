@@ -1570,12 +1570,7 @@ mod tests {
             // Fill up the slots sometimes
             let fillup = || {
                 if i % 2 == 0 {
-                    Some(
-                        (0..50)
-                            .into_iter()
-                            .map(|_| shared.lease())
-                            .collect::<Vec<_>>(),
-                    )
+                    Some((0..50).map(|_| shared.lease()).collect::<Vec<_>>())
                 } else {
                     None
                 }
@@ -1735,10 +1730,7 @@ mod tests {
         let a = Arc::new(0);
         let shared = ArcSwap::from(Arc::clone(&a));
         assert_eq!(2, Arc::strong_count(&a));
-        let mut leases = (0..1000)
-            .into_iter()
-            .map(|_| shared.lease())
-            .collect::<Vec<_>>();
+        let mut leases = (0..1000).map(|_| shared.lease()).collect::<Vec<_>>();
         let count = Arc::strong_count(&a);
         assert!(count > 2);
         let lease = shared.lease();
@@ -1922,12 +1914,12 @@ mod tests {
         let guard = shared.peek();
         thread::scope(|s| {
             s.spawn(move |_| {
-                drop(guard);
-                drop(guard_ref);
-                drop(lease);
-                drop(lease_ref);
-                drop(shared_ref);
-                drop(moved);
+                let _ = guard;
+                let _ = guard_ref;
+                let _ = lease;
+                let _ = lease_ref;
+                let _ = shared_ref;
+                let _ = moved;
             });
         })
         .unwrap();

@@ -46,7 +46,7 @@ fn ops() {
 const LIMIT: usize = 5;
 
 lazy_static! {
-    static ref ARCS: Vec<Arc<usize>> = (0..LIMIT).map(|v| Arc::new(v)).collect();
+    static ref ARCS: Vec<Arc<usize>> = (0..LIMIT).map(Arc::new).collect();
 }
 
 #[test]

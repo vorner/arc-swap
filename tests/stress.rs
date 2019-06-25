@@ -42,11 +42,11 @@ fn storm_link_list<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) 
     let head = ArcSwapAny::<_, S>::from(None::<Arc<LLNode>>);
     let cpus = num_cpus::get();
     // FIXME: If one thread fails, but others don't, it'll deadlock.
-    let bar = Barrier::new(cpus);
+    let barr = Barrier::new(cpus);
     thread::scope(|scope| {
         for thread in 0..cpus {
             // We want to borrow these, but that kind-of conflicts with the move closure mode
-            let bar = &bar;
+            let barr = &barr;
             let head = &head;
             scope.spawn(move |_| {
                 let nodes = (0..node_cnt)
@@ -58,7 +58,7 @@ fn storm_link_list<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) 
                     .map(Arc::new)
                     .collect::<Vec<_>>();
                 for iter in 0..iters {
-                    bar.wait(); // Start synchronously
+                    barr.wait(); // Start synchronously
                     for n in nodes.iter().rev() {
                         head.rcu(|head| {
                             n.next.store(Lease::upgrade(head)); // Cloning the optional Arc
@@ -66,7 +66,7 @@ fn storm_link_list<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) 
                         });
                     }
                     // And do the checks once everyone finishes
-                    bar.wait();
+                    barr.wait();
                     // First, check that all our numbers are increasing by one and all are present
                     let mut node = head.lease();
                     let mut expecting = 0;
@@ -86,7 +86,7 @@ fn storm_link_list<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) 
                     assert_eq!(node_cnt, expecting);
                     // We don't want to count the ref-counts while someone still plays around with
                     // them and loading.
-                    bar.wait();
+                    barr.wait();
                     // Now that we've checked we have everything, check that all the nodes have ref
                     // count 2 ‒ once in the vector, once in the linked list.
                     for n in &nodes {
@@ -100,18 +100,18 @@ fn storm_link_list<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) 
                     }
                     // Reset the head so we don't mix the runs together, which would create a mess.
                     // Also, the tails might disturb the ref counts.
-                    bar.wait();
+                    barr.wait();
                     head.store(None);
                     nodes.last().unwrap().next.store(None);
                 }
-                bar.wait();
+                barr.wait();
                 // We went through all the iterations. Dismantle the list and see that everything
                 // has ref count 1.
                 head.store(None);
                 for n in &nodes {
                     n.next.store(None);
                 }
-                bar.wait(); // Wait until everyone resets their own nexts
+                barr.wait(); // Wait until everyone resets their own nexts
                 for n in &nodes {
                     assert_eq!(1, Arc::strong_count(n));
                 }
@@ -172,7 +172,7 @@ fn storm_unroll<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) {
     let _lock = lock();
 
     let cpus = num_cpus::get();
-    let bar = Barrier::new(cpus);
+    let barr = Barrier::new(cpus);
     let global_cnt = AtomicUsize::new(0);
     // We plan to create this many nodes during the whole test.
     let live_cnt = AtomicUsize::new(cpus * node_cnt * iters);
@@ -181,12 +181,12 @@ fn storm_unroll<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) {
         for thread in 0..cpus {
             // Borrow these instead of moving.
             let head = &head;
-            let bar = &bar;
+            let barr = &barr;
             let global_cnt = &global_cnt;
             let live_cnt = &live_cnt;
             scope.spawn(move |_| {
                 for _ in 0..iters {
-                    bar.wait();
+                    barr.wait();
                     // Create bunch of nodes and put them into the list.
                     for i in 0..node_cnt {
                         let mut node = Arc::new(LLNode {
@@ -200,7 +200,7 @@ fn storm_unroll<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) {
                             Arc::clone(&node)
                         });
                     }
-                    bar.wait();
+                    barr.wait();
                     // Keep removing items, count how many there are and that they increase in each
                     // thread's list.
                     let mut last_seen = vec![node_cnt; cpus];
@@ -213,7 +213,7 @@ fn storm_unroll<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) {
                         cnt += 1;
                     }
                     global_cnt.fetch_add(cnt, Ordering::Relaxed);
-                    if bar.wait().is_leader() {
+                    if barr.wait().is_leader() {
                         assert_eq!(node_cnt * cpus, global_cnt.swap(0, Ordering::Relaxed));
                     }
                 }
@@ -271,10 +271,7 @@ fn lease_parallel<S: LockStorage + Send + Sync>(iters: usize) {
         for _ in 0..cpus {
             scope.spawn(|_| {
                 for _ in 0..iters {
-                    let leases = (0..256)
-                        .into_iter()
-                        .map(|_| shared.lease())
-                        .collect::<Vec<_>>();
+                    let leases = (0..256).map(|_| shared.lease()).collect::<Vec<_>>();
                     for (l, h) in leases.iter().tuple_windows() {
                         assert!(**l <= **h, "{} > {}", l, h);
                     }
