@@ -4,6 +4,7 @@
 )]
 #![deny(missing_docs, warnings)]
 #![allow(renamed_and_removed_lints)]
+#![cfg_attr(feature = "unstable-weak", feature(weak_into_raw))]
 
 //! Making [`Arc`][Arc] itself atomic
 //!
@@ -229,7 +230,16 @@
 //!
 //! The biggest current downside is, it is in a prototype stage and not released yet.
 //!
+//! # Features
+//!
+//! The `unstable-weak` feature adds the ability to use arc-swap with the [Weak] pointer too,
+//! through the [ArcSwapWeak] type. This requires the nightly Rust compiler. Also, the interface
+//! and support **is not** part of API stability guarantees and may be arbitrarily changed or
+//! removed in future releases (it is mostly waiting for the `weak_into_raw` nightly feature to
+//! stabilize before stabilizing it in this crate).
+//!
 //! [Arc]: https://doc.rust-lang.org/std/sync/struct.Arc.html
+//! [Weak]: https://doc.rust-lang.org/std/sync/struct.Arc.html
 //! [RwLock]: https://doc.rust-lang.org/std/sync/struct.RwLock.html
 //! [Mutex]: https://doc.rust-lang.org/std/sync/struct.Mutex.html
 //! [AtomicPtr]: https://doc.rust-lang.org/std/sync/atomic/struct.AtomicPtr.html
@@ -248,6 +258,7 @@
 //! [LockStorage]: gen_lock/trait.LockStorage.html
 //! [benchmarks]: https://github.com/vorner/arc-swap/tree/master/benches
 //! [parking_lot]: https://docs.rs/parking_lot
+//! [ArcSwapWeak]: type.ArcSwapWeak.html
 //! [`crossbeam::atomic::ArcCell`]: https://docs.rs/crossbeam/0.5.0/crossbeam/atomic/struct.ArcCell.html
 //! [`crossbeam-arccell`]: https://docs.rs/crossbeam-arccell/
 //! [`AtomicArc`]: https://github.com/stjepang/atomic/blob/master/src/atomic_arc.rs#L20
@@ -258,6 +269,8 @@ mod compile_fail_tests;
 mod debt;
 pub mod gen_lock;
 mod ref_cnt;
+#[cfg(feature = "unstable-weak")]
+mod weak;
 
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 use std::isize;
@@ -1425,6 +1438,13 @@ pub type ArcSwapOption<T> = ArcSwapAny<Option<Arc<T>>>;
 /// assert_eq!(42, *l);
 /// ```
 pub type IndependentArcSwap<T> = ArcSwapAny<Arc<T>, PrivateUnsharded>;
+
+/// Arc swap for the [Weak] pointer.
+///
+/// This is similar to [ArcSwap], but it doesn't store [Arc], it stores [Weak]. It doesn't keep the
+/// data alive when pointed to.
+#[cfg(feature = "unstable-weak")]
+pub type ArcSwapWeak<T> = ArcSwapAny<std::sync::Weak<T>>;
 
 #[cfg(test)]
 mod tests {
