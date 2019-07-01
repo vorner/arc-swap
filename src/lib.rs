@@ -182,7 +182,7 @@
 //!                 loop {
 //!                     let cfg = config.lease();
 //!                     if !cfg.is_empty() {
-//!                         assert_eq!(*cfg, "New configuration");
+//!                         assert_eq!(**cfg, "New configuration");
 //!                         return;
 //!                     }
 //!                 }
@@ -262,7 +262,7 @@ mod ref_cnt;
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 use std::isize;
 use std::marker::PhantomData;
-use std::mem;
+use std::mem::{self, ManuallyDrop};
 use std::ops::Deref;
 use std::process;
 use std::ptr;
@@ -508,11 +508,9 @@ impl<'a, T: RefCnt, S: LockStorage> Guard<'a, T, S> {
     pub fn lease(guard: &Self) -> Lease<T> {
         let res = unsafe { T::from_ptr(guard.ptr) };
         T::inc(&res);
-        T::into_ptr(res);
         Lease {
-            ptr: guard.ptr,
+            inner: ManuallyDrop::new(res),
             debt: None,
-            _data: PhantomData,
         }
     }
 
@@ -580,107 +578,59 @@ where
 /// number of `Lease`s around and if too many are held, the following ones will just fall back to
 /// creating the `Arc` internally.
 pub struct Lease<T: RefCnt> {
-    ptr: *const T::Base,
+    inner: ManuallyDrop<T>,
     debt: Option<&'static Debt>,
-    _data: PhantomData<T>,
 }
 
 impl<T: RefCnt> Lease<T> {
-    /// Loads a full `Arc` from the lease.
-    pub fn upgrade(lease: &Self) -> T {
-        let res = unsafe { T::from_ptr(lease.ptr) };
-        T::inc(&res);
-        res
-    }
-
-    /// A consuming version of [`upgrade`](#method.upgrade).
+    /// Converts it into the held value.
     ///
-    /// This is a bit faster in certain situations, but consumes the lease.
+    /// This, on occasion, may be a tiny bit faster than cloning the Arc or whatever is being held
+    /// inside.
     // Associated function on purpose, because of deref
     #[cfg_attr(feature = "cargo-clippy", allow(wrong_self_convention))]
-    pub fn into_upgrade(lease: Self) -> T {
-        let res = unsafe { T::from_ptr(lease.ptr) };
+    pub fn into_inner(lease: Self) -> T {
+        let ptr = T::as_ptr(&lease.inner);
         if let Some(debt) = lease.debt {
-            T::inc(&res);
-            if !debt.pay::<T>(lease.ptr) {
-                unsafe { T::dec(lease.ptr) };
+            T::inc(&lease.inner);
+            if !debt.pay::<T>(ptr) {
+                unsafe { T::dec(ptr) };
             }
         }
+        let res = unsafe { T::from_ptr(ptr) };
         mem::forget(lease);
         res
     }
+}
 
-    /// Returns access to the data held.
-    ///
-    /// This returns `Option` even when it can't hold `NULL` internally, to keep the interface the
-    /// same. But there's also the `Deref` trait for the non-`NULL` cases, which is usually more
-    /// comfortable.
-    pub fn get_ref(lease: &Self) -> Option<&T::Base> {
-        unsafe { lease.ptr.as_ref() }
-    }
-
-    /// Checks if it contains a null pointer.
-    ///
-    /// Note that for non-`NULL` `T`, this always returns `false`.
-    pub fn is_null(lease: &Self) -> bool {
-        lease.ptr.is_null()
+impl<T: RefCnt> Deref for Lease<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        self.inner.deref()
     }
 }
 
-impl<T: NonNull> Lease<Option<T>> {
-    /// Like [`unwrap`][Lease::unwrap], but with a panic message.
-    ///
-    /// # Panics
-    ///
-    /// If the lease contains a NULL pointer.
-    pub fn expect(self, msg: &str) -> Lease<T> {
-        assert!(
-            !Self::is_null(&self),
-            "Expect on NULL arc-swap Lease: {}",
-            msg
-        );
-        let ptr = self.ptr;
-        let debt = self.debt;
-        // Ownership passed into the new result, don't drop this one.
-        mem::forget(self);
-        Lease {
-            ptr,
-            debt,
-            _data: PhantomData,
-        }
+impl<T: Debug + RefCnt> Debug for Lease<T> {
+    fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
+        self.deref().fmt(formatter)
     }
+}
 
-    /// Asserts the lease contains non-NULL content and gets direct access to it.
-    ///
-    /// This is very much like [`Option::unwrap`].
-    ///
-    /// # Panics
-    ///
-    /// If the lease contains a NULL pointer.
-    pub fn unwrap(self) -> Lease<T> {
-        assert!(!Self::is_null(&self), "Unwrap of NULL arc-swap Lease");
-        self.expect("")
+impl<T: Debug + RefCnt> Display for Lease<T> {
+    fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
+        self.deref().fmt(formatter)
     }
+}
 
-    /// Transposes the `Lease<Option<RefCnt>>` into `Option<Lease<RefCnt>>`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use arc_swap::ArcSwapOption;
-    /// let shared = ArcSwapOption::from_pointee(42);
-    /// if let Some(ptr) = shared.lease().into_option() {
-    ///     println!("It is {}", ptr);
-    /// } else {
-    ///     println!("Nothing present");
-    /// }
-    /// ```
-    pub fn into_option(self) -> Option<Lease<T>> {
-        if Self::is_null(&self) {
-            None
-        } else {
-            Some(self.unwrap())
+impl<T: RefCnt> Drop for Lease<T> {
+    fn drop(&mut self) {
+        let ptr = T::as_ptr(&self.inner);
+        if let Some(debt) = self.debt {
+            if debt.pay::<T>(ptr) {
+                return;
+            }
         }
+        unsafe { T::dec(ptr) };
     }
 }
 
@@ -696,67 +646,6 @@ where
     let a = a.as_raw();
     let b = b.as_raw();
     ptr::eq(a, b)
-}
-
-impl<T: NonNull> Deref for Lease<T> {
-    type Target = T::Base;
-    fn deref(&self) -> &T::Base {
-        unsafe { self.ptr.as_ref().unwrap() }
-    }
-}
-
-impl<T> Debug for Lease<T>
-where
-    T: RefCnt,
-    T::Base: Debug,
-{
-    fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
-        let l = Lease::get_ref(&self);
-        if T::can_null() {
-            l.fmt(formatter)
-        } else {
-            l.unwrap().fmt(formatter)
-        }
-    }
-}
-
-impl<T> Display for Lease<T>
-where
-    T: NonNull,
-    T::Base: Display,
-{
-    fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
-        self.deref().fmt(formatter)
-    }
-}
-
-impl<T: RefCnt> Drop for Lease<T> {
-    fn drop(&mut self) {
-        if let Some(debt) = self.debt {
-            if debt.pay::<T>(self.ptr) {
-                return;
-            }
-        }
-        unsafe { T::dec(self.ptr) };
-    }
-}
-
-// The same reasoning as for Guard.
-//
-// Note that paying a debt from a different thread is fine as well (it actually is done as part of
-// swapping the content of the pointer there).
-unsafe impl<T> Send for Lease<T>
-where
-    T: RefCnt + Send + Sync,
-    T::Base: Send + Sync,
-{
-}
-
-unsafe impl<T> Sync for Lease<T>
-where
-    T: RefCnt + Send + Sync,
-    T::Base: Send + Sync,
-{
 }
 
 #[derive(Copy, Clone)]
@@ -977,20 +866,16 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
         let debt = Debt::new(ptr as usize)?;
 
         let confirm = self.ptr.load(Ordering::Acquire);
+        let inner = ManuallyDrop::new(unsafe { T::from_ptr(ptr) });
         if ptr == confirm {
             Some(Lease {
-                ptr,
+                inner,
                 debt: Some(debt),
-                _data: PhantomData,
             })
         } else if debt.pay::<T>(ptr) {
             None
         } else {
-            Some(Lease {
-                ptr,
-                debt: None,
-                _data: PhantomData,
-            })
+            Some(Lease { inner, debt: None })
         }
     }
 
@@ -1115,11 +1000,8 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
             unsafe { T::dec(new) };
         }
 
-        Lease {
-            ptr: previous_ptr,
-            debt,
-            _data: PhantomData,
-        }
+        let inner = ManuallyDrop::new(unsafe { T::from_ptr(previous_ptr) });
+        Lease { inner, debt }
     }
 
     /// Wait until all readers go away.
@@ -1282,7 +1164,7 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// what you need.
     pub fn rcu<R, F>(&self, mut f: F) -> T
     where
-        F: FnMut(&Lease<T>) -> R,
+        F: FnMut(&T) -> R,
         R: Into<T>,
     {
         let mut cur = self.lease();
@@ -1291,7 +1173,7 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
             let prev = self.compare_and_swap(&cur, new);
             let swapped = ptr_eq(&cur, &prev);
             if swapped {
-                return Lease::into_upgrade(prev);
+                return Lease::into_inner(prev);
             } else {
                 cur = prev;
             }
@@ -1589,7 +1471,7 @@ mod tests {
             drop(prev);
             let leases = fillup();
             // Failure
-            let prev = Lease::into_upgrade(shared.compare_and_swap(&orig, Arc::clone(&n2)));
+            let prev = Lease::into_inner(shared.compare_and_swap(&orig, Arc::clone(&n2)));
             drop(leases);
             assert!(ptr_eq(&n1, &prev));
             // One for orig
@@ -1657,9 +1539,9 @@ mod tests {
         assert!(null.is_none());
         let a = Arc::new(42);
         let orig = shared.compare_and_swap(ptr::null(), Some(Arc::clone(&a)));
-        assert!(Lease::is_null(&orig));
+        assert!(orig.is_none());
         assert_eq!(2, Arc::strong_count(&a));
-        let orig = Lease::into_upgrade(shared.compare_and_swap(&None::<Arc<_>>, None));
+        let orig = Lease::into_inner(shared.compare_and_swap(&None::<Arc<_>>, None));
         assert_eq!(3, Arc::strong_count(&a));
         assert!(ptr_eq(&a, &orig));
     }
@@ -1695,7 +1577,7 @@ mod tests {
         // One in shared, one in a
         assert_eq!(2, Arc::strong_count(&a));
         let lease = shared.lease();
-        assert_eq!(0, *lease);
+        assert_eq!(0, **lease);
         // The lease doesn't have its own ref count now
         assert_eq!(2, Arc::strong_count(&a));
         let lease_2 = shared.lease();
@@ -1706,17 +1588,17 @@ mod tests {
         // And when we get rid of them, they disappear
         drop(lease_2);
         assert_eq!(2, Arc::strong_count(&a));
-        let _b = Lease::upgrade(&lease);
+        let _b = Arc::clone(&lease);
         assert_eq!(3, Arc::strong_count(&a));
         // We can drop the lease it came from
         drop(lease);
         assert_eq!(2, Arc::strong_count(&a));
         let lease = shared.lease();
-        assert_eq!(1, *lease);
+        assert_eq!(1, **lease);
         drop(shared);
         // We can still use the lease after the shared disappears
-        assert_eq!(1, *lease);
-        let ptr = Lease::upgrade(&lease);
+        assert_eq!(1, **lease);
+        let ptr = Arc::clone(&lease);
         // One in shared, one in lease
         assert_eq!(2, Arc::strong_count(&ptr));
         drop(lease);
@@ -1748,9 +1630,9 @@ mod tests {
     fn lease_null() {
         let shared = ArcSwapOption::<usize>::default();
         let lease = shared.lease();
-        assert!(Lease::get_ref(&lease).is_none());
+        assert!(lease.is_none());
         shared.store(Some(Arc::new(42)));
-        assert_eq!(42, *Lease::get_ref(&shared.lease()).unwrap());
+        assert_eq!(42, **shared.lease().as_ref().unwrap());
     }
 
     #[test]
@@ -1875,29 +1757,14 @@ mod tests {
     }
 
     #[test]
-    fn lease_unwrap() {
-        let shared = ArcSwapOption::from_pointee(42);
-
-        assert_eq!(42, *shared.lease().unwrap());
-        assert_eq!(42, *shared.lease().expect("Failed"));
-    }
-
-    #[test]
-    fn lease_unwrap_none() {
-        let shared: ArcSwapOption<usize> = ArcSwapOption::empty();
-        panic::catch_unwind(|| shared.lease().unwrap()).unwrap_err();
-        panic::catch_unwind(|| shared.lease().expect("Failed")).unwrap_err();
-    }
-
-    #[test]
     fn lease_option() {
         let shared = ArcSwapOption::from_pointee(42);
         // The type here is not needed in real code, it's just addition test the type matches.
-        let opt: Option<_> = shared.lease().into_option();
+        let opt: Option<_> = Lease::into_inner(shared.lease());
         assert_eq!(42, *opt.unwrap());
 
         shared.store(None);
-        assert!(shared.lease().into_option().is_none());
+        assert!(shared.lease().is_none());
     }
 
     // The following "tests" are not run, only compiled. They check that things that should be

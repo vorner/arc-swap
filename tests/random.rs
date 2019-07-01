@@ -11,7 +11,7 @@ extern crate proptest;
 use std::mem;
 use std::sync::Arc;
 
-use arc_swap::{ArcSwap, Lease};
+use arc_swap::ArcSwap;
 
 #[test]
 fn ops() {
@@ -32,7 +32,7 @@ fn ops() {
             assert_eq!(u, *a.peek_signal_safe());
         },
         Lease(())(() in any::<()>()) => {
-            assert_eq!(u, *a.lease());
+            assert_eq!(u, **a.lease());
         },
         Swap(usize)(v in any::<usize>()) => {
             let expected = u;
@@ -66,7 +66,7 @@ fn selection() {
                 bare = Arc::clone(&ARCS[new]);
             }
             let actual = a.compare_and_swap(&ARCS[current], Arc::clone(&ARCS[new]));
-            assert!(Arc::ptr_eq(&expected, &Lease::upgrade(&actual)));
+            assert!(Arc::ptr_eq(&expected, &actual));
         }
     }
 }
@@ -85,7 +85,7 @@ fn linearize() {
         },
         Cas((usize, usize))((current, new) in (0..LIMIT, 0..LIMIT)) -> usize {
             let new = Arc::clone(&ARCS[new]);
-            *a.compare_and_swap(&ARCS[current], new)
+            **a.compare_and_swap(&ARCS[current], new)
         }
     }
 }

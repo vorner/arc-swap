@@ -45,13 +45,13 @@ impl<'a, T: RefCnt> AsRaw<T::Base> for Guard<'a, T> {
 
 impl<'a, T: RefCnt> AsRaw<T::Base> for &'a Lease<T> {
     fn as_raw(&self) -> *mut T::Base {
-        self.ptr as *mut _
+        T::as_ptr(&self.inner)
     }
 }
 
 impl<T: RefCnt> AsRaw<T::Base> for Lease<T> {
     fn as_raw(&self) -> *mut T::Base {
-        self.ptr as *mut _
+        T::as_ptr(&self.inner)
     }
 }
 

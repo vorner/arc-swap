@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use arc_swap::cache::Cache;
-use arc_swap::{ArcSwap, ArcSwapOption, Guard, Lease};
+use arc_swap::{ArcSwap, ArcSwapOption, Guard};
 use crossbeam_utils::thread;
 use test::Bencher;
 
@@ -162,7 +162,7 @@ mod arc_swap_b {
 
     fn lease() {
         for _ in 0..ITERS {
-            test::black_box(*A.lease());
+            test::black_box(**A.lease());
         }
     }
 
@@ -173,7 +173,7 @@ mod arc_swap_b {
             let l2 = A.lease();
             let l3 = A.lease();
             let l4 = A.lease();
-            test::black_box((*l1, *l2, *l3, *l4));
+            test::black_box((**l1, **l2, **l3, **l4));
         }
     }
 
@@ -199,7 +199,7 @@ mod arc_swap_b {
 }
 
 mod arc_swap_option {
-    use super::{ArcSwapOption, Guard, Lease};
+    use super::{ArcSwapOption, Guard};
 
     lazy_static! {
         static ref A: ArcSwapOption<usize> = ArcSwapOption::from(None);
@@ -213,7 +213,7 @@ mod arc_swap_option {
 
     fn lease() {
         for _ in 0..ITERS {
-            test::black_box(*Lease::get_ref(&A.lease()).unwrap_or(&0));
+            test::black_box(A.lease().as_ref().map(|l| **l).unwrap_or(0));
         }
     }
 
@@ -260,7 +260,7 @@ mod arc_swap_cached {
 
     fn lease() {
         for _ in 0..ITERS {
-            test::black_box(*A.lease());
+            test::black_box(**A.lease());
         }
     }
 

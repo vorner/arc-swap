@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex, MutexGuard, PoisonError};
 
 use arc_swap::gen_lock::{Global, LockStorage, PrivateSharded, PrivateUnsharded, Shard};
-use arc_swap::{ArcSwapAny, ArcSwapOption, Lease};
+use arc_swap::{ArcSwapAny, ArcSwapOption};
 use crossbeam_utils::thread;
 use itertools::Itertools;
 
@@ -61,7 +61,7 @@ fn storm_link_list<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) 
                     barr.wait(); // Start synchronously
                     for n in nodes.iter().rev() {
                         head.rcu(|head| {
-                            n.next.store(Lease::upgrade(head)); // Cloning the optional Arc
+                            n.next.store(head.clone()); // Cloning the optional Arc
                             Some(Arc::clone(n))
                         });
                     }
@@ -70,11 +70,11 @@ fn storm_link_list<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) 
                     // First, check that all our numbers are increasing by one and all are present
                     let mut node = head.lease();
                     let mut expecting = 0;
-                    while Lease::get_ref(&node).is_some() {
+                    while node.is_some() {
                         // A bit of gymnastics, we don't have NLL yet and we need to persuade the
                         // borrow checker this is safe.
                         let next = {
-                            let inner = Lease::get_ref(&node).unwrap();
+                            let inner = node.as_ref().unwrap();
                             if inner.owner == thread {
                                 assert_eq!(expecting, inner.num);
                                 expecting += 1;
@@ -196,7 +196,8 @@ fn storm_unroll<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) {
                             live_cnt,
                         });
                         head.rcu(|head| {
-                            Arc::get_mut(&mut node).unwrap().next = Lease::upgrade(head);
+                            // Clone Option<Arc>
+                            Arc::get_mut(&mut node).unwrap().next = head.clone();
                             Arc::clone(&node)
                         });
                     }
@@ -206,7 +207,7 @@ fn storm_unroll<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) {
                     let mut last_seen = vec![node_cnt; cpus];
                     let mut cnt = 0;
                     while let Some(node) =
-                        head.rcu(|head| Lease::get_ref(&head).and_then(|h| h.next.clone()))
+                        head.rcu(|head| head.as_ref().and_then(|h| h.next.clone()))
                     {
                         assert!(last_seen[node.owner] > node.num);
                         last_seen[node.owner] = node.num;
