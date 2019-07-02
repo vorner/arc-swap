@@ -182,7 +182,7 @@ unsafe impl LockStorage for Global {
 /// // But the lock doesn't influence the shared one, so this goes through just fine
 /// shared.store(Arc::new(43));
 ///
-/// assert_eq!(42, *l);
+/// assert_eq!(42, **l);
 /// ```
 ///
 /// Note that there`s a type alias [`IndependentArcSwap`](../type.IndependentArcSwap.html) that can
@@ -285,7 +285,7 @@ mod tests {
                     scope.spawn(move |_| {
                         for j in 0..50 {
                             if j % 2 == i {
-                                while *shared.peek() != j {}
+                                while **shared.peek() != j {}
                             } else {
                                 shared.store(Arc::new(j));
                             }

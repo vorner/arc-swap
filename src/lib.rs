@@ -266,7 +266,7 @@ use std::mem::{self, ManuallyDrop};
 use std::ops::Deref;
 use std::process;
 use std::ptr;
-use std::sync::atomic::{self, AtomicPtr, Ordering};
+use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 
@@ -405,15 +405,13 @@ pub use ref_cnt::{NonNull, RefCnt};
 const MAX_GUARDS: usize = (isize::MAX) as usize;
 
 /// Generation lock, to abstract locking and unlocking readers.
-struct GenLock<'a, S: LockStorage + 'a> {
-    shard: usize,
-    gen: usize,
-    lock_storage: &'a S,
+struct GenLock<'a> {
+    slot: &'a AtomicUsize,
 }
 
-impl<'a, S: LockStorage> GenLock<'a, S> {
+impl<'a> GenLock<'a> {
     /// Creates a generation lock.
-    fn new(signal_safe: SignalSafety, lock_storage: &'a S) -> Self {
+    fn new<S: LockStorage + 'a>(signal_safe: SignalSafety, lock_storage: &'a S) -> Self {
         let shard = match signal_safe {
             SignalSafety::Safe => 0,
             SignalSafety::Unsafe => lock_storage.choose_shard(),
@@ -427,16 +425,14 @@ impl<'a, S: LockStorage> GenLock<'a, S> {
             process::abort();
         }
         GenLock {
-            shard,
-            gen,
-            lock_storage,
+            slot: &lock_storage.shards().as_ref()[shard].0[gen],
         }
     }
 
     /// Removes a generation lock.
     fn unlock(self) {
-        // Release, so the dangerous section stays in.
-        self.lock_storage.shards().as_ref()[self.shard].0[self.gen].fetch_sub(1, Ordering::AcqRel);
+        // Release, so the dangerous section stays in. Acquire to chain the operations.
+        self.slot.fetch_sub(1, Ordering::AcqRel);
         // Disarm the drop-bomb
         mem::forget(self);
     }
@@ -444,131 +440,25 @@ impl<'a, S: LockStorage> GenLock<'a, S> {
 
 /// A bomb so one doesn't forget to unlock generations.
 #[cfg(debug_assertions)] // The bomb actually makes it ~20% slower, so don't put it into production
-impl<'a, S: LockStorage> Drop for GenLock<'a, S> {
+impl<'a> Drop for GenLock<'a> {
     fn drop(&mut self) {
         unreachable!("Forgot to unlock generation");
     }
 }
 
-/// A short-term proxy object from [`peek`](struct.ArcSwapAny.html#method.peek).
-///
-/// This allows for upgrading to a full smart pointer and borrowing of the value inside. It also
-/// dereferences to the actual pointed to type if the smart pointer guarantees not to contain NULL
-/// values (eg. on `Arc`, but not on `Option<Arc>`).
-///
-/// # Warning
-///
-/// Do not store or keep around for a long time, as this prevents all the writer methods from
-/// completing on all the swap objects in the whole program from completing.
-pub struct Guard<'a, T: RefCnt + 'a, S: LockStorage + 'a = Global>
-where
-    T::Base: 'a,
-{
-    lock: Option<GenLock<'a, S>>,
-    ptr: *const T::Base,
-    _arc_swap: PhantomData<&'a T::Base>,
+enum Protection<'l> {
+    Unprotected,
+    Debt(&'static Debt),
+    Lock(GenLock<'l>),
 }
 
-impl<'a, T: RefCnt, S: LockStorage> Guard<'a, T, S> {
-    /// Upgrades the guard to a real `Arc`.
-    ///
-    /// This shares the reference count with all the `Arc` inside the corresponding `ArcSwap`. Use
-    /// this if you need to hold the object for longer periods of time.
-    ///
-    /// See [`peek`](struct.ArcSwapAny.html#method.peek) for details.
-    ///
-    /// Note that this is associated function (so it doesn't collide with the thing pointed to):
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// # use std::sync::Arc;
-    /// # use arc_swap::{ArcSwap, Guard};
-    /// let a = ArcSwap::from(Arc::new(42));
-    /// let mut ptr = None;
-    /// { // limit the scope where the guard lives
-    ///     let guard = a.peek();
-    ///     if *guard > 40 {
-    ///         ptr = Some(Guard::upgrade(&guard));
-    ///     }
-    /// }
-    /// # let _ = ptr;
-    /// ```
-    pub fn upgrade(guard: &Self) -> T {
-        let res = unsafe { T::from_ptr(guard.ptr) };
-        T::inc(&res);
-        res
-    }
-
-    /// Upgrades the guard to a [`Lease`](struct.Lease.html).
-    ///
-    /// This is preserved here for backwards compatibility. Use [`upgrade`](#method.upgrade)
-    /// instead (it has the same cost).
-    #[deprecated(note = "Use upgrade instead")]
-    pub fn lease(guard: &Self) -> Lease<T> {
-        let res = unsafe { T::from_ptr(guard.ptr) };
-        T::inc(&res);
-        Lease {
-            inner: ManuallyDrop::new(res),
-            debt: None,
+impl<'l> From<Option<&'static Debt>> for Protection<'l> {
+    fn from(debt: Option<&'static Debt>) -> Self {
+        match debt {
+            Some(d) => Protection::Debt(d),
+            None => Protection::Unprotected,
         }
     }
-
-    /// Gets a reference to the value inside.
-    ///
-    /// This is returned as `Option` even for pointers that can't return Null, to have a common
-    /// interface. The non-null ones also implement the `Deref` trait, so they can more easily be
-    /// used as that.
-    // Explicit lifetimes here:
-    // * The ptr.as_ref() is more than willing to provide *any* lifetime we ask for. So being extra
-    //   careful around it.
-    // * While this is the lifetime that would get elided, one could also think the 'a lifetime
-    //   would make sense. However, it is not so, because the arc-swap can replace the Arc inside
-    //   and drop, the only thing preventing it from doing so is this guard. Therefore, at any time
-    //   after the guard goes away, the pointed-to value can too.
-    #[cfg_attr(feature = "cargo-clippy", allow(needless_lifetimes))]
-    pub fn get_ref<'g>(guard: &'g Self) -> Option<&'g T::Base> {
-        unsafe { guard.ptr.as_ref() }
-    }
-}
-
-impl<'a, T: NonNull, S: LockStorage> Deref for Guard<'a, T, S> {
-    type Target = T::Base;
-    fn deref(&self) -> &T::Base {
-        unsafe { self.ptr.as_ref().unwrap() }
-    }
-}
-
-impl<'a, T: RefCnt, S: LockStorage> Drop for Guard<'a, T, S> {
-    fn drop(&mut self) {
-        self.lock.take().unwrap().unlock();
-    }
-}
-
-// We contain a raw pointer, therefore we are automatically not Send.
-//
-// We act mostly as a reference. So, if T is Sync, we are Send.
-// This is fine, because we use the shards for locking and it doesn't matter what thread unlocks
-// the shard ‒ we keep the shard index in a private variable, don't use the thread ID again to
-// regenerate it.
-//
-// However, through some gymnastics it would be possible to extract the original T::Base out of it,
-// so it could be used to smuggle it between threads. We need Send of our T::Base too.
-unsafe impl<'a, T, S> Send for Guard<'a, T, S>
-where
-    T: RefCnt + Send + Sync,
-    S: LockStorage,
-    T::Base: Send + Sync,
-{
-}
-
-// The same reasoning as above.
-unsafe impl<'a, T, S> Sync for Guard<'a, T, S>
-where
-    T: RefCnt + Send + Sync,
-    S: LockStorage,
-    T::Base: Send + Sync,
-{
 }
 
 /// A temporary storage of the pointer.
@@ -577,12 +467,41 @@ where
 /// faster than loading the full `Arc`. However, this holds only if each thread keeps only small
 /// number of `Lease`s around and if too many are held, the following ones will just fall back to
 /// creating the `Arc` internally.
-pub struct Lease<T: RefCnt> {
+pub struct Lease<'l, T: RefCnt> {
     inner: ManuallyDrop<T>,
-    debt: Option<&'static Debt>,
+    protection: Protection<'l>,
 }
 
-impl<T: RefCnt> Lease<T> {
+// XXX: Should we use something like mem::copy instead for the actual move, instead of the
+// as_ptr->from_ptr? ManuallyDrop::take would be nice, but it's not available yet.
+impl<T: RefCnt> Lease<'_, T> {
+    fn unprotected(mut lease: Self) -> Lease<'static, T> {
+        let ptr = T::as_ptr(&lease.inner);
+        match mem::replace(&mut lease.protection, Protection::Unprotected) {
+            // Not protected, nothing to unprotect.
+            Protection::Unprotected => (),
+            // If we owe, we need to create a new copy of the Arc. But if it gets payed in the
+            // meantime, then we have to release it again, because it is extra. We can't check
+            // first because of races.
+            Protection::Debt(debt) => {
+                T::inc(&lease.inner);
+                if !debt.pay::<T>(ptr) {
+                    unsafe { T::dec(ptr) };
+                }
+            }
+            Protection::Lock(lock) => {
+                T::inc(&lease.inner);
+                lock.unlock();
+            }
+        }
+        let inner = ManuallyDrop::new(unsafe { T::from_ptr(ptr) });
+        mem::forget(lease);
+        Lease {
+            inner,
+            protection: Protection::Unprotected,
+        }
+    }
+
     /// Converts it into the held value.
     ///
     /// This, on occasion, may be a tiny bit faster than cloning the Arc or whatever is being held
@@ -591,42 +510,49 @@ impl<T: RefCnt> Lease<T> {
     #[cfg_attr(feature = "cargo-clippy", allow(wrong_self_convention))]
     pub fn into_inner(lease: Self) -> T {
         let ptr = T::as_ptr(&lease.inner);
-        if let Some(debt) = lease.debt {
-            T::inc(&lease.inner);
-            if !debt.pay::<T>(ptr) {
-                unsafe { T::dec(ptr) };
-            }
-        }
+        let unprotected = Lease::unprotected(lease);
         let res = unsafe { T::from_ptr(ptr) };
-        mem::forget(lease);
+        mem::forget(unprotected);
         res
     }
 }
 
-impl<T: RefCnt> Deref for Lease<T> {
+impl<T: RefCnt> Deref for Lease<'_, T> {
     type Target = T;
     fn deref(&self) -> &T {
         self.inner.deref()
     }
 }
 
-impl<T: Debug + RefCnt> Debug for Lease<T> {
+impl<T: Debug + RefCnt> Debug for Lease<'_, T> {
     fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
         self.deref().fmt(formatter)
     }
 }
 
-impl<T: Debug + RefCnt> Display for Lease<T> {
+impl<T: Debug + RefCnt> Display for Lease<'_, T> {
     fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
         self.deref().fmt(formatter)
     }
 }
 
-impl<T: RefCnt> Drop for Lease<T> {
+impl<T: RefCnt> Drop for Lease<'_, T> {
     fn drop(&mut self) {
         let ptr = T::as_ptr(&self.inner);
-        if let Some(debt) = self.debt {
-            if debt.pay::<T>(ptr) {
+        match mem::replace(&mut self.protection, Protection::Unprotected) {
+            // We have our own copy of Arc, so we don't need a protection. Do nothing (but release
+            // the Arc below).
+            Protection::Unprotected => (),
+            // If we owed something, just return the debt. We don't have a pointer owned, so
+            // nothing to release.
+            Protection::Debt(debt) => {
+                if debt.pay::<T>(ptr) {
+                    return;
+                }
+            }
+            // Similarly, we don't have anything owned, we just unlock and be done with it.
+            Protection::Lock(lock) => {
+                lock.unlock();
                 return;
             }
         }
@@ -748,27 +674,19 @@ impl<T: RefCnt, S: LockStorage> Clone for ArcSwapAny<T, S> {
 
 impl<T, S: LockStorage> Debug for ArcSwapAny<T, S>
 where
-    T: RefCnt,
-    T::Base: Debug,
+    T: Debug + RefCnt,
 {
     fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
-        let guard = self.peek();
-        let r = Guard::get_ref(&guard);
-        if T::can_null() {
-            r.fmt(formatter)
-        } else {
-            r.unwrap().fmt(formatter)
-        }
+        Debug::fmt(&self.lease(), formatter)
     }
 }
 
 impl<T, S: LockStorage> Display for ArcSwapAny<T, S>
 where
-    T: NonNull,
-    T::Base: Display,
+    T: Display + RefCnt,
 {
     fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
-        self.peek().deref().fmt(formatter)
+        self.lease().fmt(formatter)
     }
 }
 
@@ -800,17 +718,18 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// The method is *not* async-signal-safe. Use [`peek_signal_safe`](#method.peek_signal_safe)
     /// for that.
     pub fn load(&self) -> T {
-        Guard::upgrade(&self.peek())
+        // XXX Do we want to get rid of peek?
+        Lease::into_inner(self.peek())
     }
 
-    fn peek_inner(&self, signal_safe: SignalSafety) -> Guard<T, S> {
+    fn peek_inner(&self, signal_safe: SignalSafety) -> Lease<'_, T> {
         let gen = GenLock::new(signal_safe, &self.lock_storage);
         let ptr = self.ptr.load(Ordering::Acquire);
+        let inner = ManuallyDrop::new(unsafe { T::from_ptr(ptr) });
 
-        Guard {
-            lock: Some(gen),
-            _arc_swap: PhantomData,
-            ptr,
+        Lease {
+            inner,
+            protection: Protection::Lock(gen),
         }
     }
 
@@ -838,7 +757,7 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// # Signal safety
     ///
     /// For an async-signal-safe version, use [`peek_signal_safe`](#method.peek_signal_safe).
-    pub fn peek(&self) -> Guard<T, S> {
+    pub fn peek(&self) -> Lease<'_, T> {
         self.peek_inner(SignalSafety::Unsafe)
     }
 
@@ -854,12 +773,12 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     ///
     /// The same performance warning about writer methods of [`peek`](#method.peek) applies, so it
     /// is recommended not to spend too much time holding the returned guard.
-    pub fn peek_signal_safe(&self) -> Guard<T, S> {
+    pub fn peek_signal_safe(&self) -> Lease<'_, T> {
         self.peek_inner(SignalSafety::Safe)
     }
 
     #[inline]
-    fn lease_fallible(&self) -> Option<Lease<T>> {
+    fn lease_fallible(&self) -> Option<Lease<'static, T>> {
         // Relaxed is good enough here, see the Acquire below
         let ptr = self.ptr.load(Ordering::Relaxed);
         // Try to get a debt slot. If not possible, fail.
@@ -870,12 +789,15 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
         if ptr == confirm {
             Some(Lease {
                 inner,
-                debt: Some(debt),
+                protection: Protection::Debt(debt),
             })
         } else if debt.pay::<T>(ptr) {
             None
         } else {
-            Some(Lease { inner, debt: None })
+            Some(Lease {
+                inner,
+                protection: Protection::Unprotected,
+            })
         }
     }
 
@@ -891,9 +813,9 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// is this is suited for local variables on stack, but not in structures.
     #[allow(deprecated)] // Allow Guard::lease internally
     #[inline]
-    pub fn lease(&self) -> Lease<T> {
+    pub fn lease(&self) -> Lease<'static, T> {
         self.lease_fallible()
-            .unwrap_or_else(|| Guard::lease(&self.peek()))
+            .unwrap_or_else(|| Lease::unprotected(self.peek()))
     }
 
     /// Replaces the value inside this instance.
@@ -1001,7 +923,10 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
         }
 
         let inner = ManuallyDrop::new(unsafe { T::from_ptr(previous_ptr) });
-        Lease { inner, debt }
+        Lease {
+            inner,
+            protection: debt.into(),
+        }
     }
 
     /// Wait until all readers go away.
@@ -1304,7 +1229,7 @@ pub type ArcSwapOption<T> = ArcSwapAny<Option<Arc<T>>>;
 /// // But the lock doesn't influence the shared one, so this goes through just fine
 /// shared.store(Arc::new(43));
 ///
-/// assert_eq!(42, *l);
+/// assert_eq!(42, **l);
 /// ```
 pub type IndependentArcSwap<T> = ArcSwapAny<Arc<T>, PrivateUnsharded>;
 
@@ -1466,7 +1391,7 @@ mod tests {
             assert_eq!(2, Arc::strong_count(&orig));
             // One for n1, one for shared
             assert_eq!(2, Arc::strong_count(&n1));
-            assert_eq!(i + 1, *shared.peek());
+            assert_eq!(i + 1, **shared.peek());
             let n2 = Arc::new(i);
             drop(prev);
             let leases = fillup();
@@ -1480,7 +1405,7 @@ mod tests {
             assert_eq!(3, Arc::strong_count(&n1));
             // n2 didn't get increased
             assert_eq!(1, Arc::strong_count(&n2));
-            assert_eq!(i + 1, *shared.peek());
+            assert_eq!(i + 1, **shared.peek());
         }
 
         let a = shared.load();
@@ -1557,7 +1482,7 @@ mod tests {
             }
             **i
         });
-        assert_eq!(10, *shared.peek());
+        assert_eq!(10, **shared.peek());
         assert_eq!(2, Arc::strong_count(&shared.load()));
     }
 

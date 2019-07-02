@@ -26,10 +26,10 @@ fn ops() {
             assert_eq!(u, *a.load());
         },
         Peek(())(() in any::<()>()) => {
-            assert_eq!(u, *a.peek());
+            assert_eq!(u, **a.peek());
         },
         PeekSignalSafe(())(() in any::<()>()) => {
-            assert_eq!(u, *a.peek_signal_safe());
+            assert_eq!(u, **a.peek_signal_safe());
         },
         Lease(())(() in any::<()>()) => {
             assert_eq!(u, **a.lease());
@@ -81,7 +81,7 @@ fn linearize() {
             a.store(Arc::clone(&ARCS[idx]));
         },
         Peek(())(() in any::<()>()) -> usize {
-            *a.peek()
+            **a.peek()
         },
         Cas((usize, usize))((current, new) in (0..LIMIT, 0..LIMIT)) -> usize {
             let new = Arc::clone(&ARCS[new]);
