@@ -472,11 +472,8 @@ pub struct Guard<'l, T: RefCnt> {
     protection: Protection<'l>,
 }
 
-// XXX: Should we use something like mem::copy instead for the actual move, instead of the
-// as_ptr->from_ptr? ManuallyDrop::take would be nice, but it's not available yet.
 impl<T: RefCnt> Guard<'_, T> {
     fn unprotected(mut lease: Self) -> Guard<'static, T> {
-        let ptr = T::as_ptr(&lease.inner);
         match mem::replace(&mut lease.protection, Protection::Unprotected) {
             // Not protected, nothing to unprotect.
             Protection::Unprotected => (),
@@ -485,6 +482,7 @@ impl<T: RefCnt> Guard<'_, T> {
             // first because of races.
             Protection::Debt(debt) => {
                 T::inc(&lease.inner);
+                let ptr = T::as_ptr(&lease.inner);
                 if !debt.pay::<T>(ptr) {
                     unsafe { T::dec(ptr) };
                 }
@@ -494,7 +492,9 @@ impl<T: RefCnt> Guard<'_, T> {
                 lock.unlock();
             }
         }
-        let inner = ManuallyDrop::new(unsafe { T::from_ptr(ptr) });
+        // The ptr::read & forget is something like a cheating move. We can't move it out, because
+        // we have a destructor and Rust doesn't allow us to do that.
+        let inner = ManuallyDrop::new(unsafe { ptr::read(lease.inner.deref()) });
         mem::forget(lease);
         Guard {
             inner,
@@ -509,9 +509,10 @@ impl<T: RefCnt> Guard<'_, T> {
     // Associated function on purpose, because of deref
     #[cfg_attr(feature = "cargo-clippy", allow(wrong_self_convention))]
     pub fn into_inner(lease: Self) -> T {
-        let ptr = T::as_ptr(&lease.inner);
         let unprotected = Guard::unprotected(lease);
-        let res = unsafe { T::from_ptr(ptr) };
+        // The ptr::read & forget is something like a cheating move. We can't move it out, because
+        // we have a destructor and Rust doesn't allow us to do that.
+        let res = unsafe { ptr::read(unprotected.inner.deref()) };
         mem::forget(unprotected);
         res
     }
