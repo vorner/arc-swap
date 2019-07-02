@@ -465,17 +465,17 @@ impl<'l> From<Option<&'static Debt>> for Protection<'l> {
 ///
 /// This, unlike [`Guard`](struct.Guard.html), does not block any write operations and is usually
 /// faster than loading the full `Arc`. However, this holds only if each thread keeps only small
-/// number of `Lease`s around and if too many are held, the following ones will just fall back to
+/// number of `Guards`s around and if too many are held, the following ones will just fall back to
 /// creating the `Arc` internally.
-pub struct Lease<'l, T: RefCnt> {
+pub struct Guard<'l, T: RefCnt> {
     inner: ManuallyDrop<T>,
     protection: Protection<'l>,
 }
 
 // XXX: Should we use something like mem::copy instead for the actual move, instead of the
 // as_ptr->from_ptr? ManuallyDrop::take would be nice, but it's not available yet.
-impl<T: RefCnt> Lease<'_, T> {
-    fn unprotected(mut lease: Self) -> Lease<'static, T> {
+impl<T: RefCnt> Guard<'_, T> {
+    fn unprotected(mut lease: Self) -> Guard<'static, T> {
         let ptr = T::as_ptr(&lease.inner);
         match mem::replace(&mut lease.protection, Protection::Unprotected) {
             // Not protected, nothing to unprotect.
@@ -496,7 +496,7 @@ impl<T: RefCnt> Lease<'_, T> {
         }
         let inner = ManuallyDrop::new(unsafe { T::from_ptr(ptr) });
         mem::forget(lease);
-        Lease {
+        Guard {
             inner,
             protection: Protection::Unprotected,
         }
@@ -510,33 +510,33 @@ impl<T: RefCnt> Lease<'_, T> {
     #[cfg_attr(feature = "cargo-clippy", allow(wrong_self_convention))]
     pub fn into_inner(lease: Self) -> T {
         let ptr = T::as_ptr(&lease.inner);
-        let unprotected = Lease::unprotected(lease);
+        let unprotected = Guard::unprotected(lease);
         let res = unsafe { T::from_ptr(ptr) };
         mem::forget(unprotected);
         res
     }
 }
 
-impl<T: RefCnt> Deref for Lease<'_, T> {
+impl<T: RefCnt> Deref for Guard<'_, T> {
     type Target = T;
     fn deref(&self) -> &T {
         self.inner.deref()
     }
 }
 
-impl<T: Debug + RefCnt> Debug for Lease<'_, T> {
+impl<T: Debug + RefCnt> Debug for Guard<'_, T> {
     fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
         self.deref().fmt(formatter)
     }
 }
 
-impl<T: Debug + RefCnt> Display for Lease<'_, T> {
+impl<T: Debug + RefCnt> Display for Guard<'_, T> {
     fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
         self.deref().fmt(formatter)
     }
 }
 
-impl<T: RefCnt> Drop for Lease<'_, T> {
+impl<T: RefCnt> Drop for Guard<'_, T> {
     fn drop(&mut self) {
         let ptr = T::as_ptr(&self.inner);
         match mem::replace(&mut self.protection, Protection::Unprotected) {
@@ -719,15 +719,15 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// for that.
     pub fn load(&self) -> T {
         // XXX Do we want to get rid of peek?
-        Lease::into_inner(self.peek())
+        Guard::into_inner(self.peek())
     }
 
-    fn peek_inner(&self, signal_safe: SignalSafety) -> Lease<'_, T> {
+    fn peek_inner(&self, signal_safe: SignalSafety) -> Guard<'_, T> {
         let gen = GenLock::new(signal_safe, &self.lock_storage);
         let ptr = self.ptr.load(Ordering::Acquire);
         let inner = ManuallyDrop::new(unsafe { T::from_ptr(ptr) });
 
-        Lease {
+        Guard {
             inner,
             protection: Protection::Lock(gen),
         }
@@ -757,7 +757,7 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// # Signal safety
     ///
     /// For an async-signal-safe version, use [`peek_signal_safe`](#method.peek_signal_safe).
-    pub fn peek(&self) -> Lease<'_, T> {
+    pub fn peek(&self) -> Guard<'_, T> {
         self.peek_inner(SignalSafety::Unsafe)
     }
 
@@ -773,12 +773,12 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     ///
     /// The same performance warning about writer methods of [`peek`](#method.peek) applies, so it
     /// is recommended not to spend too much time holding the returned guard.
-    pub fn peek_signal_safe(&self) -> Lease<'_, T> {
+    pub fn peek_signal_safe(&self) -> Guard<'_, T> {
         self.peek_inner(SignalSafety::Safe)
     }
 
     #[inline]
-    fn lease_fallible(&self) -> Option<Lease<'static, T>> {
+    fn lease_fallible(&self) -> Option<Guard<'static, T>> {
         // Relaxed is good enough here, see the Acquire below
         let ptr = self.ptr.load(Ordering::Relaxed);
         // Try to get a debt slot. If not possible, fail.
@@ -787,14 +787,14 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
         let confirm = self.ptr.load(Ordering::Acquire);
         let inner = ManuallyDrop::new(unsafe { T::from_ptr(ptr) });
         if ptr == confirm {
-            Some(Lease {
+            Some(Guard {
                 inner,
                 protection: Protection::Debt(debt),
             })
         } else if debt.pay::<T>(ptr) {
             None
         } else {
-            Some(Lease {
+            Some(Guard {
                 inner,
                 protection: Protection::Unprotected,
             })
@@ -813,9 +813,9 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// is this is suited for local variables on stack, but not in structures.
     #[allow(deprecated)] // Allow Guard::lease internally
     #[inline]
-    pub fn lease(&self) -> Lease<'static, T> {
+    pub fn lease(&self) -> Guard<'static, T> {
         self.lease_fallible()
-            .unwrap_or_else(|| Lease::unprotected(self.peek()))
+            .unwrap_or_else(|| Guard::unprotected(self.peek()))
     }
 
     /// Replaces the value inside this instance.
@@ -871,8 +871,8 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// limitations).
     ///
     /// The `current` can be specified as `&Arc`, [`Guard`](struct.Guard.html),
-    /// [`&Lease`](struct.Lease.html) or as a raw pointer.
-    pub fn compare_and_swap<C: AsRaw<T::Base>>(&self, current: C, new: T) -> Lease<T> {
+    /// [`&Guards`](struct.Guards.html) or as a raw pointer.
+    pub fn compare_and_swap<C: AsRaw<T::Base>>(&self, current: C, new: T) -> Guard<T> {
         let cur_ptr = current.as_raw();
         let new = T::into_ptr(new);
 
@@ -923,7 +923,7 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
         }
 
         let inner = ManuallyDrop::new(unsafe { T::from_ptr(previous_ptr) });
-        Lease {
+        Guard {
             inner,
             protection: debt.into(),
         }
@@ -1098,7 +1098,7 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
             let prev = self.compare_and_swap(&cur, new);
             let swapped = ptr_eq(&cur, &prev);
             if swapped {
-                return Lease::into_inner(prev);
+                return Guard::into_inner(prev);
             } else {
                 cur = prev;
             }
@@ -1396,7 +1396,7 @@ mod tests {
             drop(prev);
             let leases = fillup();
             // Failure
-            let prev = Lease::into_inner(shared.compare_and_swap(&orig, Arc::clone(&n2)));
+            let prev = Guard::into_inner(shared.compare_and_swap(&orig, Arc::clone(&n2)));
             drop(leases);
             assert!(ptr_eq(&n1, &prev));
             // One for orig
@@ -1466,7 +1466,7 @@ mod tests {
         let orig = shared.compare_and_swap(ptr::null(), Some(Arc::clone(&a)));
         assert!(orig.is_none());
         assert_eq!(2, Arc::strong_count(&a));
-        let orig = Lease::into_inner(shared.compare_and_swap(&None::<Arc<_>>, None));
+        let orig = Guard::into_inner(shared.compare_and_swap(&None::<Arc<_>>, None));
         assert_eq!(3, Arc::strong_count(&a));
         assert!(ptr_eq(&a, &orig));
     }
@@ -1494,7 +1494,7 @@ mod tests {
         assert_eq!(1, Arc::strong_count(&shared.swap(Arc::new(42))));
     }
 
-    /// Accessing the value inside ArcSwap with Lease (and checks for the reference counts).
+    /// Accessing the value inside ArcSwap with Guards (and checks for the reference counts).
     #[test]
     fn lease_cnt() {
         let a = Arc::new(0);
@@ -1685,7 +1685,7 @@ mod tests {
     fn lease_option() {
         let shared = ArcSwapOption::from_pointee(42);
         // The type here is not needed in real code, it's just addition test the type matches.
-        let opt: Option<_> = Lease::into_inner(shared.lease());
+        let opt: Option<_> = Guard::into_inner(shared.lease());
         assert_eq!(42, *opt.unwrap());
 
         shared.store(None);
