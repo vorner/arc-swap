@@ -22,17 +22,14 @@ fn ops() {
             u = v;
             a.store(Arc::new(v));
         },
+        LoadFull(())(() in any::<()>()) => {
+            assert_eq!(u, *a.load_full());
+        },
+        LoadSignalSafe(())(() in any::<()>()) => {
+            assert_eq!(u, **a.load_signal_safe());
+        },
         Load(())(() in any::<()>()) => {
-            assert_eq!(u, *a.load());
-        },
-        Peek(())(() in any::<()>()) => {
-            assert_eq!(u, **a.peek());
-        },
-        PeekSignalSafe(())(() in any::<()>()) => {
-            assert_eq!(u, **a.peek_signal_safe());
-        },
-        Lease(())(() in any::<()>()) => {
-            assert_eq!(u, **a.lease());
+            assert_eq!(u, **a.load());
         },
         Swap(usize)(v in any::<usize>()) => {
             let expected = u;
@@ -80,8 +77,8 @@ fn linearize() {
         Store(usize)(idx in 0..LIMIT) -> () {
             a.store(Arc::clone(&ARCS[idx]));
         },
-        Peek(())(() in any::<()>()) -> usize {
-            **a.peek()
+        Load(())(() in any::<()>()) -> usize {
+            **a.load()
         },
         Cas((usize, usize))((current, new) in (0..LIMIT, 0..LIMIT)) -> usize {
             let new = Arc::clone(&ARCS[new]);

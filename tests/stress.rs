@@ -68,7 +68,7 @@ fn storm_link_list<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) 
                     // And do the checks once everyone finishes
                     barr.wait();
                     // First, check that all our numbers are increasing by one and all are present
-                    let mut node = head.lease();
+                    let mut node = head.load();
                     let mut expecting = 0;
                     while node.is_some() {
                         // A bit of gymnastics, we don't have NLL yet and we need to persuade the
@@ -79,7 +79,7 @@ fn storm_link_list<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) 
                                 assert_eq!(expecting, inner.num);
                                 expecting += 1;
                             }
-                            inner.next.lease()
+                            inner.next.load()
                         };
                         node = next;
                     }
@@ -259,7 +259,7 @@ fn storm_unroll_large_private_sharded() {
     storm_unroll::<PrivateSharded<[Shard; 3]>>(10_000, 50);
 }
 
-fn lease_parallel<S: LockStorage + Send + Sync>(iters: usize) {
+fn load_parallel<S: LockStorage + Send + Sync>(iters: usize) {
     let _lock = lock();
     let cpus = num_cpus::get();
     let shared = ArcSwapAny::<_, S>::from(Arc::new(0));
@@ -272,8 +272,8 @@ fn lease_parallel<S: LockStorage + Send + Sync>(iters: usize) {
         for _ in 0..cpus {
             scope.spawn(|_| {
                 for _ in 0..iters {
-                    let leases = (0..256).map(|_| shared.lease()).collect::<Vec<_>>();
-                    for (l, h) in leases.iter().tuple_windows() {
+                    let guards = (0..256).map(|_| shared.load()).collect::<Vec<_>>();
+                    for (l, h) in guards.iter().tuple_windows() {
                         assert!(**l <= **h, "{} > {}", l, h);
                     }
                 }
@@ -281,39 +281,39 @@ fn lease_parallel<S: LockStorage + Send + Sync>(iters: usize) {
         }
     })
     .unwrap();
-    let v = shared.load();
+    let v = shared.load_full();
     assert_eq!(2, Arc::strong_count(&v));
 }
 
 #[test]
-fn lease_parallel_small() {
-    lease_parallel::<Global>(1000);
+fn load_parallel_small() {
+    load_parallel::<Global>(1000);
 }
 
 #[test]
-fn lease_parallel_small_private() {
-    lease_parallel::<PrivateUnsharded>(1000);
+fn load_parallel_small_private() {
+    load_parallel::<PrivateUnsharded>(1000);
 }
 
 #[test]
-fn lease_parallel_small_private_sharded() {
-    lease_parallel::<PrivateSharded<[Shard; 3]>>(1000);
-}
-
-#[test]
-#[ignore]
-fn lease_parallel_large() {
-    lease_parallel::<Global>(100_000);
+fn load_parallel_small_private_sharded() {
+    load_parallel::<PrivateSharded<[Shard; 3]>>(1000);
 }
 
 #[test]
 #[ignore]
-fn lease_parallel_large_private() {
-    lease_parallel::<PrivateUnsharded>(100_000);
+fn load_parallel_large() {
+    load_parallel::<Global>(100_000);
 }
 
 #[test]
 #[ignore]
-fn lease_parallel_large_private_sharded() {
-    lease_parallel::<PrivateSharded<[Shard; 3]>>(100_000);
+fn load_parallel_large_private() {
+    load_parallel::<PrivateUnsharded>(100_000);
+}
+
+#[test]
+#[ignore]
+fn load_parallel_large_private_sharded() {
+    load_parallel::<PrivateSharded<[Shard; 3]>>(100_000);
 }

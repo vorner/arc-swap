@@ -18,9 +18,8 @@ use super::{Guard, RefCnt};
 ///
 /// shared.compare_and_swap(&a, Some(Arc::clone(&a)));
 /// shared.compare_and_swap(&None::<Arc<_>>, Some(Arc::clone(&a)));
-/// shared.compare_and_swap(shared.peek(), Some(Arc::clone(&a)));
-/// shared.compare_and_swap(shared.lease(), Some(Arc::clone(&a)));
-/// shared.compare_and_swap(&shared.lease(), Some(Arc::clone(&a)));
+/// shared.compare_and_swap(shared.load(), Some(Arc::clone(&a)));
+/// shared.compare_and_swap(&shared.load(), Some(Arc::clone(&a)));
 /// shared.compare_and_swap(ptr::null(), Some(Arc::clone(&a)));
 /// ```
 pub trait AsRaw<T> {

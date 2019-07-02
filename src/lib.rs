@@ -180,7 +180,7 @@
 //!         for _ in 0..10 {
 //!             scope.spawn(|_| {
 //!                 loop {
-//!                     let cfg = config.lease();
+//!                     let cfg = config.load();
 //!                     if !cfg.is_empty() {
 //!                         assert_eq!(**cfg, "New configuration");
 //!                         return;
@@ -617,14 +617,14 @@ const YIELD_EVERY: usize = 16;
 /// # use arc_swap::ArcSwap;
 /// let arc = Arc::new(42);
 /// let arc_swap = ArcSwap::from(arc);
-/// assert_eq!(42, *arc_swap.load());
+/// assert_eq!(42, **arc_swap.load());
 /// // It can be read multiple times
-/// assert_eq!(42, *arc_swap.load());
+/// assert_eq!(42, **arc_swap.load());
 ///
 /// // Put a new one in there
 /// let new_arc = Arc::new(0);
 /// assert_eq!(42, *arc_swap.swap(new_arc));
-/// assert_eq!(0, *arc_swap.load());
+/// assert_eq!(0, **arc_swap.load());
 /// ```
 ///
 /// [`Arc`]: https://doc.rust-lang.org/std/sync/struct.Arc.html
@@ -668,7 +668,7 @@ impl<T: RefCnt, S: LockStorage> Drop for ArcSwapAny<T, S> {
 
 impl<T: RefCnt, S: LockStorage> Clone for ArcSwapAny<T, S> {
     fn clone(&self) -> Self {
-        Self::from(self.load())
+        Self::from(self.load_full())
     }
 }
 
@@ -677,7 +677,7 @@ where
     T: Debug + RefCnt,
 {
     fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
-        Debug::fmt(&self.lease(), formatter)
+        Debug::fmt(&self.load(), formatter)
     }
 }
 
@@ -686,7 +686,7 @@ where
     T: Display + RefCnt,
 {
     fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
-        self.lease().fmt(formatter)
+        self.load().fmt(formatter)
     }
 }
 
@@ -707,22 +707,21 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
 
     /// Loads the value.
     ///
-    /// This makes another copy (reference) and returns it, atomically (it is safe even when other
-    /// thread stores into the same instance at the same time).
+    /// This makes another copy (reference) of the held pointer and returns it, atomically (it is
+    /// safe even when other thread stores into the same instance at the same time).
     ///
     /// The method is lock-free and wait-free, but usually more expensive than
-    /// [`lease`](#method.lease).
+    /// [`load`](#method.load).
     ///
     /// # Signal safety
     ///
-    /// The method is *not* async-signal-safe. Use [`peek_signal_safe`](#method.peek_signal_safe)
+    /// The method is *not* async-signal-safe. Use [`load_signal_safe`](#method.load_signal_safe)
     /// for that.
-    pub fn load(&self) -> T {
-        // XXX Do we want to get rid of peek?
-        Guard::into_inner(self.peek())
+    pub fn load_full(&self) -> T {
+        Guard::into_inner(self.load())
     }
 
-    fn peek_inner(&self, signal_safe: SignalSafety) -> Guard<'_, T> {
+    fn lock_internal(&self, signal_safe: SignalSafety) -> Guard<'_, T> {
         let gen = GenLock::new(signal_safe, &self.lock_storage);
         let ptr = self.ptr.load(Ordering::Acquire);
         let inner = ManuallyDrop::new(unsafe { T::from_ptr(ptr) });
@@ -736,8 +735,8 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// Provides a peek inside the held value.
     ///
     /// This returns a temporary borrow of the object currently held inside. This is slightly
-    /// faster than [`load`](#method.load) or [`lease`](#method.lease), but it is not suitable for
-    /// holding onto for longer periods of time.
+    /// faster than [`load_full`](#method.load_full) or [`lease`](#method.lease), but it is not
+    /// suitable for holding onto for longer periods of time.
     ///
     /// If you discover later on that you need to hold onto it for longer, you can
     /// [`Guard::upgrade`](struct.Guard.html#method.upgrade) it.
@@ -756,9 +755,10 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     ///
     /// # Signal safety
     ///
-    /// For an async-signal-safe version, use [`peek_signal_safe`](#method.peek_signal_safe).
+    /// For an async-signal-safe version, use [`load_signal_safe`](#method.load_signal_safe).
+    // XXX Remove this one
     pub fn peek(&self) -> Guard<'_, T> {
-        self.peek_inner(SignalSafety::Unsafe)
+        self.lock_internal(SignalSafety::Unsafe)
     }
 
     /// An async-signal-safe version of [`peek`](#method.peek)
@@ -773,12 +773,12 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     ///
     /// The same performance warning about writer methods of [`peek`](#method.peek) applies, so it
     /// is recommended not to spend too much time holding the returned guard.
-    pub fn peek_signal_safe(&self) -> Guard<'_, T> {
-        self.peek_inner(SignalSafety::Safe)
+    pub fn load_signal_safe(&self) -> Guard<'_, T> {
+        self.lock_internal(SignalSafety::Safe)
     }
 
     #[inline]
-    fn lease_fallible(&self) -> Option<Guard<'static, T>> {
+    fn load_fallible(&self) -> Option<Guard<'static, T>> {
         // Relaxed is good enough here, see the Acquire below
         let ptr = self.ptr.load(Ordering::Relaxed);
         // Try to get a debt slot. If not possible, fail.
@@ -806,15 +806,15 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// This returns a proxy object allowing access to the thing held inside and it is *usually*
     /// as fast as [`peek`](#method.peek). However, there's only limited amount of possible cheap
     /// proxies in existence for each thread ‒ if more are created, it falls back to
-    /// [`load`](#method.load) internally.
+    /// [`load_full`](#method.load_full) internally.
     ///
     /// This is therefore a good choice to use for eg. searching a data structure or juggling the
     /// pointers around a bit, but not as something to store in larger amounts. The rule of thumb
     /// is this is suited for local variables on stack, but not in structures.
     #[allow(deprecated)] // Allow Guard::lease internally
     #[inline]
-    pub fn lease(&self) -> Guard<'static, T> {
-        self.lease_fallible()
+    pub fn load(&self) -> Guard<'static, T> {
+        self.load_fallible()
             .unwrap_or_else(|| Guard::unprotected(self.peek()))
     }
 
@@ -828,11 +828,12 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// Exchanges the value inside this instance.
     ///
     /// While multiple `swap`s can run concurrently and won't block each other, each one needs to
-    /// wait for all the [`load`s](#method.load) and [`peek` Guards](#method.peek) that have seen
-    /// the old value to finish before returning. This is in a way similar to locking ‒ a living
-    /// [`Guard`](struct.Guard.html) can prevent this from finishing. However, unlike `RwLock`, a
-    /// steady stream of readers will not block writers and if each guard is held only for a short
-    /// period of time, writers will progress too.
+    /// wait for all the [`load_full`s](#method.load_full) and [`load_signal_safe`
+    /// Guards](#method.load_signal_safe) that have seen the old value to finish before returning.
+    /// This is in a way similar to locking ‒ a living [`Guard`](struct.Guard.html) can prevent
+    /// this from finishing. However, unlike `RwLock`, a steady stream of readers will not block
+    /// writers and if each guard is held only for a short period of time, writers will progress
+    /// too.
     ///
     /// However, it is also possible to cause a deadlock (eg. this is an example of *broken* code):
     ///
@@ -867,8 +868,8 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// comparison to determine it (like `Arc::ptr_eq`).
     ///
     /// In other words, if the caller „guesses“ the value of current correctly, it acts like
-    /// [`swap`](#method.swap), otherwise it acts like [`load`](#method.load) (including the
-    /// limitations).
+    /// [`swap`](#method.swap), otherwise it acts like [`load_full`](#method.load_full) (including
+    /// the limitations).
     ///
     /// The `current` can be specified as `&Arc`, [`Guard`](struct.Guard.html),
     /// [`&Guards`](struct.Guards.html) or as a raw pointer.
@@ -970,8 +971,8 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// Read-Copy-Update of the pointer inside.
     ///
     /// This is useful in read-heavy situations with several threads that sometimes update the data
-    /// pointed to. The readers can just repeatedly use [`load`](#method.load) without any locking.
-    /// The writer uses this method to perform the update.
+    /// pointed to. The readers can just repeatedly use [`load_full`](#method.load_full) without
+    /// any locking.  The writer uses this method to perform the update.
     ///
     /// In case there's only one thread that does updates or in case the next version is
     /// independent of the previous one, simple [`swap`](#method.swap) or [`store`](#method.store)
@@ -997,7 +998,7 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     ///     thread::scope(|scope| {
     ///         for _ in 0..10 {
     ///             scope.spawn(|_| {
-    ///                 let inner = cnt.load();
+    ///                 let inner = cnt.load_full();
     ///                 // Another thread might have stored some other number than what we have
     ///                 // between the load and store.
     ///                 cnt.store(Arc::new(*inner + 1));
@@ -1005,7 +1006,7 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     ///         }
     ///     }).unwrap();
     ///     // This will likely fail:
-    ///     // assert_eq!(10, *cnt.load());
+    ///     // assert_eq!(10, *cnt.load_full());
     /// }
     /// ```
     ///
@@ -1027,7 +1028,7 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     ///             scope.spawn(|_| cnt.rcu(|inner| **inner + 1));
     ///         }
     ///     }).unwrap();
-    ///     assert_eq!(10, *cnt.load());
+    ///     assert_eq!(10, *cnt.load_full());
     /// }
     /// ```
     ///
@@ -1092,7 +1093,7 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
         F: FnMut(&T) -> R,
         R: Into<T>,
     {
-        let mut cur = self.lease();
+        let mut cur = self.load();
         loop {
             let new = f(&cur).into();
             let prev = self.compare_and_swap(&cur, new);
@@ -1168,7 +1169,7 @@ impl<T, S: LockStorage> ArcSwapAny<Option<Arc<T>>, S> {
     /// let empty: ArcSwapOption<usize> = ArcSwapOption::from_pointee(None);
     /// assert!(empty.load().is_none());
     /// let non_empty: ArcSwapOption<usize> = ArcSwapOption::from_pointee(42);
-    /// assert_eq!(42, *non_empty.load().unwrap());
+    /// assert_eq!(42, **non_empty.load().as_ref().unwrap());
     /// ```
     pub fn from_pointee<V: Into<Option<T>>>(val: V) -> Self {
         Self::new(val.into().map(Arc::new))
@@ -1204,9 +1205,9 @@ impl<T: RefCnt + Default, S: LockStorage> Default for ArcSwapAny<T, S> {
 /// use arc_swap::ArcSwapOption;
 ///
 /// let shared = ArcSwapOption::from(None);
-/// assert!(shared.load().is_none());
+/// assert!(shared.load_full().is_none());
 /// assert!(shared.swap(Some(Arc::new(42))).is_none());
-/// assert_eq!(42, *shared.load().unwrap());
+/// assert_eq!(42, **shared.load_full().as_ref().unwrap());
 /// ```
 pub type ArcSwapOption<T> = ArcSwapAny<Option<Arc<T>>>;
 
@@ -1258,7 +1259,7 @@ mod tests {
             thread::scope(|scope| {
                 for _ in 0..20 {
                     scope.spawn(|_| loop {
-                        let cfg = config.load();
+                        let cfg = config.load_full();
                         if !cfg.is_empty() {
                             assert_eq!(*cfg, "New configuration");
                             ended.fetch_add(1, Ordering::Relaxed);
@@ -1274,8 +1275,9 @@ mod tests {
             })
             .unwrap();
             assert_eq!(20, ended.load(Ordering::Relaxed));
-            assert_eq!(2, Arc::strong_count(&config.load()));
-            assert_eq!(0, Arc::weak_count(&config.load()));
+            let arc = config.load_full();
+            assert_eq!(2, Arc::strong_count(&arc));
+            assert_eq!(0, Arc::weak_count(&arc));
         }
     }
 
@@ -1285,17 +1287,18 @@ mod tests {
         for _ in 0..100 {
             let arc = Arc::new(42);
             let arc_swap = ArcSwap::from(Arc::clone(&arc));
-            assert_eq!(42, *arc_swap.load());
+            assert_eq!(42, **arc_swap.load());
             // It can be read multiple times
-            assert_eq!(42, *arc_swap.load());
+            assert_eq!(42, **arc_swap.load());
 
             // Put a new one in there
             let new_arc = Arc::new(0);
             assert_eq!(42, *arc_swap.swap(Arc::clone(&new_arc)));
-            assert_eq!(0, *arc_swap.load());
+            assert_eq!(0, **arc_swap.load());
             // One loaded here, one in the arc_swap, one in new_arc
-            assert_eq!(3, Arc::strong_count(&arc_swap.load()));
-            assert_eq!(0, Arc::weak_count(&arc_swap.load()));
+            let loaded = arc_swap.load_full();
+            assert_eq!(3, Arc::strong_count(&loaded));
+            assert_eq!(0, Arc::weak_count(&loaded));
             // The original got released from the arc_swap
             assert_eq!(1, Arc::strong_count(&arc));
             assert_eq!(0, Arc::weak_count(&arc));
@@ -1346,10 +1349,10 @@ mod tests {
                                 atomic::spin_loop_hint();
                                 continue;
                             }
-                            let (w, s) = *cur;
+                            let (w, s) = **cur;
                             assert!(previous[w] < s);
                             previous[w] = s;
-                            last = cur;
+                            last = Guard::into_inner(cur);
                             if s == SEQ {
                                 break;
                             }
@@ -1367,7 +1370,7 @@ mod tests {
         const ITERATIONS: usize = 50;
         let shared = ArcSwap::from(Arc::new(0));
         for i in 0..ITERATIONS {
-            let orig = shared.load();
+            let orig = shared.load_full();
             assert_eq!(i, *orig);
             if i % 2 == 1 {
                 // One for orig, one for shared
@@ -1377,16 +1380,16 @@ mod tests {
             // Fill up the slots sometimes
             let fillup = || {
                 if i % 2 == 0 {
-                    Some((0..50).map(|_| shared.lease()).collect::<Vec<_>>())
+                    Some((0..50).map(|_| shared.load()).collect::<Vec<_>>())
                 } else {
                     None
                 }
             };
-            let leases = fillup();
+            let guards = fillup();
             // Success
             let prev = shared.compare_and_swap(&orig, Arc::clone(&n1));
             assert!(ptr_eq(&orig, &prev));
-            drop(leases);
+            drop(guards);
             // One for orig, one for prev
             assert_eq!(2, Arc::strong_count(&orig));
             // One for n1, one for shared
@@ -1394,10 +1397,10 @@ mod tests {
             assert_eq!(i + 1, **shared.peek());
             let n2 = Arc::new(i);
             drop(prev);
-            let leases = fillup();
+            let guards = fillup();
             // Failure
             let prev = Guard::into_inner(shared.compare_and_swap(&orig, Arc::clone(&n2)));
-            drop(leases);
+            drop(guards);
             assert!(ptr_eq(&n1, &prev));
             // One for orig
             assert_eq!(1, Arc::strong_count(&orig));
@@ -1408,7 +1411,7 @@ mod tests {
             assert_eq!(i + 1, **shared.peek());
         }
 
-        let a = shared.load();
+        let a = shared.load_full();
         // One inside shared, one for a
         assert_eq!(2, Arc::strong_count(&a));
         drop(shared);
@@ -1432,7 +1435,7 @@ mod tests {
             }
         })
         .unwrap();
-        assert_eq!(THREADS * ITERATIONS, *shared.load());
+        assert_eq!(THREADS * ITERATIONS, **shared.load());
     }
 
     #[test]
@@ -1451,7 +1454,7 @@ mod tests {
             }
         })
         .unwrap();
-        assert_eq!(THREADS * ITERATIONS, *shared.load());
+        assert_eq!(THREADS * ITERATIONS, **shared.load());
     }
 
     /// Handling null/none values
@@ -1483,7 +1486,7 @@ mod tests {
             **i
         });
         assert_eq!(10, **shared.peek());
-        assert_eq!(2, Arc::strong_count(&shared.load()));
+        assert_eq!(2, Arc::strong_count(&shared.load_full()));
     }
 
     /// A panic from within the rcu callback should not change anything.
@@ -1496,37 +1499,37 @@ mod tests {
 
     /// Accessing the value inside ArcSwap with Guards (and checks for the reference counts).
     #[test]
-    fn lease_cnt() {
+    fn load_cnt() {
         let a = Arc::new(0);
         let shared = ArcSwap::from(Arc::clone(&a));
         // One in shared, one in a
         assert_eq!(2, Arc::strong_count(&a));
-        let lease = shared.lease();
-        assert_eq!(0, **lease);
-        // The lease doesn't have its own ref count now
+        let guard = shared.load();
+        assert_eq!(0, **guard);
+        // The guard doesn't have its own ref count now
         assert_eq!(2, Arc::strong_count(&a));
-        let lease_2 = shared.lease();
+        let guard_2 = shared.load();
         // Unlike with guard, this does not deadlock
         shared.store(Arc::new(1));
-        // But now, each lease got a full Arc inside it
+        // But now, each guard got a full Arc inside it
         assert_eq!(3, Arc::strong_count(&a));
         // And when we get rid of them, they disappear
-        drop(lease_2);
+        drop(guard_2);
         assert_eq!(2, Arc::strong_count(&a));
-        let _b = Arc::clone(&lease);
+        let _b = Arc::clone(&guard);
         assert_eq!(3, Arc::strong_count(&a));
-        // We can drop the lease it came from
-        drop(lease);
+        // We can drop the guard it came from
+        drop(guard);
         assert_eq!(2, Arc::strong_count(&a));
-        let lease = shared.lease();
-        assert_eq!(1, **lease);
+        let guard = shared.load();
+        assert_eq!(1, **guard);
         drop(shared);
-        // We can still use the lease after the shared disappears
-        assert_eq!(1, **lease);
-        let ptr = Arc::clone(&lease);
-        // One in shared, one in lease
+        // We can still use the guard after the shared disappears
+        assert_eq!(1, **guard);
+        let ptr = Arc::clone(&guard);
+        // One in shared, one in guard
         assert_eq!(2, Arc::strong_count(&ptr));
-        drop(lease);
+        drop(guard);
         assert_eq!(1, Arc::strong_count(&ptr));
     }
 
@@ -1537,38 +1540,38 @@ mod tests {
         let a = Arc::new(0);
         let shared = ArcSwap::from(Arc::clone(&a));
         assert_eq!(2, Arc::strong_count(&a));
-        let mut leases = (0..1000).map(|_| shared.lease()).collect::<Vec<_>>();
+        let mut guards = (0..1000).map(|_| shared.load()).collect::<Vec<_>>();
         let count = Arc::strong_count(&a);
         assert!(count > 2);
-        let lease = shared.lease();
+        let guard = shared.load();
         assert_eq!(count + 1, Arc::strong_count(&a));
-        drop(lease);
+        drop(guard);
         assert_eq!(count, Arc::strong_count(&a));
         // When we delete the first one, it didn't have an Arc in it, so the ref count doesn't drop
-        leases.swap_remove(0);
+        guards.swap_remove(0);
         // But new one reuses now vacant the slot and doesn't create a new Arc
-        let _lease = shared.lease();
+        let _guard = shared.load();
         assert_eq!(count, Arc::strong_count(&a));
     }
 
     #[test]
-    fn lease_null() {
+    fn load_null() {
         let shared = ArcSwapOption::<usize>::default();
-        let lease = shared.lease();
-        assert!(lease.is_none());
+        let guard = shared.load();
+        assert!(guard.is_none());
         shared.store(Some(Arc::new(42)));
-        assert_eq!(42, **shared.lease().as_ref().unwrap());
+        assert_eq!(42, **shared.load().as_ref().unwrap());
     }
 
     #[test]
     fn from_into() {
         let a = Arc::new(42);
         let shared = ArcSwap::new(a);
-        let lease = shared.lease();
+        let guard = shared.load();
         let a = shared.into_inner();
         assert_eq!(42, *a);
         assert_eq!(2, Arc::strong_count(&a));
-        drop(lease);
+        drop(guard);
         assert_eq!(1, Arc::strong_count(&a));
     }
 
@@ -1586,17 +1589,17 @@ mod tests {
 
     const ITERATIONS: usize = 50;
 
-    /// Interaction of two threads about a lease and dropping it.
+    /// Interaction of two threads about a guard and dropping it.
     ///
     /// We make sure everything works in timely manner (eg. dropping of stuff) even if multiple
     /// threads interact.
     ///
     /// The idea is:
-    /// * Thread 1 leases a value.
+    /// * Thread 1 loads a value.
     /// * Thread 2 replaces the shared value. The original value is not destroyed.
-    /// * Thread 1 drops the lease. The value is destroyed and this is observable in both threads.
+    /// * Thread 1 drops the guard. The value is destroyed and this is observable in both threads.
     #[test]
-    fn lease_drop_in_thread() {
+    fn guard_drop_in_thread() {
         for _ in 0..ITERATIONS {
             let cnt = Arc::new(AtomicUsize::new(0));
 
@@ -1607,24 +1610,24 @@ mod tests {
 
             thread::scope(|scope| {
                 scope.spawn(|_| {
-                    let lease = shared.lease();
+                    let guard = shared.load();
                     sync.wait();
                     // Thread 2 replaces the shared value. We wait for it to confirm.
                     sync.wait();
-                    drop(lease);
+                    drop(guard);
                     assert_eq!(cnt.load(Ordering::Relaxed), 1, "Value not dropped");
                     // Let thread 2 know we already dropped it.
                     sync.wait();
                 });
 
                 scope.spawn(|_| {
-                    // Thread 1 leases, we wait for that
+                    // Thread 1 loads, we wait for that
                     sync.wait();
                     shared.store(Default::default());
-                    assert_eq!(cnt.load(Ordering::Relaxed), 0, "Dropped while still leased");
+                    assert_eq!(cnt.load(Ordering::Relaxed), 0, "Dropped while still in use");
                     // Let thread 2 know we replaced it
                     sync.wait();
-                    // Thread 1 drops its lease. We wait for it to confirm.
+                    // Thread 1 drops its guard. We wait for it to confirm.
                     sync.wait();
                     assert_eq!(cnt.load(Ordering::Relaxed), 1, "Value not dropped");
                 });
@@ -1636,19 +1639,19 @@ mod tests {
     /// Check dropping a lease in a different thread than it was created doesn't cause any
     /// problems.
     #[test]
-    fn lease_drop_in_another_thread() {
+    fn guard_drop_in_another_thread() {
         for _ in 0..ITERATIONS {
             let cnt = Arc::new(AtomicUsize::new(0));
             let shared = ArcSwap::from_pointee(ReportDrop(cnt.clone()));
             assert_eq!(cnt.load(Ordering::Relaxed), 0, "Dropped prematurely");
-            let lease = shared.lease();
+            let guard = shared.load();
 
             drop(shared);
             assert_eq!(cnt.load(Ordering::Relaxed), 0, "Dropped prematurely");
 
             thread::scope(|scope| {
                 scope.spawn(|_| {
-                    drop(lease);
+                    drop(guard);
                 });
             })
             .unwrap();
@@ -1659,12 +1662,12 @@ mod tests {
 
     /// Similar, but for peek guard.
     #[test]
-    fn guard_drop_in_another_thread() {
+    fn signal_drop_in_another_thread() {
         for _ in 0..ITERATIONS {
             let cnt = Arc::new(AtomicUsize::new(0));
             let shared = ArcSwap::from_pointee(ReportDrop(cnt.clone()));
             assert_eq!(cnt.load(Ordering::Relaxed), 0, "Dropped prematurely");
-            let guard = shared.peek();
+            let guard = shared.load_signal_safe();
 
             // We can't drop here, sorry. Or, not even replace, as that would deadlock.
 
@@ -1682,14 +1685,14 @@ mod tests {
     }
 
     #[test]
-    fn lease_option() {
+    fn load_option() {
         let shared = ArcSwapOption::from_pointee(42);
         // The type here is not needed in real code, it's just addition test the type matches.
-        let opt: Option<_> = Guard::into_inner(shared.lease());
+        let opt: Option<_> = Guard::into_inner(shared.load());
         assert_eq!(42, *opt.unwrap());
 
         shared.store(None);
-        assert!(shared.lease().is_none());
+        assert!(shared.load().is_none());
     }
 
     // The following "tests" are not run, only compiled. They check that things that should be
@@ -1698,12 +1701,12 @@ mod tests {
         let shared = ArcSwap::from_pointee(42);
         let moved = ArcSwap::from_pointee(42);
         let shared_ref = &shared;
-        let lease = shared.lease();
+        let lease = shared.load();
         let lease_ref = &lease;
-        let lease = shared.lease();
-        let guard = shared.peek();
+        let lease = shared.load();
+        let guard = shared.load_signal_safe();
         let guard_ref = &guard;
-        let guard = shared.peek();
+        let guard = shared.load_signal_safe();
         thread::scope(|s| {
             s.spawn(move |_| {
                 let _ = guard;

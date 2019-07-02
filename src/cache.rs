@@ -79,7 +79,7 @@ where
     /// [`ArcSwapOption`]: ::ArcSwapOption
     /// [`ArcSwap`]: ::ArcSwap
     pub fn new(arc_swap: A) -> Self {
-        let cached = arc_swap.load();
+        let cached = arc_swap.load_full();
         Self { arc_swap, cached }
     }
 
@@ -111,7 +111,7 @@ where
         let cached_ptr = RefCnt::as_ptr(&self.cached);
         let shared_ptr = self.arc_swap.ptr.load(Ordering::Relaxed);
         if cached_ptr != shared_ptr {
-            self.cached = self.arc_swap.load();
+            self.cached = self.arc_swap.load_full();
         }
     }
 }
