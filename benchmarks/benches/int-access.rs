@@ -124,19 +124,13 @@ fn main() {
     test_round(
         "arc-load-store",
         100_000,
-        || *arc.load(),
-        |i| arc.store(Arc::new(i)),
-    );
-    test_round(
-        "arc-peek-store",
-        100_000,
-        || *arc.peek(),
+        || **arc.load(),
         |i| arc.store(Arc::new(i)),
     );
     test_round(
         "arc-rcu",
         100_000,
-        || *arc.load(),
+        || *arc.load_full(),
         |i| {
             arc.rcu(|_| Arc::new(i));
         },
@@ -144,7 +138,7 @@ fn main() {
     test_round(
         "arc-rcu-unwrap",
         100_000,
-        || *arc.load(),
+        || **arc.load(),
         |i| {
             arc.rcu_unwrap(|_| i);
         },

@@ -118,13 +118,6 @@ macro_rules! noise {
                         }
                     });
                 }
-                for _ in 0..peekers {
-                    s.spawn(|_| {
-                        while flag.load(Ordering::Relaxed) {
-                            peek();
-                        }
-                    });
-                }
                 for _ in 0..leasers {
                     s.spawn(|_| {
                         while flag.load(Ordering::Relaxed) {
@@ -154,32 +147,26 @@ mod arc_swap_b {
         static ref A: ArcSwap<usize> = ArcSwap::from(Arc::new(0));
     }
 
-    fn peek() {
-        for _ in 0..ITERS {
-            test::black_box(*A.peek());
-        }
-    }
-
     fn lease() {
         for _ in 0..ITERS {
-            test::black_box(**A.lease());
+            test::black_box(**A.load());
         }
     }
 
     // Leases kind of degrade in performance if there are multiple on the same thread.
     fn four_leases() {
         for _ in 0..ITERS {
-            let l1 = A.lease();
-            let l2 = A.lease();
-            let l3 = A.lease();
-            let l4 = A.lease();
+            let l1 = A.load();
+            let l2 = A.load();
+            let l3 = A.load();
+            let l4 = A.load();
             test::black_box((**l1, **l2, **l3, **l4));
         }
     }
 
     fn read() {
         for _ in 0..ITERS {
-            test::black_box(A.load());
+            test::black_box(A.load_full());
         }
     }
 
@@ -191,7 +178,6 @@ mod arc_swap_b {
 
     noise!();
 
-    method!(peek);
     method!(read);
     method!(write);
     method!(lease);
@@ -205,21 +191,15 @@ mod arc_swap_option {
         static ref A: ArcSwapOption<usize> = ArcSwapOption::from(None);
     }
 
-    fn peek() {
-        for _ in 0..ITERS {
-            test::black_box(*Guard::get_ref(&A.peek()).unwrap_or(&0));
-        }
-    }
-
     fn lease() {
         for _ in 0..ITERS {
-            test::black_box(A.lease().as_ref().map(|l| **l).unwrap_or(0));
+            test::black_box(A.load().as_ref().map(|l| **l).unwrap_or(0));
         }
     }
 
     fn read() {
         for _ in 0..ITERS {
-            test::black_box(A.load().map(|a| -> usize { *a }).unwrap_or(0));
+            test::black_box(A.load_full().map(|a| -> usize { *a }).unwrap_or(0));
         }
     }
 
@@ -231,7 +211,6 @@ mod arc_swap_option {
 
     noise!();
 
-    method!(peek);
     method!(read);
     method!(write);
     method!(lease);
@@ -244,13 +223,6 @@ mod arc_swap_cached {
         static ref A: ArcSwap<usize> = ArcSwap::from_pointee(0);
     }
 
-    fn peek() {
-        let mut cache = Cache::from(&A as &ArcSwap<usize>);
-        for _ in 0..ITERS {
-            test::black_box(**cache.load());
-        }
-    }
-
     fn read() {
         let mut cache = Cache::from(&A as &ArcSwap<usize>);
         for _ in 0..ITERS {
@@ -260,7 +232,7 @@ mod arc_swap_cached {
 
     fn lease() {
         for _ in 0..ITERS {
-            test::black_box(**A.lease());
+            test::black_box(**A.load());
         }
     }
 
@@ -272,7 +244,6 @@ mod arc_swap_cached {
 
     noise!();
 
-    method!(peek);
     method!(read);
     method!(write);
 }
@@ -280,12 +251,6 @@ mod arc_swap_cached {
 mod mutex {
     lazy_static! {
         static ref M: Mutex<Arc<usize>> = Mutex::new(Arc::new(0));
-    }
-
-    fn peek() {
-        for _ in 0..ITERS {
-            test::black_box(**M.lock().unwrap());
-        }
     }
 
     fn lease() {
@@ -308,7 +273,6 @@ mod mutex {
 
     noise!();
 
-    method!(peek);
     method!(read);
     method!(write);
 }
@@ -318,12 +282,6 @@ mod parking_mutex {
 
     lazy_static! {
         static ref M: ParkingMutex<Arc<usize>> = ParkingMutex::new(Arc::new(0));
-    }
-
-    fn peek() {
-        for _ in 0..ITERS {
-            test::black_box(**M.lock());
-        }
     }
 
     fn lease() {
@@ -346,7 +304,6 @@ mod parking_mutex {
 
     noise!();
 
-    method!(peek);
     method!(read);
     method!(write);
 }
@@ -356,12 +313,6 @@ mod rwlock {
 
     lazy_static! {
         static ref L: RwLock<Arc<usize>> = RwLock::new(Arc::new(0));
-    }
-
-    fn peek() {
-        for _ in 0..ITERS {
-            test::black_box(**L.read().unwrap());
-        }
     }
 
     fn lease() {
@@ -384,7 +335,6 @@ mod rwlock {
 
     noise!();
 
-    method!(peek);
     method!(read);
     method!(write);
 }
@@ -394,12 +344,6 @@ mod parking_rwlock {
 
     lazy_static! {
         static ref L: RwLock<Arc<usize>> = RwLock::new(Arc::new(0));
-    }
-
-    fn peek() {
-        for _ in 0..ITERS {
-            test::black_box(**L.read());
-        }
     }
 
     fn lease() {
@@ -422,7 +366,6 @@ mod parking_rwlock {
 
     noise!();
 
-    method!(peek);
     method!(read);
     method!(write);
 }
@@ -432,12 +375,6 @@ mod arc_cell {
 
     lazy_static! {
         static ref A: ArcCell<usize> = ArcCell::new(Arc::new(0));
-    }
-
-    fn peek() {
-        for _ in 0..ITERS {
-            test::black_box(*A.get());
-        }
     }
 
     fn lease() {
