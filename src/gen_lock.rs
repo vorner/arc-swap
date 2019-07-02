@@ -178,7 +178,7 @@ unsafe impl LockStorage for Global {
 /// let independent = ArcSwapAny::<Arc<usize>, PrivateUnsharded>::from_pointee(42);
 ///
 /// // This'll hold a lock so any writers there wouldn't complete
-/// let l = independent.peek();
+/// let l = independent.load_signal_safe();
 /// // But the lock doesn't influence the shared one, so this goes through just fine
 /// shared.store(Arc::new(43));
 ///
@@ -270,7 +270,7 @@ mod tests {
 
     use self::crossbeam_utils::thread;
 
-    use super::super::ArcSwapAny;
+    use super::super::{ArcSwapAny, SignalSafety};
     use super::*;
 
     const ITERATIONS: usize = 100;
@@ -285,7 +285,7 @@ mod tests {
                     scope.spawn(move |_| {
                         for j in 0..50 {
                             if j % 2 == i {
-                                while **shared.peek() != j {}
+                                while **shared.lock_internal(SignalSafety::Unsafe) != j {}
                             } else {
                                 shared.store(Arc::new(j));
                             }

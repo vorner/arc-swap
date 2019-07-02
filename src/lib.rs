@@ -732,6 +732,9 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
         }
     }
 
+    /* XXX
+     *
+     * Remove once the docs is merged with load_signal_safe.
     /// Provides a peek inside the held value.
     ///
     /// This returns a temporary borrow of the object currently held inside. This is slightly
@@ -760,7 +763,7 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     pub fn peek(&self) -> Guard<'_, T> {
         self.lock_internal(SignalSafety::Unsafe)
     }
-
+    */
     /// An async-signal-safe version of [`peek`](#method.peek)
     ///
     /// This method uses only restricted set of primitives to be async-signal-safe, at a slight
@@ -815,7 +818,7 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     #[inline]
     pub fn load(&self) -> Guard<'static, T> {
         self.load_fallible()
-            .unwrap_or_else(|| Guard::unprotected(self.peek()))
+            .unwrap_or_else(|| Guard::unprotected(self.lock_internal(SignalSafety::Unsafe)))
     }
 
     /// Replaces the value inside this instance.
@@ -841,7 +844,7 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// # use std::sync::Arc;
     /// # use arc_swap::ArcSwap;
     /// let shared = ArcSwap::from(Arc::new(42));
-    /// let guard = shared.peek();
+    /// let guard = shared.load();
     /// // This will deadlock, because the guard is still active here and swap
     /// // can't pull the value from under its feet.
     /// shared.swap(Arc::new(0));
@@ -1226,7 +1229,7 @@ pub type ArcSwapOption<T> = ArcSwapAny<Option<Arc<T>>>;
 /// let independent = IndependentArcSwap::from_pointee(42);
 ///
 /// // This'll hold a lock so any writers there wouldn't complete
-/// let l = independent.peek();
+/// let l = independent.load_signal_safe();
 /// // But the lock doesn't influence the shared one, so this goes through just fine
 /// shared.store(Arc::new(43));
 ///
@@ -1394,7 +1397,7 @@ mod tests {
             assert_eq!(2, Arc::strong_count(&orig));
             // One for n1, one for shared
             assert_eq!(2, Arc::strong_count(&n1));
-            assert_eq!(i + 1, **shared.peek());
+            assert_eq!(i + 1, **shared.load());
             let n2 = Arc::new(i);
             drop(prev);
             let guards = fillup();
@@ -1408,7 +1411,7 @@ mod tests {
             assert_eq!(3, Arc::strong_count(&n1));
             // n2 didn't get increased
             assert_eq!(1, Arc::strong_count(&n2));
-            assert_eq!(i + 1, **shared.peek());
+            assert_eq!(i + 1, **shared.load());
         }
 
         let a = shared.load_full();
@@ -1485,7 +1488,7 @@ mod tests {
             }
             **i
         });
-        assert_eq!(10, **shared.peek());
+        assert_eq!(10, **shared.load());
         assert_eq!(2, Arc::strong_count(&shared.load_full()));
     }
 
