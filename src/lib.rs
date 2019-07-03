@@ -472,7 +472,7 @@ pub struct Guard<'l, T: RefCnt> {
     protection: Protection<'l>,
 }
 
-impl<T: RefCnt> Guard<'_, T> {
+impl<'a, T: RefCnt> Guard<'a, T> {
     fn unprotected(mut lease: Self) -> Guard<'static, T> {
         match mem::replace(&mut lease.protection, Protection::Unprotected) {
             // Not protected, nothing to unprotect.
@@ -518,26 +518,26 @@ impl<T: RefCnt> Guard<'_, T> {
     }
 }
 
-impl<T: RefCnt> Deref for Guard<'_, T> {
+impl<'a, T: RefCnt> Deref for Guard<'a, T> {
     type Target = T;
     fn deref(&self) -> &T {
         self.inner.deref()
     }
 }
 
-impl<T: Debug + RefCnt> Debug for Guard<'_, T> {
+impl<'a, T: Debug + RefCnt> Debug for Guard<'a, T> {
     fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
         self.deref().fmt(formatter)
     }
 }
 
-impl<T: Debug + RefCnt> Display for Guard<'_, T> {
+impl<'a, T: Debug + RefCnt> Display for Guard<'a, T> {
     fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
         self.deref().fmt(formatter)
     }
 }
 
-impl<T: RefCnt> Drop for Guard<'_, T> {
+impl<'a, T: RefCnt> Drop for Guard<'a, T> {
     fn drop(&mut self) {
         let ptr = T::as_ptr(&self.inner);
         match mem::replace(&mut self.protection, Protection::Unprotected) {
