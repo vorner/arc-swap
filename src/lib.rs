@@ -253,7 +253,7 @@
 //! [`AtomicArc`]: https://github.com/stjepang/atomic/blob/master/src/atomic_arc.rs#L20
 
 mod as_raw;
-pub mod cache;
+mod cache;
 mod compile_fail_tests;
 mod debt;
 pub mod gen_lock;
@@ -270,10 +270,11 @@ use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 
-pub use as_raw::AsRaw;
+use as_raw::AsRaw;
+pub use cache::Cache;
 use debt::Debt;
 use gen_lock::{Global, LockStorage, PrivateUnsharded, GEN_CNT};
-pub use ref_cnt::{NonNull, RefCnt};
+pub use ref_cnt::RefCnt;
 
 // # Implementation details
 //
@@ -419,14 +420,13 @@ impl<'a> GenLock<'a> {
         let gen = lock_storage.gen_idx().load(Ordering::Relaxed) % GEN_CNT;
         // SeqCst: Acquire, so the dangerous section stays in. SeqCst to sync timelines with the
         // swap on the ptr in writer thread.
-        let old = lock_storage.shards().as_ref()[shard].0[gen].fetch_add(1, Ordering::SeqCst);
+        let slot = &lock_storage.shards().as_ref()[shard].0[gen];
+        let old = slot.fetch_add(1, Ordering::SeqCst);
         // The trick is taken from Arc.
         if old > MAX_GUARDS {
             process::abort();
         }
-        GenLock {
-            slot: &lock_storage.shards().as_ref()[shard].0[gen],
-        }
+        GenLock { slot }
     }
 
     /// Removes a generation lock.
@@ -446,9 +446,15 @@ impl<'a> Drop for GenLock<'a> {
     }
 }
 
+/// How the [Guard] content is protected.
 enum Protection<'l> {
+    /// The [Guard] contains independent value and doesn't have to be protected in any way.
     Unprotected,
+
+    /// One ref-count is owed in the given debt and needs to be paid on release of the [Guard].
     Debt(&'static Debt),
+
+    /// It is locked by a generation lock, needs to be unlocked.
     Lock(GenLock<'l>),
 }
 
@@ -473,6 +479,10 @@ pub struct Guard<'l, T: RefCnt> {
 }
 
 impl<'a, T: RefCnt> Guard<'a, T> {
+    /// Turns the given guard into an unprotected, independent one.
+    ///
+    /// It'll not hold any locks, will have no debts and will contain full-featured value inside
+    /// that even can outlive the ArcSwap it originated from.
     fn unprotected(mut lease: Self) -> Guard<'static, T> {
         match mem::replace(&mut lease.protection, Protection::Unprotected) {
             // Not protected, nothing to unprotect.
@@ -487,6 +497,7 @@ impl<'a, T: RefCnt> Guard<'a, T> {
                     unsafe { T::dec(ptr) };
                 }
             }
+            // If we had a lock, we first need to create our own copy, then unlock.
             Protection::Lock(lock) => {
                 T::inc(&lease.inner);
                 lock.unlock();
@@ -539,7 +550,6 @@ impl<'a, T: Debug + RefCnt> Display for Guard<'a, T> {
 
 impl<'a, T: RefCnt> Drop for Guard<'a, T> {
     fn drop(&mut self) {
-        let ptr = T::as_ptr(&self.inner);
         match mem::replace(&mut self.protection, Protection::Unprotected) {
             // We have our own copy of Arc, so we don't need a protection. Do nothing (but release
             // the Arc below).
@@ -547,9 +557,12 @@ impl<'a, T: RefCnt> Drop for Guard<'a, T> {
             // If we owed something, just return the debt. We don't have a pointer owned, so
             // nothing to release.
             Protection::Debt(debt) => {
+                let ptr = T::as_ptr(&self.inner);
                 if debt.pay::<T>(ptr) {
                     return;
                 }
+                // But if the debt was already paid for us, we need to release the pointer, as we
+                // were effectively already in the Unprotected mode.
             }
             // Similarly, we don't have anything owned, we just unlock and be done with it.
             Protection::Lock(lock) => {
@@ -557,7 +570,8 @@ impl<'a, T: RefCnt> Drop for Guard<'a, T> {
                 return;
             }
         }
-        unsafe { T::dec(ptr) };
+        // Equivalent to T::dec(ptr)
+        unsafe { ManuallyDrop::drop(&mut self.inner) };
     }
 }
 
@@ -565,7 +579,7 @@ impl<'a, T: RefCnt> Drop for Guard<'a, T> {
 // A and B are likely to *be* references, or thin wrappers around that. Calling that with extra
 // reference is just annoying.
 #[cfg_attr(feature = "cargo-clippy", allow(needless_pass_by_value))]
-pub fn ptr_eq<Base, A, B>(a: A, b: B) -> bool
+fn ptr_eq<Base, A, B>(a: A, b: B) -> bool
 where
     A: AsRaw<Base>,
     B: AsRaw<Base>,
@@ -678,7 +692,10 @@ where
     T: Debug + RefCnt,
 {
     fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
-        Debug::fmt(&self.load(), formatter)
+        formatter
+            .debug_tuple("ArcSwapAny")
+            .field(&self.load())
+            .finish()
     }
 }
 
@@ -791,13 +808,18 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
         let confirm = self.ptr.load(Ordering::Acquire);
         let inner = ManuallyDrop::new(unsafe { T::from_ptr(ptr) });
         if ptr == confirm {
+            // Successfully got a debt
             Some(Guard {
                 inner,
                 protection: Protection::Debt(debt),
             })
         } else if debt.pay::<T>(ptr) {
+            // It changed in the meantime, we return the debt (that is on the outdated pointer,
+            // possibly destroyed) and fail.
             None
         } else {
+            // It changed in the meantime, but the debt for the previous pointer was already paid
+            // for by someone else, so we are fine using it.
             Some(Guard {
                 inner,
                 protection: Protection::Unprotected,
@@ -1697,6 +1719,21 @@ mod tests {
 
         shared.store(None);
         assert!(shared.load().is_none());
+    }
+
+    // Check stuff can get formatted
+    #[test]
+    fn debug_impl() {
+        let shared = ArcSwap::from_pointee(42);
+        assert_eq!("ArcSwapAny(42)", &format!("{:?}", shared));
+        assert_eq!("42", &format!("{:?}", shared.load()));
+    }
+
+    #[test]
+    fn display_impl() {
+        let shared = ArcSwap::from_pointee(42);
+        assert_eq!("42", &format!("{}", shared));
+        assert_eq!("42", &format!("{}", shared.load()));
     }
 
     // The following "tests" are not run, only compiled. They check that things that should be

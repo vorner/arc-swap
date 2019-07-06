@@ -63,17 +63,7 @@ pub unsafe trait RefCnt: Clone {
     unsafe fn dec(ptr: *const Self::Base) {
         drop(Self::from_ptr(ptr));
     }
-
-    /// Describes if the raw pointer can ever be null.
-    ///
-    /// Things like `Arc` are never null and can safely return false here. This is used only for
-    /// better formatting ‒ lying here won't cause an UB, but can cause uglier debug output or
-    /// panic inside debug formatting.
-    fn can_null() -> bool;
 }
-
-/// A trait describing smart pointers that can't hold NULL.
-pub unsafe trait NonNull: RefCnt {}
 
 unsafe impl<T> RefCnt for Arc<T> {
     type Base = T;
@@ -86,12 +76,9 @@ unsafe impl<T> RefCnt for Arc<T> {
     unsafe fn from_ptr(ptr: *const T) -> Arc<T> {
         Arc::from_raw(ptr)
     }
-    fn can_null() -> bool {
-        false
-    }
 }
 
-unsafe impl<T: NonNull> RefCnt for Option<T> {
+unsafe impl<T: RefCnt> RefCnt for Option<T> {
     type Base = T::Base;
     fn into_ptr(me: Option<T>) -> *mut T::Base {
         me.map(T::into_ptr).unwrap_or_else(ptr::null_mut)
@@ -106,9 +93,4 @@ unsafe impl<T: NonNull> RefCnt for Option<T> {
             Some(T::from_ptr(ptr))
         }
     }
-    fn can_null() -> bool {
-        true
-    }
 }
-
-unsafe impl<T> NonNull for Arc<T> {}

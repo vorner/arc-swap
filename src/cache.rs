@@ -37,8 +37,7 @@ use super::ArcSwapAny;
 /// # fn do_something<V>(_v: V) { }
 /// use std::sync::Arc;
 ///
-/// use arc_swap::ArcSwap;
-/// use arc_swap::cache::Cache;
+/// use arc_swap::{ArcSwap, Cache};
 ///
 /// let shared = Arc::new(ArcSwap::from_pointee(42));
 /// // Start 10 worker threads...

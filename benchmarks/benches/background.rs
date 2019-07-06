@@ -11,8 +11,7 @@ extern crate test;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use arc_swap::cache::Cache;
-use arc_swap::{ArcSwap, ArcSwapOption, Guard};
+use arc_swap::{ArcSwap, ArcSwapOption, Cache, Guard};
 use crossbeam_utils::thread;
 use test::Bencher;
 

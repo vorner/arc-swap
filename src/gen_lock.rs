@@ -75,7 +75,7 @@ pub unsafe trait LockStorage: Default {
     /// Access to the generation index.
     ///
     /// Must return the same instance of the `AtomicUsize` for the lifetime of the storage, must
-    /// start at `0` and the trait itself must not modify it.
+    /// start at `0` and the trait itself must not modify it. Must be async-signal-safe.
     fn gen_idx(&self) -> &AtomicUsize;
 
     /// Access to the shards storage.
