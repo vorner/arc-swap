@@ -1,4 +1,5 @@
 use std::ptr;
+use std::rc::Rc;
 use std::sync::Arc;
 
 /// A trait describing smart reference counted pointers.
@@ -75,6 +76,19 @@ unsafe impl<T> RefCnt for Arc<T> {
     }
     unsafe fn from_ptr(ptr: *const T) -> Arc<T> {
         Arc::from_raw(ptr)
+    }
+}
+
+unsafe impl<T> RefCnt for Rc<T> {
+    type Base = T;
+    fn into_ptr(me: Rc<T>) -> *mut T {
+        Rc::into_raw(me) as *mut T
+    }
+    fn as_ptr(me: &Rc<T>) -> *mut T {
+        me as &T as *const T as *mut T
+    }
+    unsafe fn from_ptr(ptr: *const T) -> Rc<T> {
+        Rc::from_raw(ptr)
     }
 }
 

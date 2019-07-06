@@ -1,3 +1,4 @@
+* RefCnt implemented for Rc.
 * Breaking: Big API cleanups.
   - Peek is gone.
   - Terminology of getting the data unified to `load`.

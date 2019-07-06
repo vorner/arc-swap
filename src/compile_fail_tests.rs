@@ -126,3 +126,20 @@
 //!     });
 //! }).unwrap();
 //! ```
+//!
+//! See that ArcSwapAny<Rc> really isn't Send.
+//! ```rust
+//! use std::sync::Arc;
+//! use arc_swap::ArcSwapAny;
+//!
+//! let a: ArcSwapAny<Arc<usize>> = ArcSwapAny::new(Arc::new(42));
+//! std::thread::spawn(move || drop(a));
+//! ```
+//!
+//! ```rust,compile_fail
+//! use std::rc::Rc;
+//! use arc_swap::ArcSwapAny;
+//!
+//! let a: ArcSwapAny<Rc<usize>> = ArcSwapAny::new(Rc::new(42));
+//! std::thread::spawn(move || drop(a));
+//! ```
