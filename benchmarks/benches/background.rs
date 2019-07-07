@@ -14,7 +14,7 @@ extern crate test;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use arc_swap::{ArcSwap, ArcSwapOption, Cache, Guard};
+use arc_swap::{ArcSwap, ArcSwapOption, Cache};
 use crossbeam_utils::thread;
 use test::Bencher;
 
@@ -33,52 +33,37 @@ macro_rules! method {
 
             #[bench]
             fn r1(b: &mut Bencher) {
-                noise(b, 1, 0, 0, 0, super::$name);
+                noise(b, 1, 0, 0, super::$name);
             }
 
             #[bench]
             fn r3(b: &mut Bencher) {
-                noise(b, 3, 0, 0, 0, super::$name);
-            }
-
-            #[bench]
-            fn p1(b: &mut Bencher) {
-                noise(b, 0, 1, 0, 0, super::$name);
-            }
-
-            #[bench]
-            fn p3(b: &mut Bencher) {
-                noise(b, 0, 3, 0, 0, super::$name);
+                noise(b, 3, 0, 0, super::$name);
             }
 
             #[bench]
             fn l1(b: &mut Bencher) {
-                noise(b, 0, 0, 1, 0, super::$name);
+                noise(b, 0, 1, 0, super::$name);
             }
 
             #[bench]
             fn l3(b: &mut Bencher) {
-                noise(b, 0, 0, 3, 0, super::$name);
+                noise(b, 0, 3, 0, super::$name);
             }
 
             #[bench]
             fn rw(b: &mut Bencher) {
-                noise(b, 1, 0, 0, 1, super::$name);
-            }
-
-            #[bench]
-            fn pw(b: &mut Bencher) {
-                noise(b, 0, 1, 0, 1, super::$name);
+                noise(b, 1, 0, 1, super::$name);
             }
 
             #[bench]
             fn lw(b: &mut Bencher) {
-                noise(b, 0, 0, 1, 1, super::$name);
+                noise(b, 0, 1, 1, super::$name);
             }
 
             #[bench]
             fn w2(b: &mut Bencher) {
-                noise(b, 0, 0, 0, 2, super::$name);
+                noise(b, 0, 0, 2, super::$name);
             }
         }
     };
@@ -102,14 +87,7 @@ macro_rules! noise {
             LOCK.lock().unwrap_or_else(PoisonError::into_inner)
         }
 
-        fn noise<F: Fn()>(
-            b: &mut Bencher,
-            readers: usize,
-            peekers: usize,
-            leasers: usize,
-            writers: usize,
-            f: F,
-        ) {
+        fn noise<F: Fn()>(b: &mut Bencher, readers: usize, leasers: usize, writers: usize, f: F) {
             let _lock = lock();
             let flag = Arc::new(AtomicBool::new(true));
             thread::scope(|s| {
@@ -187,7 +165,7 @@ mod arc_swap_b {
 }
 
 mod arc_swap_option {
-    use super::{ArcSwapOption, Guard};
+    use super::ArcSwapOption;
 
     lazy_static! {
         static ref A: ArcSwapOption<usize> = ArcSwapOption::from(None);

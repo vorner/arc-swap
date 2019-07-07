@@ -278,13 +278,13 @@ pub use ref_cnt::RefCnt;
 // For simplicity and performance, storing into the repository is fallible. If storing into the
 // repository fails (because the thread used up all its own slots, or because the pointer got
 // replaced in just the wrong moment and it can't confirm the reservation), unlike the full
-// hazard-pointers approach, we don't retry, but fall back onto secondary the strategy.
+// hazard-pointers approach, we don't retry, but fall back onto secondary strategy.
 //
 // Each reader registers itself so it can be tracked, but only as a number. Each writer first
 // switches the pointer. Then it takes a snapshot of all the current readers and waits until all of
 // them confirm bumping their reference count. Only then the writer returns to the caller, handing
 // it the ownership of the Arc and allowing possible bad things (like being destroyed) to happen to
-// it. This has its own disadvantages, so it is only the second opportunity.
+// it. This has its own disadvantages, so it is only the second approach.
 //
 // # Unsafety
 //
