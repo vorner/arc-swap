@@ -40,4 +40,4 @@ or conditions.
 
 [`Arc`]: https://doc.rust-lang.org/std/sync/struct.Arc.html
 [`AtomicPtr`]: https://doc.rust-lang.org/std/sync/atomic/struct.AtomicPtr.html
-[`ArcSwap`]: https://docs.rs/arc-swap/*/arc_swap/struct.ArcSwap.html
+[`ArcSwap`]: https://docs.rs/arc-swap/*/arc_swap/type.ArcSwap.html

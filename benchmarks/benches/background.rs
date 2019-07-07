@@ -1,5 +1,8 @@
 #![feature(test)]
 
+// FIXME: This still uses old terminology in the bench names and internal functions. It should be
+// eventually renamed, eg. lease → load, etc.
+
 extern crate arc_swap;
 extern crate crossbeam;
 extern crate crossbeam_utils;
@@ -11,8 +14,7 @@ extern crate test;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use arc_swap::cache::Cache;
-use arc_swap::{ArcSwap, ArcSwapOption, Guard, Lease};
+use arc_swap::{ArcSwap, ArcSwapOption, Cache};
 use crossbeam_utils::thread;
 use test::Bencher;
 
@@ -31,52 +33,37 @@ macro_rules! method {
 
             #[bench]
             fn r1(b: &mut Bencher) {
-                noise(b, 1, 0, 0, 0, super::$name);
+                noise(b, 1, 0, 0, super::$name);
             }
 
             #[bench]
             fn r3(b: &mut Bencher) {
-                noise(b, 3, 0, 0, 0, super::$name);
-            }
-
-            #[bench]
-            fn p1(b: &mut Bencher) {
-                noise(b, 0, 1, 0, 0, super::$name);
-            }
-
-            #[bench]
-            fn p3(b: &mut Bencher) {
-                noise(b, 0, 3, 0, 0, super::$name);
+                noise(b, 3, 0, 0, super::$name);
             }
 
             #[bench]
             fn l1(b: &mut Bencher) {
-                noise(b, 0, 0, 1, 0, super::$name);
+                noise(b, 0, 1, 0, super::$name);
             }
 
             #[bench]
             fn l3(b: &mut Bencher) {
-                noise(b, 0, 0, 3, 0, super::$name);
+                noise(b, 0, 3, 0, super::$name);
             }
 
             #[bench]
             fn rw(b: &mut Bencher) {
-                noise(b, 1, 0, 0, 1, super::$name);
-            }
-
-            #[bench]
-            fn pw(b: &mut Bencher) {
-                noise(b, 0, 1, 0, 1, super::$name);
+                noise(b, 1, 0, 1, super::$name);
             }
 
             #[bench]
             fn lw(b: &mut Bencher) {
-                noise(b, 0, 0, 1, 1, super::$name);
+                noise(b, 0, 1, 1, super::$name);
             }
 
             #[bench]
             fn w2(b: &mut Bencher) {
-                noise(b, 0, 0, 0, 2, super::$name);
+                noise(b, 0, 0, 2, super::$name);
             }
         }
     };
@@ -100,14 +87,7 @@ macro_rules! noise {
             LOCK.lock().unwrap_or_else(PoisonError::into_inner)
         }
 
-        fn noise<F: Fn()>(
-            b: &mut Bencher,
-            readers: usize,
-            peekers: usize,
-            leasers: usize,
-            writers: usize,
-            f: F,
-        ) {
+        fn noise<F: Fn()>(b: &mut Bencher, readers: usize, leasers: usize, writers: usize, f: F) {
             let _lock = lock();
             let flag = Arc::new(AtomicBool::new(true));
             thread::scope(|s| {
@@ -115,13 +95,6 @@ macro_rules! noise {
                     s.spawn(|_| {
                         while flag.load(Ordering::Relaxed) {
                             read();
-                        }
-                    });
-                }
-                for _ in 0..peekers {
-                    s.spawn(|_| {
-                        while flag.load(Ordering::Relaxed) {
-                            peek();
                         }
                     });
                 }
@@ -154,32 +127,26 @@ mod arc_swap_b {
         static ref A: ArcSwap<usize> = ArcSwap::from(Arc::new(0));
     }
 
-    fn peek() {
-        for _ in 0..ITERS {
-            test::black_box(*A.peek());
-        }
-    }
-
     fn lease() {
         for _ in 0..ITERS {
-            test::black_box(*A.lease());
+            test::black_box(**A.load());
         }
     }
 
     // Leases kind of degrade in performance if there are multiple on the same thread.
     fn four_leases() {
         for _ in 0..ITERS {
-            let l1 = A.lease();
-            let l2 = A.lease();
-            let l3 = A.lease();
-            let l4 = A.lease();
-            test::black_box((*l1, *l2, *l3, *l4));
+            let l1 = A.load();
+            let l2 = A.load();
+            let l3 = A.load();
+            let l4 = A.load();
+            test::black_box((**l1, **l2, **l3, **l4));
         }
     }
 
     fn read() {
         for _ in 0..ITERS {
-            test::black_box(A.load());
+            test::black_box(A.load_full());
         }
     }
 
@@ -191,7 +158,6 @@ mod arc_swap_b {
 
     noise!();
 
-    method!(peek);
     method!(read);
     method!(write);
     method!(lease);
@@ -199,27 +165,21 @@ mod arc_swap_b {
 }
 
 mod arc_swap_option {
-    use super::{ArcSwapOption, Guard, Lease};
+    use super::ArcSwapOption;
 
     lazy_static! {
         static ref A: ArcSwapOption<usize> = ArcSwapOption::from(None);
     }
 
-    fn peek() {
-        for _ in 0..ITERS {
-            test::black_box(*Guard::get_ref(&A.peek()).unwrap_or(&0));
-        }
-    }
-
     fn lease() {
         for _ in 0..ITERS {
-            test::black_box(*Lease::get_ref(&A.lease()).unwrap_or(&0));
+            test::black_box(A.load().as_ref().map(|l| **l).unwrap_or(0));
         }
     }
 
     fn read() {
         for _ in 0..ITERS {
-            test::black_box(A.load().map(|a| -> usize { *a }).unwrap_or(0));
+            test::black_box(A.load_full().map(|a| -> usize { *a }).unwrap_or(0));
         }
     }
 
@@ -231,7 +191,6 @@ mod arc_swap_option {
 
     noise!();
 
-    method!(peek);
     method!(read);
     method!(write);
     method!(lease);
@@ -244,13 +203,6 @@ mod arc_swap_cached {
         static ref A: ArcSwap<usize> = ArcSwap::from_pointee(0);
     }
 
-    fn peek() {
-        let mut cache = Cache::from(&A as &ArcSwap<usize>);
-        for _ in 0..ITERS {
-            test::black_box(**cache.load());
-        }
-    }
-
     fn read() {
         let mut cache = Cache::from(&A as &ArcSwap<usize>);
         for _ in 0..ITERS {
@@ -260,7 +212,7 @@ mod arc_swap_cached {
 
     fn lease() {
         for _ in 0..ITERS {
-            test::black_box(*A.lease());
+            test::black_box(**A.load());
         }
     }
 
@@ -272,7 +224,6 @@ mod arc_swap_cached {
 
     noise!();
 
-    method!(peek);
     method!(read);
     method!(write);
 }
@@ -280,12 +231,6 @@ mod arc_swap_cached {
 mod mutex {
     lazy_static! {
         static ref M: Mutex<Arc<usize>> = Mutex::new(Arc::new(0));
-    }
-
-    fn peek() {
-        for _ in 0..ITERS {
-            test::black_box(**M.lock().unwrap());
-        }
     }
 
     fn lease() {
@@ -308,7 +253,6 @@ mod mutex {
 
     noise!();
 
-    method!(peek);
     method!(read);
     method!(write);
 }
@@ -318,12 +262,6 @@ mod parking_mutex {
 
     lazy_static! {
         static ref M: ParkingMutex<Arc<usize>> = ParkingMutex::new(Arc::new(0));
-    }
-
-    fn peek() {
-        for _ in 0..ITERS {
-            test::black_box(**M.lock());
-        }
     }
 
     fn lease() {
@@ -346,7 +284,6 @@ mod parking_mutex {
 
     noise!();
 
-    method!(peek);
     method!(read);
     method!(write);
 }
@@ -356,12 +293,6 @@ mod rwlock {
 
     lazy_static! {
         static ref L: RwLock<Arc<usize>> = RwLock::new(Arc::new(0));
-    }
-
-    fn peek() {
-        for _ in 0..ITERS {
-            test::black_box(**L.read().unwrap());
-        }
     }
 
     fn lease() {
@@ -384,7 +315,6 @@ mod rwlock {
 
     noise!();
 
-    method!(peek);
     method!(read);
     method!(write);
 }
@@ -394,12 +324,6 @@ mod parking_rwlock {
 
     lazy_static! {
         static ref L: RwLock<Arc<usize>> = RwLock::new(Arc::new(0));
-    }
-
-    fn peek() {
-        for _ in 0..ITERS {
-            test::black_box(**L.read());
-        }
     }
 
     fn lease() {
@@ -422,7 +346,6 @@ mod parking_rwlock {
 
     noise!();
 
-    method!(peek);
     method!(read);
     method!(write);
 }
@@ -432,12 +355,6 @@ mod arc_cell {
 
     lazy_static! {
         static ref A: ArcCell<usize> = ArcCell::new(Arc::new(0));
-    }
-
-    fn peek() {
-        for _ in 0..ITERS {
-            test::black_box(*A.get());
-        }
     }
 
     fn lease() {

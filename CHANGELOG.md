@@ -1,3 +1,11 @@
+* RefCnt implemented for Rc.
+* Breaking: Big API cleanups.
+  - Peek is gone.
+  - Terminology of getting the data unified to `load`.
+  - There's only one kind of `Guard` now.
+  - Guard derefs to the `Arc`/`Option<Arc>` or similar.
+  - `Cache` got moved to top level of the crate.
+  - Several now unneeded semi-internal traits and trait methods got removed.
 * Splitting benchmarks into a separate sub-crate.
 * Minor documentation improvements.
 

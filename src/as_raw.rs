@@ -1,4 +1,4 @@
-use super::{Guard, Lease, RefCnt};
+use super::{Guard, RefCnt};
 
 /// A trait describing things that can be turned into a raw pointer.
 ///
@@ -18,16 +18,12 @@ use super::{Guard, Lease, RefCnt};
 ///
 /// shared.compare_and_swap(&a, Some(Arc::clone(&a)));
 /// shared.compare_and_swap(&None::<Arc<_>>, Some(Arc::clone(&a)));
-/// shared.compare_and_swap(shared.peek(), Some(Arc::clone(&a)));
-/// shared.compare_and_swap(shared.lease(), Some(Arc::clone(&a)));
-/// shared.compare_and_swap(&shared.lease(), Some(Arc::clone(&a)));
+/// shared.compare_and_swap(shared.load(), Some(Arc::clone(&a)));
+/// shared.compare_and_swap(&shared.load(), Some(Arc::clone(&a)));
 /// shared.compare_and_swap(ptr::null(), Some(Arc::clone(&a)));
 /// ```
 pub trait AsRaw<T> {
     /// Converts the value into a raw pointer.
-    ///
-    /// The value is consumed, because the trait is usually implemented on references and
-    /// reference-like types.
     fn as_raw(&self) -> *mut T;
 }
 
@@ -37,21 +33,15 @@ impl<'a, T: RefCnt> AsRaw<T::Base> for &'a T {
     }
 }
 
+impl<'a, T: RefCnt> AsRaw<T::Base> for &'a Guard<'a, T> {
+    fn as_raw(&self) -> *mut T::Base {
+        T::as_ptr(&self.inner)
+    }
+}
+
 impl<'a, T: RefCnt> AsRaw<T::Base> for Guard<'a, T> {
     fn as_raw(&self) -> *mut T::Base {
-        self.ptr as *mut _
-    }
-}
-
-impl<'a, T: RefCnt> AsRaw<T::Base> for &'a Lease<T> {
-    fn as_raw(&self) -> *mut T::Base {
-        self.ptr as *mut _
-    }
-}
-
-impl<T: RefCnt> AsRaw<T::Base> for Lease<T> {
-    fn as_raw(&self) -> *mut T::Base {
-        self.ptr as *mut _
+        T::as_ptr(&self.inner)
     }
 }
 
