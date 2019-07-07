@@ -462,6 +462,7 @@ impl<'a, T: RefCnt> Guard<'a, T> {
     ///
     /// It'll not hold any locks, will have no debts and will contain full-featured value inside
     /// that even can outlive the ArcSwap it originated from.
+    #[inline]
     fn unprotected(mut lease: Self) -> Guard<'static, T> {
         match mem::replace(&mut lease.protection, Protection::Unprotected) {
             // Not protected, nothing to unprotect.
@@ -510,6 +511,7 @@ impl<'a, T: RefCnt> Guard<'a, T> {
 
 impl<'a, T: RefCnt> Deref for Guard<'a, T> {
     type Target = T;
+    #[inline]
     fn deref(&self) -> &T {
         self.inner.deref()
     }
@@ -528,6 +530,7 @@ impl<'a, T: Debug + RefCnt> Display for Guard<'a, T> {
 }
 
 impl<'a, T: RefCnt> Drop for Guard<'a, T> {
+    #[inline]
     fn drop(&mut self) {
         match mem::replace(&mut self.protection, Protection::Unprotected) {
             // We have our own copy of Arc, so we don't need a protection. Do nothing (but release
@@ -720,6 +723,7 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
         Guard::into_inner(self.load())
     }
 
+    #[inline]
     fn lock_internal(&self, signal_safe: SignalSafety) -> Guard<'_, T> {
         let gen = GenLock::new(signal_safe, &self.lock_storage);
         let ptr = self.ptr.load(Ordering::Acquire);
