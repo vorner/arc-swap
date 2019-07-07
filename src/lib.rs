@@ -1259,6 +1259,11 @@ pub type IndependentArcSwap<T> = ArcSwapAny<Arc<T>, PrivateUnsharded>;
 ///
 /// This is similar to [ArcSwap], but it doesn't store [Arc], it stores [Weak]. It doesn't keep the
 /// data alive when pointed to.
+///
+/// This is a type alias only. Most of the methods are described on the
+/// [`ArcSwapAny`](struct.ArcSwapAny.html).
+///
+/// [Weak]: std::sync::Weak
 #[cfg(feature = "unstable-weak")]
 pub type ArcSwapWeak<T> = ArcSwapAny<std::sync::Weak<T>>;
 
