@@ -1,3 +1,4 @@
+* Support for Weak pointers.
 * RefCnt implemented for Rc.
 * Breaking: Big API cleanups.
   - Peek is gone.
