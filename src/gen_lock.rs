@@ -18,7 +18,6 @@
 //!
 //! These variants would probably make sense, but haven't been written yet:
 //!
-//! * A private lock storage with configurable number of shards.
 //! * A lock storage that is shared, but only between a certain group of pointers. It could be
 //!   either as a reference (but then each `ArcSwap` would get a bit bigger), or a macro that could
 //!   generate an independent but global storage.
@@ -165,8 +164,7 @@ unsafe impl LockStorage for Global {
 
 /// A single „shard“ that is stored inline, inside the corresponding `ArcSwap`. Therefore, locks on
 /// each instance won't influence any other instances. On the other hand, the `ArcSwap` itself gets
-/// bigger and doesn't have multiple shards, so concurrent `peek`s (or fallbacks on `lease`) might
-/// contend each other a bit.
+/// bigger and doesn't have multiple shards, so concurrent uses might contend each other a bit.
 ///
 /// ```rust
 /// # use std::sync::Arc;

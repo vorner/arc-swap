@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 /// A trait describing smart reference counted pointers.
 ///
-/// Note that in a form `Option<Arc<T>>` is also a smart reference counted pointer, just one that
+/// Note that in a way `Option<Arc<T>>` is also a smart reference counted pointer, just one that
 /// can hold NULL.
 ///
 /// The trait is unsafe, because a wrong implementation will break the
@@ -14,9 +14,9 @@ use std::sync::Arc;
 /// code for `Arc` and `Option<Arc>` variants. However, it is theoretically possible (if you have
 /// your own `Arc` implementation).
 ///
-/// Implementing it for `Rc` is possible, but not useful (because the `ArcSwap` then would not be
-/// `Send` nor `Sync`, so there's very little advantage of using it if it can't be shared between
-/// threads).
+/// It is also implemented for `Rc`, but that is not considered very useful (because the
+/// `ArcSwapAny` is not `Send` or `Sync`, therefore there's very little advantage for it to be
+/// atomic).
 ///
 /// Aside from the obvious properties (like that incrementing and decrementing a reference count
 /// cancel each out and that having less references tracked than how many things actually point to
@@ -48,7 +48,8 @@ pub unsafe trait RefCnt: Clone {
     /// This is only called on values previously returned by [`into_ptr`](#method.into_ptr).
     /// However, it is not guaranteed to be 1:1 relation ‒ `from_ptr` may be called more times than
     /// `into_ptr` temporarily provided the reference count never drops under 1 during that time
-    /// (the implementation sometimes owes a reference).
+    /// (the implementation sometimes owes a reference). These extra pointers will either be
+    /// converted back using `into_ptr` or forgotten.
     unsafe fn from_ptr(ptr: *const Self::Base) -> Self;
 
     /// Increments the reference count by one.

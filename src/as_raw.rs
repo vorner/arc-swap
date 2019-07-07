@@ -24,9 +24,6 @@ use super::{Guard, RefCnt};
 /// ```
 pub trait AsRaw<T> {
     /// Converts the value into a raw pointer.
-    ///
-    /// The value is consumed, because the trait is usually implemented on references and
-    /// reference-like types.
     fn as_raw(&self) -> *mut T;
 }
 

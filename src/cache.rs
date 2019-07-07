@@ -13,18 +13,18 @@ use super::gen_lock::LockStorage;
 use super::ref_cnt::RefCnt;
 use super::ArcSwapAny;
 
-/// Caching handle for [ArcSwapAny].
+/// Caching handle for [`ArcSwapAny`][ArcSwapAny].
 ///
-/// Instead of loading (or leasing or something) the [Arc] on every request from the shared
-/// storage, this keeps another copy inside. Upon request it only cheaply revalidates it is up to
-/// date. If it is, access is significantly faster. If it is stale, the full [load] is done and the
+/// Instead of loading the [`Arc`][Arc] on every request from the shared storage, this keeps
+/// another copy inside itself. Upon request it only cheaply revalidates it is up to
+/// date. If it is, access is significantly faster. If it is stale, the [load_full] is done and the
 /// cache value is replaced. Under a read-heavy loads, the measured speedup are 10-25 times,
 /// depending on the architecture.
 ///
 /// There are, however, downsides:
 ///
 /// * The handle needs to be kept around by the caller (usually, one per thread). This is fine if
-///   there's one global instance, but starts being tricky with eg. data structures build from
+///   there's one global `ArcSwapAny`, but starts being tricky with eg. data structures build from
 ///   them.
 /// * As it keeps a copy of the [Arc] inside the cache, the old value may be kept alive for longer
 ///   period of time ‒ it is replaced by the new value on [load][Cache::load]. You may not want to
@@ -55,7 +55,7 @@ use super::ArcSwapAny;
 /// ```
 ///
 /// [Arc]: std::sync::Arc
-/// [load]: ArcSwapAny::load
+/// [load_full]: ArcSwapAny::load_full
 #[derive(Clone, Debug)]
 pub struct Cache<A, T> {
     arc_swap: A,
@@ -108,6 +108,9 @@ where
     #[inline]
     fn revalidate(&mut self) {
         let cached_ptr = RefCnt::as_ptr(&self.cached);
+        // Node: Relaxed here is fine. We do not synchronize any data through this, we already have
+        // it synchronized in self.cache. We just want to check if it changed, if it did, the
+        // load_full will be responsible for any synchronization needed.
         let shared_ptr = self.arc_swap.ptr.load(Ordering::Relaxed);
         if cached_ptr != shared_ptr {
             self.cached = self.arc_swap.load_full();

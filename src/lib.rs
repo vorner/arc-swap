@@ -4,6 +4,8 @@
 )]
 #![deny(missing_docs, warnings)]
 #![allow(renamed_and_removed_lints)]
+// TODO: The docs might want some rewrite and cleanup too. This is quite a mouthful for
+// *introduction* to the library.
 
 //! Making [`Arc`][Arc] itself atomic
 //!
@@ -52,13 +54,13 @@
 //! ## Lock-free readers
 //!
 //! All the read operations are always [lock-free]. Most of the time, they are actually
-//! [wait-free]. The only one that is *only* lock-free is the first [`lease`][lease] access in each
+//! [wait-free]. The only one that is *only* lock-free is the first [`load`][load] access in each
 //! thread (across all the pointers).
 //!
-//! So, when the documentation talks about *contention*, it talks about multiple cores having to
+//! So, when the documentation talks about *contention*, it talks about multiple CPU cores having to
 //! sort out who changes the bytes in a cache line first and who is next. This slows things down,
 //! but it still rolls forward and stop for no one, not like with the mutex-style contention when
-//! one holds the lock and others wait outside.
+//! one holds the lock and other threads get parked.
 //!
 //! Unfortunately, there are cases where readers block writers from completion. It's much more
 //! limited in scope than with [`Mutex`][Mutex] or [`RwLock`][RwLock] and steady stream of readers
@@ -69,16 +71,16 @@
 //! ## Speeds
 //!
 //! The base line speed of read operations is similar to using an *uncontended* [`Mutex`][Mutex].
-//! However, [`lease`][lease] and [`peek`][peek] suffer no contention from any other read
-//! operations and only slight ones during updates. The [`load`][load] operation is additionally
-//! contended only on the reference count of the [`Arc`][Arc] inside ‒ so, in general, while
-//! [`Mutex`][Mutex] rapidly loses its performance when being in active use by multiple threads at
-//! once and [`RwLock`][RwLock] is slow to start with, [`ArcSwapAny`][ArcSwapAny] mostly keeps its
+//! However, [`load`][load] suffers no contention from any other read operations and only slight
+//! ones during updates. The [`load_full`][load_full] operation is additionally contended only on
+//! the reference count of the [`Arc`][Arc] inside ‒ so, in general, while [`Mutex`][Mutex] rapidly
+//! loses its performance when being in active use by multiple threads at once and
+//! [`RwLock`][RwLock] is slow to start with, [`ArcSwapAny`][ArcSwapAny] mostly keeps its
 //! performance even when read by many threads in parallel.
 //!
 //! Write operations are considered expensive. A write operation is more expensive than access to
 //! an *uncontended* [`Mutex`][Mutex] and on some architectures even slower than uncontended
-//! [`RwLock`][RwLock]. However, it is faster than either when contended.
+//! [`RwLock`][RwLock]. However, it is faster than either under contention.
 //!
 //! There are some (very unscientific) [benchmarks] within the source code of the library.
 //!
@@ -87,77 +89,55 @@
 //! but even AMD vs. Intel or two different Intel processors. Therefore, if what matters is more
 //! the speed than the wait-free guarantees, you're advised to do your own measurements.
 //!
+//! However, the intended selling point of the library is consistency in the performance, not
+//! outperforming other locking primitives in average. If you do worry about the raw performance,
+//! you can have a look at [`Cache`][Cache].
+//!
 //! ## Choosing the right reading operation
 //!
-//! Performance is world of trade-offs. Therefore, the library offers several very similar methods
-//! to read the pointer. The default choice should nevertheless probably be [`lease`][lease].
+//! There are several load operations available. While the general go-to one should be
+//! [`load`][load], there may be situations in which the others are a better match.
 //!
-//! Only one of them is functionally different ‒
-//! [`peek_signal_safe`][peek_signal_safe]. See below for [signals](#unix-signal-handlers), but in
-//! general, it is the only thing you want to use inside a signal handler and you don't want to use
-//! it anywhere else.
+//! The [`load`][load] usually only borrows the instance from the shared [`ArcSwapAny`]. This makes
+//! it faster, because different threads don't contend on the reference count. There are two
+//! situations when this borrow isn't possible. If the content of `ArcSwapAny` gets changed, all
+//! existing [`Guard`][Guard]s are promoted to contain an owned instance.
 //!
-//! * [`load`][load] creates a full blown [`Arc`][Arc]. It's the most heavy-weight around and while
-//!   [wait-free], it suffers from contention on the reference count in the [`Arc`][Arc], so when
-//!   used from too many threads at once, it'll become slow. On the other hand, there's no
-//!   restriction on how long you can hold onto the result or how many of them you keep around, so
-//!   this is appropriate if creating handles for long-term storage. It also provides a bridge to
-//!   other algorithms which only take the [`Arc`][Arc].
-//! * [`lease`][lease] returns a proxy object that works as a pointer to the stored data and can be
-//!   upgraded to full [`Arc`][Arc] later on if needed. There's no limit on how long it can live
-//!   around. However, it internally comes at two flavors, one cheap and one containing a full
-//!   [`Arc`][Arc] in it. Each thread is entitled to only limited total number of cheap ones at a
-//!   given time (currently 8) and if more are constructed, the others fall back on the full
-//!   version (which then uses [`load`][load] internally). Therefore, [`lease`][lease] can be fast
-//!   (almost as fast as [`peek`][peek]) but only as long as the thread calling it doesn't have too
-//!   many leases around at the time.
-//! * [`peek`][peek] is the cheapest with the most predictable performance characteristics.
-//!   However, as long as the returned guard object is alive, the internal generation lock is being
-//!   held and that prevents write operations from completion and they'll spin-wait for the unlock.
-//!   By default, all the pointer instances share the *same* generation lock (and it'll therefore
-//!   prevent write operations even on *other* pointers from completion). However, the
-//!   [`IndependentArcSwap`][IndependentArcSwap] uses a private generation lock for each instance.
-//!   In general, this is suitable for very fast things ‒ like reading a single scalar value out of
-//!   a configuration, but not keeping it around or doing expensive lookups in data.
+//! The other situation derives from internal implementation. The number of borrows each thread can
+//! have at each time (across all [`Guard`][Guard]s) is limited. If this limit is exceeded, an
+//! onwed instance is created instead.
 //!
-//! Additionally, it is possible to use [cache handles](cache/index.html) to get further speed
-//! improvement at the cost of less comfortable API and possibly keeping the older values alive for
-//! longer than necessary.
+//! Therefore, if you intend to hold onto the loaded value for extended time span, you may prefer
+//! [`load_full`][load_full]. It loads the pointer instance (`Arc`) without borrowing, which is
+//! slower (because of the possible contention on the reference count), but doesn't consume one of
+//! the borrow slots, which will make it more likely for following [`load`][load]s to have a slot
+//! available. Similarly, if some API needs an owned `Arc`, [`load_full`][load_full] is more
+//! convenient.
 //!
-//! # RCU
+//! There's also [`load_signal_safe`][load_signal_safe]. This is the only method guaranteed to be
+//! safely usable inside a unix signal handler. It has no advantages outside of them, so it makes
+//! it kind of niche one.
 //!
-//! This also offers an [RCU implementation][rcu], for read-heavy
-//! situations. Note that the RCU update is considered relatively slow operation (slower than
-//! simple write). In case there's only one update thread, using
-//! [`store`](struct.ArcSwapAny.html#method.store) is enough.
+//! Additionally, it is possible to use a [`Cache`][Cache] to get further speed improvement at the
+//! cost of less comfortable API and possibly keeping the older values alive for longer than
+//! necessary.
 //!
 //! # Atomic orderings
 //!
 //! It is guaranteed each operation performs at least one `SeqCst` atomic read-write operation,
 //! therefore even operations on different instances have a defined global order of operations.
 //!
-//! # Unix signal handlers
-//!
-//! Unix signals are hard to use correctly, partly because there is a very restricted set of
-//! functions one might use inside them. Specifically, it is *not* allowed to use mutexes inside
-//! them (because that could cause a deadlock).
-//!
-//! On the other hand, it is possible to use [`peek_signal_safe`][peek_signal_safe] (but not the
-//! others). Note that the signal handler is not allowed to allocate or deallocate
-//! memory, therefore it is not recommended to [`upgrade`](struct.Guard.html#method.upgrade) the
-//! returned guard (it is strictly speaking possible to use that safely, but it is hard and brings
-//! no benefit).
-//!
 //! # Customization
 //!
-//! While the default [`ArcSwap`][ArcSwap] and [`lease`][lease] is probably good enough for most of
+//! While the default [`ArcSwap`][ArcSwap] and [`load`][load] is probably good enough for most of
 //! the needs, the library allows a wide range of customizations:
 //!
 //! * It allows storing nullable (`Option<Arc<_>>`) and non-nullable pointers.
 //! * It is possible to store other reference counted pointers (eg. if you want to use it with a
 //!   hypothetical `Arc` that doesn't have weak counts), by implementing the [`RefCnt`][RefCnt]
 //!   trait.
-//! * It allows choosing internal locking strategy by the [`LockStorage`][LockStorage] trait.
+//! * It allows choosing internal fallback locking strategy by the [`LockStorage`][LockStorage]
+//!   trait.
 //!
 //! # Examples
 //!
@@ -234,15 +214,15 @@
 //! [Mutex]: https://doc.rust-lang.org/std/sync/struct.Mutex.html
 //! [AtomicPtr]: https://doc.rust-lang.org/std/sync/atomic/struct.AtomicPtr.html
 //! [ArcSwapAny]: struct.ArcSwapAny.html
+//! [ArcSwapAny]: struct.Cache.html
 //! [ArcSwap]: type.ArcSwap.html
 //! [IndependentArcSwap]: type.IndependentArcSwap.html
 //! [shared_ptr]: http://en.cppreference.com/w/cpp/memory/shared_ptr
 //! [lock-free]: https://en.wikipedia.org/wiki/Non-blocking_algorithm#Lock-freedom
 //! [wait-free]: https://en.wikipedia.org/wiki/Non-blocking_algorithm#Wait-freedom
-//! [lease]: struct.ArcSwapAny.html#method.lease
 //! [load]: struct.ArcSwapAny.html#method.load
-//! [peek]: struct.ArcSwapAny.html#method.peek
-//! [peek_signal_safe]: struct.ArcSwapAny.html#method.peek_signal_safe
+//! [load_full]: struct.ArcSwapAny.html#method.load_full
+//! [load_signal_safe]: struct.ArcSwapAny.html#method.peek_signal_safe
 //! [rcu]: struct.ArcSwapAny.html#method.rcu
 //! [RefCnt]: trait.RefCnt.hmtl
 //! [LockStorage]: gen_lock/trait.LockStorage.html
@@ -469,10 +449,9 @@ impl<'l> From<Option<&'static Debt>> for Protection<'l> {
 
 /// A temporary storage of the pointer.
 ///
-/// This, unlike [`Guard`](struct.Guard.html), does not block any write operations and is usually
-/// faster than loading the full `Arc`. However, this holds only if each thread keeps only small
-/// number of `Guards`s around and if too many are held, the following ones will just fall back to
-/// creating the `Arc` internally.
+/// This guard object is returned from most loading methods (with the notable exception of
+/// [`load_full`](struct.ArcSwapAny.html#method.load_full)). It dereferences to the smart pointer
+/// loaded, so most operations are to be done using that.
 pub struct Guard<'l, T: RefCnt> {
     inner: ManuallyDrop<T>,
     protection: Protection<'l>,
@@ -599,17 +578,17 @@ enum SignalSafety {
 /// get a chance to run and release whatever is being held.
 const YIELD_EVERY: usize = 16;
 
-/// An atomic storage for a smart pointer like [`Arc`] or `Option<Arc>`.
+/// An atomic storage for a reference counted smart pointer like [`Arc`] or `Option<Arc>`.
 ///
 /// This is a storage where a smart pointer may live. It can be read and written atomically from
 /// several threads, but doesn't act like a pointer itself.
 ///
-/// One can be created [`from`] an [`Arc`]. To get the pointer back, use the [`load`](#method.load)
-/// method. But to general access to the data, [`lease`](#method.lease) may be more appropriate.
+/// One can be created [`from`] an [`Arc`]. To get the pointer back, use the
+/// [`load`](#method.load).
 ///
 /// # Note
 ///
-/// This is the generic low-level implementation. This allows sharing the same code for storing
+/// This is the common generic implementation. This allows sharing the same code for storing
 /// both `Arc` and `Option<Arc>` (and possibly other similar types).
 ///
 /// In your code, you most probably want to interact with it through the
@@ -621,9 +600,10 @@ const YIELD_EVERY: usize = 16;
 /// # Type parameters
 ///
 /// * `T`: The smart pointer to be kept inside. This crate provides implementation for `Arc<_>` and
-///   `Option<Arc<_>>`. But third party could provide implementations of the
-///   [`RefCnt`] trait and plug in others.
-/// * `S`: This describes where the generation lock is stored and how it works.
+///   `Option<Arc<_>>` (`Rc` too, but that one is not practically useful). But third party could
+///   provide implementations of the [`RefCnt`] trait and plug in others.
+/// * `S`: This describes where the generation lock is stored and how it works (this allows tuning
+///   some of the performance trade-offs).
 ///
 /// # Examples
 ///
@@ -708,6 +688,12 @@ where
     }
 }
 
+impl<T: RefCnt + Default, S: LockStorage> Default for ArcSwapAny<T, S> {
+    fn default() -> Self {
+        Self::new(T::default())
+    }
+}
+
 impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// Constructs a new value.
     pub fn new(val: T) -> Self {
@@ -725,16 +711,11 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
 
     /// Loads the value.
     ///
-    /// This makes another copy (reference) of the held pointer and returns it, atomically (it is
+    /// This makes another copy of the held pointer and returns it, atomically (it is
     /// safe even when other thread stores into the same instance at the same time).
     ///
     /// The method is lock-free and wait-free, but usually more expensive than
     /// [`load`](#method.load).
-    ///
-    /// # Signal safety
-    ///
-    /// The method is *not* async-signal-safe. Use [`load_signal_safe`](#method.load_signal_safe)
-    /// for that.
     pub fn load_full(&self) -> T {
         Guard::into_inner(self.load())
     }
@@ -750,50 +731,24 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
         }
     }
 
-    /* XXX
-     *
-     * Remove once the docs is merged with load_signal_safe.
-    /// Provides a peek inside the held value.
+    /// An async-signal-safe version of [`load`](#method.load)
     ///
-    /// This returns a temporary borrow of the object currently held inside. This is slightly
-    /// faster than [`load_full`](#method.load_full) or [`lease`](#method.lease), but it is not
-    /// suitable for holding onto for longer periods of time.
-    ///
-    /// If you discover later on that you need to hold onto it for longer, you can
-    /// [`Guard::upgrade`](struct.Guard.html#method.upgrade) it.
+    /// This method uses only restricted set of primitives to be async-signal-safe, so it can be
+    /// used inside unix signal handlers. It has no advantages outside of them and it has its own
+    /// downsides, so there's no reason to use it outside of them.
     ///
     /// # Warning
     ///
-    /// This currently prevents the pointer inside from being replaced. Any [`swap`](#method.swap),
-    /// [`store`](#method.store), [`compare_and_swap`](#method.compare_and_swap) or
-    /// [`rcu`](#method.rcu) will busy-loop while waiting for the proxy object to be destroyed,
-    /// even on unrelated objects. Therefore, this is suitable only for things like reading a
-    /// (reasonably small) configuration value, but not for eg. computations on the held values.
+    /// While the method itself is lock-free (it will not be blocked by anything other threads do),
+    /// methods that write are blocked from completion until the returned
+    /// [`Guard`](struct.Guard.html) is dropped. This includes [`store`](#method.store),
+    /// [`compare_and_swap`](#method.compare_and_swap) and [`rcu`](#method.rcu) and destruction of
+    /// the `ArcSwapAny` instance.
     ///
-    /// If you want to do anything non-trivial, prefer [`lease`](#method.lease).
-    ///
-    /// If you are not sure what is better, benchmarking is recommended.
-    ///
-    /// # Signal safety
-    ///
-    /// For an async-signal-safe version, use [`load_signal_safe`](#method.load_signal_safe).
-    // XXX Remove this one
-    pub fn peek(&self) -> Guard<'_, T> {
-        self.lock_internal(SignalSafety::Unsafe)
-    }
-    */
-    /// An async-signal-safe version of [`peek`](#method.peek)
-    ///
-    /// This method uses only restricted set of primitives to be async-signal-safe, at a slight
-    /// performance hit in a contended scenario (signals should be rare, so it shouldn't be a
-    /// problem in practice).
-    ///
-    /// As the returned guard prevents the value inside to be dropped, the value can be used during
-    /// the signal handler. Unless it is upgraded (which is *not* recommended in a signal handler),
-    /// there's also no way the signal handler would have to drop the pointed to value.
-    ///
-    /// The same performance warning about writer methods of [`peek`](#method.peek) applies, so it
-    /// is recommended not to spend too much time holding the returned guard.
+    /// By default, the locks are *shared* across all the instances in the program, therefore it
+    /// blocks writes even to *other* `ArcSwapAny` instances. It is possible to use a private lock
+    /// (which is recommended if you want to do use this method) by using the
+    /// [`IndependentArcSwap`](type.IndependentArcSwap.html) type alias.
     pub fn load_signal_safe(&self) -> Guard<'_, T> {
         self.lock_internal(SignalSafety::Safe)
     }
@@ -829,15 +784,47 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
 
     /// Provides a temporary borrow of the object inside.
     ///
-    /// This returns a proxy object allowing access to the thing held inside and it is *usually*
-    /// as fast as [`peek`](#method.peek). However, there's only limited amount of possible cheap
-    /// proxies in existence for each thread ‒ if more are created, it falls back to
-    /// [`load_full`](#method.load_full) internally.
+    /// This returns a proxy object allowing access to the thing held inside.  However, there's
+    /// only limited amount of possible cheap proxies in existence for each thread ‒ if more are
+    /// created, it falls back to equivalent of [`load_full`](#method.load_full) internally.
     ///
     /// This is therefore a good choice to use for eg. searching a data structure or juggling the
     /// pointers around a bit, but not as something to store in larger amounts. The rule of thumb
-    /// is this is suited for local variables on stack, but not in structures.
-    #[allow(deprecated)] // Allow Guard::lease internally
+    /// is this is suited for local variables on stack, but not in long-living data structures.
+    ///
+    /// # Consistency
+    ///
+    /// In case multiple related operations are to be done on the loaded value, it is generally
+    /// recommended to call `load` just once and keep the result over calling it multiple times.
+    /// First, keeping it is usually faster. But more importantly, the value can change between the
+    /// calls to load, returning different objects, which could lead to logical inconsistency.
+    /// Keeping the result makes sure the same object is used.
+    ///
+    /// ```rust
+    /// # use arc_swap::ArcSwap;
+    /// struct Point {
+    ///     x: usize,
+    ///     y: usize,
+    /// }
+    ///
+    /// fn print_broken(p: &ArcSwap<Point>) {
+    ///     // This is broken, because the x and y may come from different points, combining into an
+    ///     // invalid point that never existed.
+    ///     println!("X: {}", p.load().x);
+    ///     println!("Y: {}", p.load().y);
+    /// }
+    ///
+    /// fn print_correct(p: &ArcSwap<Point>) {
+    ///     // Here we take a snapshot of one specific point so both x and y come from the same
+    ///     // one.
+    ///     let point = p.load();
+    ///     println!("X: {}", point.x);
+    ///     println!("Y: {}", point.y);
+    /// }
+    /// # let p = ArcSwap::from_pointee(Point { x: 10, y: 20 });
+    /// # print_correct(&p);
+    /// # print_broken(&p);
+    /// ```
     #[inline]
     pub fn load(&self) -> Guard<'static, T> {
         self.load_fallible()
@@ -853,21 +840,18 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
 
     /// Exchanges the value inside this instance.
     ///
-    /// While multiple `swap`s can run concurrently and won't block each other, each one needs to
-    /// wait for all the [`load_full`s](#method.load_full) and [`load_signal_safe`
-    /// Guards](#method.load_signal_safe) that have seen the old value to finish before returning.
-    /// This is in a way similar to locking ‒ a living [`Guard`](struct.Guard.html) can prevent
-    /// this from finishing. However, unlike `RwLock`, a steady stream of readers will not block
-    /// writers and if each guard is held only for a short period of time, writers will progress
-    /// too.
+    /// Note that this method is *not* lock-free. In particular, it is possible to block this
+    /// method by using the [`load_signal_safe`](#method.load_signal_safe), but
+    /// [`load`](#method.load) may also block it for very short time (several CPU instructions). If
+    /// this happens, `swap` will busy-wait in the meantime.
     ///
-    /// However, it is also possible to cause a deadlock (eg. this is an example of *broken* code):
+    /// It is also possible to cause a deadlock (eg. this is an example of *broken* code):
     ///
     /// ```rust,no_run
     /// # use std::sync::Arc;
     /// # use arc_swap::ArcSwap;
     /// let shared = ArcSwap::from(Arc::new(42));
-    /// let guard = shared.load();
+    /// let guard = shared.load_signal_safe();
     /// // This will deadlock, because the guard is still active here and swap
     /// // can't pull the value from under its feet.
     /// shared.swap(Arc::new(0));
@@ -884,14 +868,14 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
         unsafe { T::from_ptr(old) }
     }
 
-    /// Swaps the stored Arc if it is equal to `current`.
+    /// Swaps the stored Arc if it equals to `current`.
     ///
-    /// If the current value of the `ArcSwapAny` is equal to `current`, the `new` is stored inside.
+    /// If the current value of the `ArcSwapAny` equals to `current`, the `new` is stored inside.
     /// If not, nothing happens.
     ///
     /// The previous value (no matter if the swap happened or not) is returned. Therefore, if the
     /// returned value is equal to `current`, the swap happened. You want to do a pointer-based
-    /// comparison to determine it (like `Arc::ptr_eq`).
+    /// comparison to determine it.
     ///
     /// In other words, if the caller „guesses“ the value of current correctly, it acts like
     /// [`swap`](#method.swap), otherwise it acts like [`load_full`](#method.load_full) (including
@@ -913,10 +897,10 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
         // Drop it here, because:
         // * We can't drop it before the compare_and_swap ‒ in such case, it could get recycled,
         //   put into the pointer by another thread with a different value and create a fake
-        //   success.
-        // * We drop it before waiting for readers, because it could have been a Guard. In such
-        //   case, the caller doesn't have it any more and can't check if it succeeded, but that's
-        //   OK.
+        //   success (ABA).
+        // * We drop it before waiting for readers, because it could have been a Guard with a
+        //   generation lock. In such case, the caller doesn't have it any more and can't check if
+        //   it succeeded, but that's OK.
         drop(current);
 
         let debt = if swapped {
@@ -997,8 +981,8 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// Read-Copy-Update of the pointer inside.
     ///
     /// This is useful in read-heavy situations with several threads that sometimes update the data
-    /// pointed to. The readers can just repeatedly use [`load_full`](#method.load_full) without
-    /// any locking.  The writer uses this method to perform the update.
+    /// pointed to. The readers can just repeatedly use [`load`](#method.load) without any locking.
+    /// The writer uses this method to perform the update.
     ///
     /// In case there's only one thread that does updates or in case the next version is
     /// independent of the previous one, simple [`swap`](#method.swap) or [`store`](#method.store)
@@ -1036,7 +1020,7 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// }
     /// ```
     ///
-    /// This will, but it can call the closure multiple times to do retries:
+    /// This will, but it can call the closure multiple times to retry:
     ///
     /// ```rust
     /// extern crate arc_swap;
@@ -1182,6 +1166,28 @@ impl<T, S: LockStorage> ArcSwapAny<Arc<T>, S> {
     }
 }
 
+/// An atomic storage for `Option<Arc>`.
+///
+/// This is very similar to [`ArcSwap`](type.ArcSwap.html), but allows storing NULL values, which
+/// is useful in some situations.
+///
+/// This is a type alias only. Most of the methods are described on
+/// [`ArcSwapAny`](struct.ArcSwapAny.html). Even though the examples there often use `ArcSwap`,
+/// they are applicable to `ArcSwapOption` with appropriate changes.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use arc_swap::ArcSwapOption;
+///
+/// let shared = ArcSwapOption::from(None);
+/// assert!(shared.load_full().is_none());
+/// assert!(shared.swap(Some(Arc::new(42))).is_none());
+/// assert_eq!(42, **shared.load_full().as_ref().unwrap());
+/// ```
+pub type ArcSwapOption<T> = ArcSwapAny<Option<Arc<T>>>;
+
 impl<T, S: LockStorage> ArcSwapAny<Option<Arc<T>>, S> {
     /// A convenience constructor directly from a pointed-to value.
     ///
@@ -1209,39 +1215,11 @@ impl<T, S: LockStorage> ArcSwapAny<Option<Arc<T>>, S> {
     }
 }
 
-impl<T: RefCnt + Default, S: LockStorage> Default for ArcSwapAny<T, S> {
-    fn default() -> Self {
-        Self::new(T::default())
-    }
-}
-
-/// An atomic storage for `Option<Arc>`.
-///
-/// This is very similar to [`ArcSwap`](type.ArcSwap.html), but allows storing NULL values, which
-/// is useful in some situations.
-///
-/// This is a type alias only. Most of the methods are described on
-/// [`ArcSwapAny`](struct.ArcSwapAny.html). Even though the examples there often use `ArcSwap`,
-/// they are applicable to `ArcSwapOption` with appropriate changes.
-///
-/// # Examples
-///
-/// ```
-/// use std::sync::Arc;
-/// use arc_swap::ArcSwapOption;
-///
-/// let shared = ArcSwapOption::from(None);
-/// assert!(shared.load_full().is_none());
-/// assert!(shared.swap(Some(Arc::new(42))).is_none());
-/// assert_eq!(42, **shared.load_full().as_ref().unwrap());
-/// ```
-pub type ArcSwapOption<T> = ArcSwapAny<Option<Arc<T>>>;
-
 /// An atomic storage that doesn't share the internal generation locks with others.
 ///
 /// This makes it bigger and it also might suffer contention (on the HW level) if used from many
-/// threads at once. But a peek [`Guard`](struct.Guard.html) produced by it won't block other
-/// storages from updating.
+/// threads at once. But using [`load_signal_safe`](struct.ArcSwapAny.html#method.load_signal_safe)
+/// will not block writes on other instances.
 ///
 /// ```rust
 /// # use std::sync::Arc;
