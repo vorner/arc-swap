@@ -619,7 +619,7 @@ const YIELD_EVERY: usize = 16;
 ///   `Option<Arc<_>>` (`Rc` too, but that one is not practically useful). But third party could
 ///   provide implementations of the [`RefCnt`] trait and plug in others.
 /// * `S`: This describes where the generation lock is stored and how it works (this allows tuning
-///   some of the performance trade-offs).
+///   some of the performance trade-offs). See the [`LockStorage`][LockStorage] trait.
 ///
 /// # Examples
 ///
@@ -825,15 +825,17 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// }
     ///
     /// fn print_broken(p: &ArcSwap<Point>) {
-    ///     // This is broken, because the x and y may come from different points, combining into an
-    ///     // invalid point that never existed.
+    ///     // This is broken, because the x and y may come from different points,
+    ///     // combining into an invalid point that never existed.
     ///     println!("X: {}", p.load().x);
+    ///     // If someone changes the content now, between these two loads, we
+    ///     // have a problem
     ///     println!("Y: {}", p.load().y);
     /// }
     ///
     /// fn print_correct(p: &ArcSwap<Point>) {
-    ///     // Here we take a snapshot of one specific point so both x and y come from the same
-    ///     // one.
+    ///     // Here we take a snapshot of one specific point so both x and y come
+    ///     // from the same one.
     ///     let point = p.load();
     ///     println!("X: {}", point.x);
     ///     println!("Y: {}", point.y);
