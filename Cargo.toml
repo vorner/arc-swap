@@ -12,7 +12,6 @@ license = "Apache-2.0/MIT"
 
 [badges]
 travis-ci = { repository = "vorner/arc-swap" }
-appveyor = { repository = "vorner/arc-swap" }
 maintenance = { status = "actively-developed" }
 
 [features]
