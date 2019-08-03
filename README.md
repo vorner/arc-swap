@@ -1,6 +1,7 @@
 # ArcSwap
 
 [![Travis Build Status](https://api.travis-ci.org/vorner/arc-swap.png?branch=master)](https://travis-ci.org/vorner/arc-swap)
+[![AppVeyor Build status](https://ci.appveyor.com/api/projects/status/d9p4equeuhymfny6/branch/master?svg=true)](https://ci.appveyor.com/project/vorner/arc-swap/branch/master)
 
 The Rust's [`Arc`] can be used from multiple threads and the count is safely
 updated as needed. However, the [`Arc`] itself can't be atomically replaced. To
