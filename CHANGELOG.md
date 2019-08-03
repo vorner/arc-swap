@@ -1,3 +1,7 @@
+* Mapped caches ‒ to allow giving access to parts of config only.
+
+# 0.4.0
+
 * Support for Weak pointers.
 * RefCnt implemented for Rc.
 * Breaking: Big API cleanups.

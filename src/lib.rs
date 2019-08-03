@@ -7,6 +7,7 @@
 #![cfg_attr(feature = "unstable-weak", feature(weak_into_raw))]
 // TODO: The docs might want some rewrite and cleanup too. This is quite a mouthful for
 // *introduction* to the library.
+// TODO: Introduce some patterns/best practices ‒ like passing parts of config around.
 
 //! Making [`Arc`][Arc] itself atomic
 //!
@@ -244,7 +245,7 @@
 //! [`AtomicArc`]: https://github.com/stjepang/atomic/blob/master/src/atomic_arc.rs#L20
 
 mod as_raw;
-mod cache;
+pub mod cache;
 mod compile_fail_tests;
 mod debt;
 pub mod gen_lock;

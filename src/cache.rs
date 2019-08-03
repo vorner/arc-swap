@@ -13,6 +13,20 @@ use super::gen_lock::LockStorage;
 use super::ref_cnt::RefCnt;
 use super::ArcSwapAny;
 
+/// Generalization of caches providing access to `T`.
+///
+/// This abstracts over all kinds of caches that can provide a cheap access to values of type `T`.
+/// This is useful in cases where some code doesn't care if the `T` is the whole structure or just
+/// a part of it.
+///
+/// See the example at [`Cache::map`].
+pub trait Access<T> {
+    /// Loads the value from cache.
+    ///
+    /// This revalidates the value in the cache, then provides the access to the cached value.
+    fn load(&mut self) -> &T;
+}
+
 /// Caching handle for [`ArcSwapAny`][ArcSwapAny].
 ///
 /// Instead of loading the [`Arc`][Arc] on every request from the shared storage, this keeps
@@ -116,6 +130,74 @@ where
             self.cached = self.arc_swap.load_full();
         }
     }
+
+    /// Turns this cache into a cache with a projection inside the cached value.
+    ///
+    /// You'd use this in case when some part of code needs access to fresh values of `U`, however
+    /// a bigger structure containing `U` is provided by this cache. The possibility of giving the
+    /// whole structure to the part of the code falls short in terms of reusability (the part of
+    /// the code could be used within multiple contexts, each with a bigger different structure
+    /// containing `U`) and code separation (the code shouldn't needs to know about the big
+    /// structure).
+    ///
+    /// # Warning
+    ///
+    /// As the provided `f` is called inside every [`load`][Access::load], this one should be
+    /// cheap. Most often it is expected to be just a closure taking reference of some inner field.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// extern crate arc_swap;
+    ///
+    /// use arc_swap::ArcSwap;
+    /// use arc_swap::cache::{Access, Cache};
+    ///
+    /// struct InnerCfg {
+    ///     answer: usize,
+    /// }
+    ///
+    /// struct FullCfg {
+    ///     inner: InnerCfg,
+    /// }
+    ///
+    /// fn use_inner<A: Access<InnerCfg>>(cache: &mut A) {
+    ///     let value = cache.load();
+    ///     println!("The answer is: {}", value.answer);
+    /// }
+    ///
+    /// let full_cfg = ArcSwap::from_pointee(FullCfg {
+    ///     inner: InnerCfg {
+    ///         answer: 42,
+    ///     }
+    /// });
+    /// let cache = Cache::new(&full_cfg);
+    /// use_inner(&mut cache.map(|full| &full.inner));
+    ///
+    /// let inner_cfg = ArcSwap::from_pointee(InnerCfg { answer: 24 });
+    /// let mut inner_cache = Cache::new(&inner_cfg);
+    /// use_inner(&mut inner_cache);
+    /// ```
+    pub fn map<F, U>(self, f: F) -> MapCache<A, T, F>
+    where
+        F: Fn(&T) -> &U,
+    {
+        MapCache {
+            inner: self,
+            projection: f,
+        }
+    }
+}
+
+impl<A, T, S> Access<T::Target> for Cache<A, T>
+where
+    A: Deref<Target = ArcSwapAny<T, S>>,
+    T: Deref<Target = <T as RefCnt>::Base> + RefCnt,
+    S: LockStorage,
+{
+    fn load(&mut self) -> &T::Target {
+        self.load().deref()
+    }
 }
 
 impl<A, T, S> From<A> for Cache<A, T>
@@ -126,6 +208,28 @@ where
 {
     fn from(arc_swap: A) -> Self {
         Self::new(arc_swap)
+    }
+}
+
+/// An implementation of a cache with a projection into the accessed value.
+///
+/// This is the implementation structure for [`Cache::map`]. It can't be created directly and it
+/// should be used through the [`Access`] trait.
+#[derive(Clone, Debug)]
+pub struct MapCache<A, T, F> {
+    inner: Cache<A, T>,
+    projection: F,
+}
+
+impl<A, T, S, F, U> Access<U> for MapCache<A, T, F>
+where
+    A: Deref<Target = ArcSwapAny<T, S>>,
+    T: RefCnt,
+    S: LockStorage,
+    F: Fn(&T) -> &U,
+{
+    fn load(&mut self) -> &U {
+        (self.projection)(self.inner.load())
     }
 }
 
@@ -167,5 +271,36 @@ mod tests {
         assert_eq!(42, **c.load().as_ref().unwrap());
         a.store(None);
         assert!(c.load().is_none());
+    }
+
+    struct Inner {
+        answer: usize,
+    }
+
+    struct Outer {
+        inner: Inner,
+    }
+
+    #[test]
+    fn map_cache() {
+        let a = ArcSwap::from_pointee(Outer {
+            inner: Inner { answer: 42 },
+        });
+
+        let mut cache = Cache::new(&a);
+        let mut inner = cache.clone().map(|outer| &outer.inner);
+        let mut answer = cache.clone().map(|outer| &outer.inner.answer);
+
+        assert_eq!(42, cache.load().inner.answer);
+        assert_eq!(42, inner.load().answer);
+        assert_eq!(42, *answer.load());
+
+        a.store(Arc::new(Outer {
+            inner: Inner { answer: 24 },
+        }));
+
+        assert_eq!(24, cache.load().inner.answer);
+        assert_eq!(24, inner.load().answer);
+        assert_eq!(24, *answer.load());
     }
 }
