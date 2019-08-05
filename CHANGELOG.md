@@ -1,3 +1,5 @@
+# 0.4.1
+
 * Mapped caches ‒ to allow giving access to parts of config only.
 
 # 0.4.0
