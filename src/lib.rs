@@ -237,7 +237,7 @@
 //! [rcu]: struct.ArcSwapAny.html#method.rcu
 //! [RefCnt]: trait.RefCnt.hmtl
 //! [LockStorage]: gen_lock/trait.LockStorage.html
-//! [benchmarks]: https://github.com/vorner/arc-swap/tree/master/benches
+//! [benchmarks]: https://github.com/vorner/arc-swap/tree/master/benchmarks
 //! [parking_lot]: https://docs.rs/parking_lot
 //! [ArcSwapWeak]: type.ArcSwapWeak.html
 //! [`crossbeam::atomic::ArcCell`]: https://docs.rs/crossbeam/0.5.0/crossbeam/atomic/struct.ArcCell.html
