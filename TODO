@@ -1,0 +1,3 @@
+* Does the Cache need two type parameters? Couldn't the second be deduced from the first?
+* A cache without the thing inside ‒ passed to load every time. Possibly with multiple cached values.
+* Something like a map on the ArcSwapAny/Guard too?
