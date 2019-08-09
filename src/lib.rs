@@ -265,6 +265,7 @@ use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 
+use access::{Access, Map};
 use as_raw::AsRaw;
 pub use cache::Cache;
 use debt::Debt;
@@ -1135,6 +1136,15 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
                 cur = prev;
             }
         }
+    }
+
+    /// TODO
+    pub fn map<I, R, F>(&self, f: F) -> Map<&Self, I, F>
+    where
+        F: Fn(&I) -> &R,
+        Self: Access<I>,
+    {
+        Map::new(self, f)
     }
 }
 
