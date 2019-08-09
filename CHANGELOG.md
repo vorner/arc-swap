@@ -1,3 +1,5 @@
+* Mapped cache can take `FnMut` as well as `Fn`.
+
 # 0.4.1
 
 * Mapped caches ‒ to allow giving access to parts of config only.

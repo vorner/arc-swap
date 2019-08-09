@@ -145,6 +145,9 @@ where
     /// As the provided `f` is called inside every [`load`][Access::load], this one should be
     /// cheap. Most often it is expected to be just a closure taking reference of some inner field.
     ///
+    /// For the same reasons, it should not have side effects and should never panic (these will
+    /// not break Rust's safety rules, but might produce behaviour you don't expect).
+    ///
     /// # Examples
     ///
     /// ```rust
@@ -180,7 +183,7 @@ where
     /// ```
     pub fn map<F, U>(self, f: F) -> MapCache<A, T, F>
     where
-        F: Fn(&T) -> &U,
+        F: FnMut(&T) -> &U,
     {
         MapCache {
             inner: self,
@@ -226,7 +229,7 @@ where
     A: Deref<Target = ArcSwapAny<T, S>>,
     T: RefCnt,
     S: LockStorage,
-    F: Fn(&T) -> &U,
+    F: FnMut(&T) -> &U,
 {
     fn load(&mut self) -> &U {
         (self.projection)(self.inner.load())
