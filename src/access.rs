@@ -5,9 +5,9 @@ use std::ops::Deref;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::gen_lock::LockStorage;
-use crate::ref_cnt::RefCnt;
-use crate::{ArcSwapAny, Guard};
+use super::gen_lock::LockStorage;
+use super::ref_cnt::RefCnt;
+use super::{ArcSwapAny, Guard};
 
 /// TODO
 pub trait Access<T> {
@@ -65,7 +65,7 @@ impl<T, S: LockStorage> Access<T> for ArcSwapAny<Rc<T>, S> {
 }
 
 /// TODO
-pub struct DynGuard<T: ?Sized>(Box<dyn Deref<Target = T>>);
+pub struct DynGuard<T: ?Sized>(Box<Deref<Target = T>>);
 
 impl<T: ?Sized> Deref for DynGuard<T> {
     type Target = T;
@@ -127,7 +127,8 @@ pub struct Map<A, T, F> {
 }
 
 impl<A, T, F> Map<A, T, F> {
-    pub(crate) fn new<R>(access: A, projection: F) -> Self
+    /// TODO
+    pub fn new<R>(access: A, projection: F) -> Self
     where
         F: Fn(&T) -> &R,
     {
@@ -157,7 +158,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{ArcSwap, ArcSwapOption};
+    use super::super::{ArcSwap, ArcSwapOption};
 
     use super::*;
 
@@ -178,11 +179,11 @@ mod tests {
         check_static_dispatch(a);
     }
 
-    fn check_dyn_dispatch_direct(a: &dyn DynAccess<usize>) {
+    fn check_dyn_dispatch_direct(a: &DynAccess<usize>) {
         assert!(42 == *a.load());
     }
 
-    fn check_dyn_dispatch(a: &dyn DynAccess<Arc<usize>>) {
+    fn check_dyn_dispatch(a: &DynAccess<Arc<usize>>) {
         assert!(42 == **a.load());
     }
 

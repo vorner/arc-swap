@@ -3,7 +3,8 @@
     test(attr(deny(warnings)))
 )]
 #![deny(missing_docs, warnings)]
-#![allow(renamed_and_removed_lints)]
+// We aim at older rust too, one without dyn
+#![allow(unknown_lints, bare_trait_objects, renamed_and_removed_lints)]
 #![cfg_attr(feature = "unstable-weak", feature(weak_into_raw))]
 // TODO: The docs might want some rewrite and cleanup too. This is quite a mouthful for
 // *introduction* to the library.
