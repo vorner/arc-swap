@@ -1139,7 +1139,58 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
         }
     }
 
-    /// TODO
+    /// Provides an access to an up to date projection of the carried data.
+    ///
+    /// # Motivation
+    ///
+    /// Sometimes, an application consists of components. Each component has its own configuration
+    /// structure. The whole configuration contains all the smaller config parts.
+    ///
+    /// For the sake of separation and abstraction, it is not desirable to pass the whole
+    /// configuration to each of the components. This allows the component to take only access to
+    /// its own part.
+    ///
+    /// # Lifetimes & flexibility
+    ///
+    /// This method is not the most flexible way, as the returned type borrows into the `ArcSwap`.
+    /// To provide access into eg. `Arc<ArcSwap<T>>`, you can create the [`Map`] type directly.
+    ///
+    /// # Performance
+    ///
+    /// As the provided function is called on each load from the shared storage, it should
+    /// generally be cheap. It is expected this will usually be just referencing of a field inside
+    /// the structure.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// extern crate arc_swap;
+    /// extern crate crossbeam_utils;
+    ///
+    /// use std::sync::Arc;
+    ///
+    /// use arc_swap::ArcSwap;
+    /// use arc_swap::access::Access;
+    ///
+    /// struct Cfg {
+    ///     value: usize,
+    /// }
+    ///
+    /// fn print_many_times<V: Access<usize>>(value: V) {
+    ///     for _ in 0..25 {
+    ///         let value = value.load();
+    ///         println!("{}", *value);
+    ///     }
+    /// }
+    ///
+    /// let shared = ArcSwap::from_pointee(Cfg { value: 0 });
+    /// let mapped = shared.map(|c: &Cfg| &c.value);
+    /// crossbeam_utils::thread::scope(|s| {
+    ///     // Will print some zeroes and some twos
+    ///     s.spawn(|_| print_many_times(mapped));
+    ///     s.spawn(|_| shared.store(Arc::new(Cfg { value: 2 })));
+    /// }).expect("Something panicked in a thread");
+    /// ```
     pub fn map<I, R, F>(&self, f: F) -> Map<&Self, I, F>
     where
         F: Fn(&I) -> &R,
