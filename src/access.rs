@@ -156,6 +156,26 @@ where
     }
 }
 
+/// TODO
+pub struct ConstantDeref<T>(T);
+
+impl<T> Deref for ConstantDeref<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+/// TODO
+pub struct Constant<T>(pub T);
+
+impl<T: Clone> Access<T> for Constant<T> {
+    type Guard = ConstantDeref<T>;
+    fn load(&self) -> Self::Guard {
+        ConstantDeref(self.0.clone())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{ArcSwap, ArcSwapOption};
@@ -245,5 +265,13 @@ mod tests {
         let map = a.map(|a: &Option<Arc<Cfg>>| a.as_ref().map(|c| &c.value).unwrap_or(&42));
         check_static_dispatch_direct(&map);
         check_dyn_dispatch_direct(&map);
+    }
+
+    #[test]
+    fn constant() {
+        let c = Constant(42);
+        check_static_dispatch_direct(&c);
+        check_dyn_dispatch_direct(&c);
+        check_static_dispatch_direct(c);
     }
 }
