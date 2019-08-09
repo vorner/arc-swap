@@ -27,10 +27,10 @@ members = ["benchmarks"]
 crossbeam-utils = "~0.6"
 itertools = "~0.8"
 lazy_static = "~1"
-model = "~0.0.4"
+model = "~0.1"
 num_cpus = "~1"
-version-sync = "~0.7"
-proptest = "~0.7"
+version-sync = "~0.8"
+proptest = "~0.8"
 
 [profile.bench]
 debug = true

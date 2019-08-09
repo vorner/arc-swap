@@ -12,7 +12,7 @@ arc-swap = { path = ".." }
 crossbeam = "~0.5" # Outdated on purpose, benchmarking something that no longer exists
 crossbeam-utils = "~0.6"
 lazy_static = "~1"
-parking_lot = "~0.8"
+parking_lot = "~0.9"
 
 [[bench]]
 name = "atomics"
