@@ -25,6 +25,9 @@ use std::sync::Arc;
 /// ZSTs, but it is true for `Arc`s of ZSTs, because they have the reference counts just after the
 /// value. It would be fine to point to a type-erased version of the same object, though (if one
 /// could use this trait with unsized types in the first place).
+///
+/// Furthermore, the type should be Pin (eg. if the type is cloned or moved, it should still
+/// point/deref to the same place in memory).
 pub unsafe trait RefCnt: Clone {
     /// The base type the pointer points to.
     type Base;

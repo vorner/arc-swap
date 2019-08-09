@@ -244,6 +244,7 @@
 //! [`crossbeam-arccell`]: https://docs.rs/crossbeam-arccell/
 //! [`AtomicArc`]: https://github.com/stjepang/atomic/blob/master/src/atomic_arc.rs#L20
 
+pub mod access;
 mod as_raw;
 pub mod cache;
 mod compile_fail_tests;
