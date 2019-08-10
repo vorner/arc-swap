@@ -221,6 +221,9 @@ pub struct MapGuard<G, T> {
     value: *const T,
 }
 
+// Why these are safe:
+// * The *const T is actually used just as a &const T with 'self lifetime (which can't be done in
+//   Rust). So if the reference is Send/Sync, so is the raw pointer.
 unsafe impl<G, T> Send for MapGuard<G, T>
 where
     G: Send,
@@ -238,6 +241,13 @@ where
 impl<G, T> Deref for MapGuard<G, T> {
     type Target = T;
     fn deref(&self) -> &T {
+        // Why this is safe:
+        // * The pointer is originally converted from a reference. It's not null, it's aligned,
+        //   it's the right type, etc.
+        // * The pointee couldn't have gone away ‒ the guard keeps the original reference alive, so
+        //   must the new one still be alive too. Moving the guard is fine, we assume the RefCnt is
+        //   Pin (because it's Arc or Rc or something like that ‒ when that one moves, the data it
+        //   points to stay at the same place).
         unsafe { &*self.value }
     }
 }
