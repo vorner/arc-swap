@@ -1,3 +1,7 @@
+# 0.4.2
+
+* The Access functionality ‒ ability to pass a handle to subpart of held data to
+  somewhere with the ability to update itself.
 * Mapped cache can take `FnMut` as well as `Fn`.
 
 # 0.4.1
