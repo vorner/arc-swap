@@ -1,3 +1,8 @@
+# 0.4.3
+
+* Fix the `Display` implementation on `Guard` to correctly delegate to the
+  underlying `Display` implementation.
+
 # 0.4.2
 
 * The Access functionality ‒ ability to pass a handle to subpart of held data to
