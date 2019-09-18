@@ -540,7 +540,7 @@ impl<'a, T: Debug + RefCnt> Debug for Guard<'a, T> {
     }
 }
 
-impl<'a, T: Debug + RefCnt> Display for Guard<'a, T> {
+impl<'a, T: Display + RefCnt> Display for Guard<'a, T> {
     fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
         self.deref().fmt(formatter)
     }
