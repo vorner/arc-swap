@@ -4,19 +4,21 @@ use std::sync::Arc;
 
 /// A trait describing smart reference counted pointers.
 ///
-/// Note that in a way `Option<Arc<T>>` is also a smart reference counted pointer, just one that
-/// can hold NULL.
+/// Note that in a way [`Option<Arc<T>>`][Option] is also a smart reference counted pointer, just
+/// one that can hold NULL.
 ///
-/// The trait is unsafe, because a wrong implementation will break the
-/// [`ArcSwapAny`](struct.ArcSwapAny.html) implementation and lead to UB.
+/// The trait is unsafe, because a wrong implementation will break the [ArcSwapAny]
+/// implementation and lead to UB.
 ///
 /// This is not actually expected for downstream crate to implement, this is just means to reuse
-/// code for `Arc` and `Option<Arc>` variants. However, it is theoretically possible (if you have
-/// your own `Arc` implementation).
+/// code for [Arc] and [`Option<Arc>`][Option] variants. However, it is theoretically possible (if
+/// you have your own [Arc] implementation).
 ///
-/// It is also implemented for `Rc`, but that is not considered very useful (because the
-/// `ArcSwapAny` is not `Send` or `Sync`, therefore there's very little advantage for it to be
+/// It is also implemented for [Rc], but that is not considered very useful (because the
+/// [ArcSwapAny] is not `Send` or `Sync`, therefore there's very little advantage for it to be
 /// atomic).
+///
+/// # Safety
 ///
 /// Aside from the obvious properties (like that incrementing and decrementing a reference count
 /// cancel each out and that having less references tracked than how many things actually point to
@@ -28,6 +30,10 @@ use std::sync::Arc;
 ///
 /// Furthermore, the type should be Pin (eg. if the type is cloned or moved, it should still
 /// point/deref to the same place in memory).
+///
+/// [Arc]: std::sync::Arc
+/// [Rc]: std::rc::Rc
+/// [ArcSwapAny]: ::ArcSwapAny
 pub unsafe trait RefCnt: Clone {
     /// The base type the pointer points to.
     type Base;
@@ -53,6 +59,10 @@ pub unsafe trait RefCnt: Clone {
     /// `into_ptr` temporarily provided the reference count never drops under 1 during that time
     /// (the implementation sometimes owes a reference). These extra pointers will either be
     /// converted back using `into_ptr` or forgotten.
+    ///
+    /// # Safety
+    ///
+    /// This must not be called by code outside of this crate.
     unsafe fn from_ptr(ptr: *const Self::Base) -> Self;
 
     /// Increments the reference count by one.
@@ -65,6 +75,10 @@ pub unsafe trait RefCnt: Clone {
     /// Note this is called on a raw pointer (one previously returned by
     /// [`into_ptr`](#method.into_ptr). This may lead to dropping of the reference count to 0 and
     /// destruction of the internal pointer.
+    ///
+    /// # Safety
+    ///
+    /// This must not be called by code outside of this crate.
     unsafe fn dec(ptr: *const Self::Base) {
         drop(Self::from_ptr(ptr));
     }

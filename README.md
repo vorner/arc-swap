@@ -3,16 +3,9 @@
 [![Travis Build Status](https://api.travis-ci.org/vorner/arc-swap.png?branch=master)](https://travis-ci.org/vorner/arc-swap)
 [![AppVeyor Build status](https://ci.appveyor.com/api/projects/status/d9p4equeuhymfny6/branch/master?svg=true)](https://ci.appveyor.com/project/vorner/arc-swap/branch/master)
 
-The Rust's [`Arc`] can be used from multiple threads and the count is safely
-updated as needed. However, the [`Arc`] itself can't be atomically replaced. To
-do that, one needs to place it under a lock.
-
-On the other hand, [`AtomicPtr`] can be replaced atomically, but it's hard to
-know when the target can be safely freed.
-
-This is a cross-breed between the two ‒ an [`ArcSwap`] can be seeded with an
-[`Arc`] and the [`Arc`] can be simultaneously replaced and read by multiple
-threads.
+This provides something similar to what `RwLock<Arc<T>>` is or what
+`Atomic<Arc<T>>` would be if it existed, optimized for read-mostly write-seldom
+scenarios, with consistent performance characteristics.
 
 Read [the documentation](https://docs.rs/arc-swap) before using.
 

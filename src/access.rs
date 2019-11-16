@@ -1,9 +1,9 @@
 //! Abstracting over accessing parts of stored value.
 //!
 //! Sometimes, there's a big globalish data structure (like a configuration for the whole program).
-//! Then there are parts of the program that need access to up-to-date version of such
-//! configuration, but for reasons of code separation and reusability, it is not desirable to pass
-//! the whole configuration to each of the parts.
+//! Then there are parts of the program that need access to up-to-date version of their *part* of
+//! the configuration, but for reasons of code separation and reusability, it is not desirable to
+//! pass the whole configuration to each of the parts.
 //!
 //! This module provides means to grant the parts access to the relevant subsets of such global
 //! data structure while masking the fact it is part of the bigger whole from the component.

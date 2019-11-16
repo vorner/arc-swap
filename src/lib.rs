@@ -4,86 +4,144 @@
 )]
 #![deny(missing_docs, warnings)]
 // We aim at older rust too, one without dyn
-#![allow(unknown_lints, bare_trait_objects, renamed_and_removed_lints)]
+#![allow(
+    unknown_lints,
+    bare_trait_objects,
+    renamed_and_removed_lints,
+    clippy::needless_doctest_main
+)]
 #![cfg_attr(feature = "unstable-weak", feature(weak_into_raw))]
-// TODO: The docs might want some rewrite and cleanup too. This is quite a mouthful for
-// *introduction* to the library.
-// TODO: Introduce some patterns/best practices ‒ like passing parts of config around.
 
 //! Making [`Arc`][Arc] itself atomic
 //!
-//! This library provides the [`ArcSwapAny`][ArcSwapAny] type (which you probably don't want to use
-//! directly) and several type aliases that set it up for common use cases:
-//!
-//! * [`ArcSwap`][ArcSwap], which operates on [`Arc<T>`][Arc].
-//! * [`ArcSwapOption`][ArcSwapOption], which operates on `Option<Arc<T>>`.
-//! * [`IndependentArcSwap`][IndependentArcSwap], which uses slightly different trade-off decisions
-//!   ‒ see below.
-//!
-//! Note that as these are *type aliases*, the useful methods are defined on
-//! [`ArcSwapAny`][ArcSwapAny] directly and you want to look at its documentation, not on the
-//! aliases.
-//!
-//! This is similar to [`RwLock<Arc<T>>`][RwLock], but it is faster, the readers are never blocked
-//! (not even by writes) and it is more configurable.
-//!
-//! Or, you can look at it this way. There's [`Arc<T>`][Arc] ‒ it knows when it stops being used and
-//! therefore can clean up memory. But once there's a [`Arc<T>`][Arc] somewhere, shared between
-//! threads, it has to keep pointing to the same thing. On the other hand, there's
-//! [`AtomicPtr`][AtomicPtr] which can be changed even when shared between
-//! threads, but it doesn't know when the data pointed to is no longer in use so it
-//! doesn't clean up. This is a hybrid between the two.
+//! The library provides a type that is somewhat similar to what `RwLock<Arc<T>>` is or
+//! `Atomic<Arc<T>>` would be if it existed, optimized for read-mostly update-seldom scenarios,
+//! with consistent performance characteristics.
 //!
 //! # Motivation
 //!
-//! First, the C++ [`shared_ptr`][shared_ptr] can act this way. The fact that it's only the surface
-//! API and all the implementations I could find hide a mutex inside wasn't known to me when I
-//! started working on this. So I decided Rust needs to keep up there.
+//! There are many situations in which one might want to have some data structure that is often
+//! read and seldom updated. Some examples might be a configuration of a service, routing tables,
+//! snapshot of some data that is renewed every few minutes, etc.
 //!
-//! Second, I like hard problems and this seems like an apt supply of them.
+//! In all these cases one needs:
+//! * Being able to read the current value of the data structure, *fast*.
+//! * Using the same version of the data structure over longer period of time ‒ a query should be
+//!   answered by a consistent version of data, a packet should be routed either by an old or by a
+//!   new version of the routing table but not by a combination, etc.
+//! * Perform an update without disrupting the processing.
 //!
-//! And third, I actually have few use cases for something like this.
+//! The first idea would be to use [`RwLock<T>`][RwLock] and keep a read-lock for the whole time of
+//! processing. Update would, however, pause all processing until done.
+//!
+//! Better option would be to have [`RwLock<Arc<T>>`][RwLock]. Then one would lock, clone the [Arc]
+//! and unlock. This suffers from CPU-level contention (on the lock and on the reference count of
+//! the [Arc]) which makes it relatively slow. Depending on the implementation, an update may be
+//! blocked for arbitrary long time by a steady inflow of readers.
+//!
+//! ```rust
+//! # #[macro_use] extern crate lazy_static;
+//! # use std::sync::{Arc, RwLock};
+//! # struct RoutingTable; struct Packet; impl RoutingTable { fn route(&self, _: Packet) {} }
+//! lazy_static! {
+//!     static ref ROUTING_TABLE: RwLock<Arc<RoutingTable>> = RwLock::new(Arc::new(RoutingTable));
+//! }
+//!
+//! fn process_packet(packet: Packet) {
+//!     let table = Arc::clone(&ROUTING_TABLE.read().unwrap());
+//!     table.route(packet);
+//! }
+//! # fn main() { process_packet(Packet); }
+//! ```
+//!
+//! The [ArcSwap] can be used instead, which solves the above problems and has better performance
+//! characteristics than the [RwLock], both in contended and non-contended scenarios.
+//!
+//! ```rust
+//! # extern crate arc_swap;
+//! # #[macro_use] extern crate lazy_static;
+//! # use arc_swap::ArcSwap;
+//! # struct RoutingTable; struct Packet; impl RoutingTable { fn route(&self, _: Packet) {} }
+//! lazy_static! {
+//!     static ref ROUTING_TABLE: ArcSwap<RoutingTable> = ArcSwap::from_pointee(RoutingTable);
+//! }
+//!
+//! fn process_packet(packet: Packet) {
+//!     let table = ROUTING_TABLE.load();
+//!     table.route(packet);
+//! }
+//! # fn main() { process_packet(Packet); }
+//! ```
+//!
+//! # Type aliases
+//!
+//! The most interesting types in the crate are the [ArcSwap] and [ArcSwapOption] (the latter
+//! similar to `Atomic<Option<Arc<T>>>`). These are the types users will want to use.
+//!
+//! Note, however, that these are type aliases of the [ArcSwapAny]. While that type is the
+//! low-level implementation and usually isn't referred to directly in the user code, all the
+//! relevant methods (and therefore documentation) is on it.
+//!
+//! # Atomic orderings
+//!
+//! Each operation on the [ArcSwapAny] type callable concurrently (eg. [load], but not
+//! [into_inner]) contains at least one SeqCst atomic read-write operation, therefore even
+//! operations on different instances have a defined global order of operations.
+//!
+//! # Less usual needs
+//!
+//! There are some utilities that make the crate useful in more places than just the basics
+//! described above.
+//!
+//! The [load_signal_safe] method can be safely used inside unix signal handlers (it is the only
+//! one guaranteed to be safe there).
+//!
+//! The [Cache] allows further speed improvements over simply using [load] every time. The downside
+//! is less comfortable API (the caller needs to keep the cache around). Also, a cache may keep the
+//! older version of the value alive even when it is not in active use, until the cache is
+//! re-validated.
+//!
+//! The [access] module (and similar traits in the [cache] module) allows shielding independent
+//! parts of application from each other and from the exact structure of the *whole* configuration.
+//! This helps structuring the application and giving it access only to its own parts of the
+//! configuration.
+//!
+//! Finally, the [gen_lock] module allows further customization of low-level locking/concurrency
+//! details.
 //!
 //! # Performance characteristics
 //!
-//! It is optimised for read-heavy situations with only occasional writes. Few examples might be:
-//!
-//! * Global configuration data structure, which is updated once in a blue moon when an operator
-//!   manually does some changes, but looked into through the whole program all the time. Looking
-//!   into it should be cheap and multiple threads should be able to look into it at the same time.
-//! * Some in-memory database or maybe routing tables, where lookup latency matters. Updating the
-//!   routing tables isn't an excuse to stop processing packets even for a short while.
+//! There are several performance advantages of [ArcSwap] over [RwLock].
 //!
 //! ## Lock-free readers
 //!
 //! All the read operations are always [lock-free]. Most of the time, they are actually
-//! [wait-free]. The only one that is *only* lock-free is the first [`load`][load] access in each
-//! thread (across all the pointers).
+//! [wait-free], the notable exception is the first [load] access in each thread (across all the
+//! instances of [ArcSwap]), as it sets up some thread-local data structures.
 //!
-//! So, when the documentation talks about *contention*, it talks about multiple CPU cores having to
-//! sort out who changes the bytes in a cache line first and who is next. This slows things down,
-//! but it still rolls forward and stop for no one, not like with the mutex-style contention when
-//! one holds the lock and other threads get parked.
+//! Whenever the documentation talks about *contention* in the context of [ArcSwap], it talks about
+//! contention on the CPU level ‒ multpile cores having to deal with accessing the same cache line.
+//! This slows things down (compared to each one accessing its own cache line), but an eventual
+//! progress is still guaranteed and the cost is significantly lower than parking threads as with
+//! mutex-style contention.
 //!
-//! Unfortunately, there are cases where readers block writers from completion. It's much more
-//! limited in scope than with [`Mutex`][Mutex] or [`RwLock`][RwLock] and steady stream of readers
-//! will *not* prevent an update from happening indefinitely (only a reader stuck in a critical
-//! section could, and when used according to recommendations, the critical sections contain no
-//! loops and are only several instructions short).
+//! Unfortunately writers are *not* [lock-free]. A reader stuck (suspended/killed) in a critical
+//! section (few instructions long in case of [load]) may block a writer from completion.
+//! Nevertheless, a steady inflow of new readers nor other writers will not block the writer.
 //!
 //! ## Speeds
 //!
 //! The base line speed of read operations is similar to using an *uncontended* [`Mutex`][Mutex].
-//! However, [`load`][load] suffers no contention from any other read operations and only slight
+//! However, [load] suffers no contention from any other read operations and only slight
 //! ones during updates. The [`load_full`][load_full] operation is additionally contended only on
-//! the reference count of the [`Arc`][Arc] inside ‒ so, in general, while [`Mutex`][Mutex] rapidly
+//! the reference count of the [Arc] inside ‒ so, in general, while [Mutex] rapidly
 //! loses its performance when being in active use by multiple threads at once and
-//! [`RwLock`][RwLock] is slow to start with, [`ArcSwapAny`][ArcSwapAny] mostly keeps its
-//! performance even when read by many threads in parallel.
+//! [RwLock] is slow to start with, [ArcSwap] mostly keeps its performance even when read by many
+//! threads in parallel.
 //!
 //! Write operations are considered expensive. A write operation is more expensive than access to
-//! an *uncontended* [`Mutex`][Mutex] and on some architectures even slower than uncontended
-//! [`RwLock`][RwLock]. However, it is faster than either under contention.
+//! an *uncontended* [Mutex] and on some architectures even slower than uncontended
+//! [RwLock]. However, it is faster than either under contention.
 //!
 //! There are some (very unscientific) [benchmarks] within the source code of the library.
 //!
@@ -92,55 +150,44 @@
 //! but even AMD vs. Intel or two different Intel processors. Therefore, if what matters is more
 //! the speed than the wait-free guarantees, you're advised to do your own measurements.
 //!
-//! However, the intended selling point of the library is consistency in the performance, not
-//! outperforming other locking primitives in average. If you do worry about the raw performance,
-//! you can have a look at [`Cache`][Cache].
+//! Further speed improvements may be gained by the use of the [Cache].
+//!
+//! ## Consistency
+//!
+//! The combination of [wait-free] guarantees of readers and no contention between concurrent
+//! [load]s provides *consistent* performance characteristics of the synchronization mechanism.
+//! This might be important for soft-realtime applications (the CPU-level contention caused by a
+//! recent update/write operation might be problematic for some hard-realtime cases, though).
 //!
 //! ## Choosing the right reading operation
 //!
 //! There are several load operations available. While the general go-to one should be
-//! [`load`][load], there may be situations in which the others are a better match.
+//! [load], there may be situations in which the others are a better match.
 //!
-//! The [`load`][load] usually only borrows the instance from the shared [`ArcSwapAny`]. This makes
+//! The [load] usually only borrows the instance from the shared [ArcSwap]. This makes
 //! it faster, because different threads don't contend on the reference count. There are two
-//! situations when this borrow isn't possible. If the content of `ArcSwapAny` gets changed, all
-//! existing [`Guard`][Guard]s are promoted to contain an owned instance.
+//! situations when this borrow isn't possible. If the content gets changed, all existing
+//! [`Guard`][Guard]s are promoted to contain an owned instance. The promotion is done by the
+//! writer, but the readers still need to decrement the reference counts of the old instance when
+//! they no longer use it, contending on the count.
 //!
 //! The other situation derives from internal implementation. The number of borrows each thread can
-//! have at each time (across all [`Guard`][Guard]s) is limited. If this limit is exceeded, an
-//! onwed instance is created instead.
+//! have at each time (across all [Guard]s) is limited. If this limit is exceeded, an onwed
+//! instance is created instead.
 //!
 //! Therefore, if you intend to hold onto the loaded value for extended time span, you may prefer
-//! [`load_full`][load_full]. It loads the pointer instance (`Arc`) without borrowing, which is
+//! [load_full]. It loads the pointer instance (`Arc`) without borrowing, which is
 //! slower (because of the possible contention on the reference count), but doesn't consume one of
-//! the borrow slots, which will make it more likely for following [`load`][load]s to have a slot
-//! available. Similarly, if some API needs an owned `Arc`, [`load_full`][load_full] is more
-//! convenient.
+//! the borrow slots, which will make it more likely for following [load]s to have a slot
+//! available. Similarly, if some API needs an owned `Arc`, [load_full] is more convenient.
 //!
-//! There's also [`load_signal_safe`][load_signal_safe]. This is the only method guaranteed to be
+//! There's also [load_signal_safe]. This is the only method guaranteed to be
 //! safely usable inside a unix signal handler. It has no advantages outside of them, so it makes
 //! it kind of niche one.
 //!
 //! Additionally, it is possible to use a [`Cache`][Cache] to get further speed improvement at the
 //! cost of less comfortable API and possibly keeping the older values alive for longer than
 //! necessary.
-//!
-//! # Atomic orderings
-//!
-//! It is guaranteed each operation performs at least one `SeqCst` atomic read-write operation,
-//! therefore even operations on different instances have a defined global order of operations.
-//!
-//! # Customization
-//!
-//! While the default [`ArcSwap`][ArcSwap] and [`load`][load] is probably good enough for most of
-//! the needs, the library allows a wide range of customizations:
-//!
-//! * It allows storing nullable (`Option<Arc<_>>`) and non-nullable pointers.
-//! * It is possible to store other reference counted pointers (eg. if you want to use it with a
-//!   hypothetical `Arc` that doesn't have weak counts), by implementing the [`RefCnt`][RefCnt]
-//!   trait.
-//! * It allows choosing internal fallback locking strategy by the [`LockStorage`][LockStorage]
-//!   trait.
 //!
 //! # Examples
 //!
@@ -175,43 +222,6 @@
 //! }
 //! ```
 //!
-//! # Alternatives
-//!
-//! There are other means to get similar functionality you might want to consider:
-//!
-//! ## `Mutex<Arc<_>>` and `RwLock<Arc<_>>`
-//!
-//! They have significantly worse performance in the contented scenario but are comparable in
-//! uncontended cases. They are directly in the standard library, which means better testing and
-//! less dependencies.
-//!
-//! ## The same, but with [parking_lot]
-//!
-//! Parking lot contains alternative implementations of `Mutex` and `RwLock` that are faster than
-//! the standard library primitives. They still suffer from contention.
-//!
-//! ## [`crossbeam::atomic::ArcCell`]
-//!
-//! This internally contains a spin-lock equivalent and is very close to the characteristics of
-//! `parking_lot::Mutex<Arc<_>>`. This is unofficially deprecated. See the
-//! [relevant issue](https://github.com/crossbeam-rs/crossbeam/issues/160).
-//!
-//! ## [`crossbeam-arccell`]
-//!
-//! It is mentioned here because of the name. Despite of the name, this does something very
-//! different (which *might* possibly solve similar problems). It's API is not centric to `Arc` or
-//! any kind of pointer, but rather it has snapshots of its internal value that can be exchanged
-//! very fast.
-//!
-//! ## [`AtomicArc`]
-//!
-//! This one is probably the closest thing to [`ArcSwap`][ArcSwap] on the API level. Both read and
-//! write operations are [lock-free], but neither is [wait-free], and the performance of reads and
-//! writes are more balanced ‒ while [`ArcSwap`][ArcSwap] is optimized for reading, [`AtomicArc`]
-//! is „balanced“.
-//!
-//! The biggest current downside is, it is in a prototype stage and not released yet.
-//!
 //! # Features
 //!
 //! The `unstable-weak` feature adds the ability to use arc-swap with the [Weak] pointer too,
@@ -220,30 +230,28 @@
 //! removed in future releases (it is mostly waiting for the `weak_into_raw` nightly feature to
 //! stabilize before stabilizing it in this crate).
 //!
+//! # Internal details
+//!
+//! The crate uses a hybrid approach of stripped-down hazard pointers and something close to a
+//! sharded spin lock with asymmetric read/write usage (called the generation lock).
+//!
+//! Further details are described in comments inside the source code and in two blog posts:
+//!
+//! * [Making `Arc` more atomic](https://vorner.github.io/2018/06/24/arc-more-atomic.html)
+//! * [More tricks up in the ArcSwap's sleeve](https://vorner.github.io/2019/04/06/tricks-in-arc-swap.html)
+//!
 //! [Arc]: https://doc.rust-lang.org/std/sync/struct.Arc.html
 //! [Weak]: https://doc.rust-lang.org/std/sync/struct.Arc.html
 //! [RwLock]: https://doc.rust-lang.org/std/sync/struct.RwLock.html
 //! [Mutex]: https://doc.rust-lang.org/std/sync/struct.Mutex.html
-//! [AtomicPtr]: https://doc.rust-lang.org/std/sync/atomic/struct.AtomicPtr.html
-//! [ArcSwapAny]: struct.ArcSwapAny.html
-//! [ArcSwapAny]: struct.Cache.html
-//! [ArcSwap]: type.ArcSwap.html
-//! [IndependentArcSwap]: type.IndependentArcSwap.html
-//! [shared_ptr]: http://en.cppreference.com/w/cpp/memory/shared_ptr
 //! [lock-free]: https://en.wikipedia.org/wiki/Non-blocking_algorithm#Lock-freedom
 //! [wait-free]: https://en.wikipedia.org/wiki/Non-blocking_algorithm#Wait-freedom
 //! [load]: struct.ArcSwapAny.html#method.load
+//! [into_inner]: struct.ArcSwapAny.html#method.into_inner
 //! [load_full]: struct.ArcSwapAny.html#method.load_full
 //! [load_signal_safe]: struct.ArcSwapAny.html#method.peek_signal_safe
-//! [rcu]: struct.ArcSwapAny.html#method.rcu
-//! [RefCnt]: trait.RefCnt.hmtl
-//! [LockStorage]: gen_lock/trait.LockStorage.html
 //! [benchmarks]: https://github.com/vorner/arc-swap/tree/master/benchmarks
-//! [parking_lot]: https://docs.rs/parking_lot
 //! [ArcSwapWeak]: type.ArcSwapWeak.html
-//! [`crossbeam::atomic::ArcCell`]: https://docs.rs/crossbeam/0.5.0/crossbeam/atomic/struct.ArcCell.html
-//! [`crossbeam-arccell`]: https://docs.rs/crossbeam-arccell/
-//! [`AtomicArc`]: https://github.com/stjepang/atomic/blob/master/src/atomic_arc.rs#L20
 
 pub mod access;
 mod as_raw;
