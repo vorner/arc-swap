@@ -1,9 +1,9 @@
 #![deny(unsafe_code)]
+
 //! Caching handle into the [ArcSwapAny].
 //!
 //! The [Cache] keeps a copy of the internal [Arc] for faster access.
 //!
-//! [Cache]: cache::Cache
 //! [Arc]: std::sync::Arc
 
 use std::ops::Deref;
