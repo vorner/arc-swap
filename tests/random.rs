@@ -2,9 +2,8 @@
 
 extern crate arc_swap;
 #[macro_use]
-extern crate lazy_static;
-#[macro_use]
 extern crate model;
+extern crate once_cell;
 #[macro_use]
 extern crate proptest;
 
@@ -12,6 +11,7 @@ use std::mem;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
+use once_cell::sync::Lazy;
 
 #[test]
 fn ops() {
@@ -42,9 +42,7 @@ fn ops() {
 
 const LIMIT: usize = 5;
 
-lazy_static! {
-    static ref ARCS: Vec<Arc<usize>> = (0..LIMIT).map(Arc::new).collect();
-}
+static ARCS: Lazy<Vec<Arc<usize>>> = Lazy::new(|| (0..LIMIT).map(Arc::new).collect());
 
 #[test]
 fn selection() {

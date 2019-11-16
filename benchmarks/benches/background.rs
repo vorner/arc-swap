@@ -6,8 +6,7 @@
 extern crate arc_swap;
 extern crate crossbeam;
 extern crate crossbeam_utils;
-#[macro_use]
-extern crate lazy_static;
+extern crate once_cell;
 extern crate parking_lot;
 extern crate test;
 
@@ -16,6 +15,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use arc_swap::{ArcSwap, ArcSwapOption, Cache};
 use crossbeam_utils::thread;
+use once_cell::sync::Lazy;
 use test::Bencher;
 
 const ITERS: usize = 100_000;
@@ -72,17 +72,17 @@ macro_rules! method {
 macro_rules! noise {
     () => {
         use super::{
-            test, thread, Arc, AtomicBool, Bencher, Mutex, MutexGuard, Ordering, PoisonError, ITERS,
+            test, thread, Arc, AtomicBool, Bencher, Lazy, Mutex, MutexGuard, Ordering, PoisonError,
+            ITERS,
         };
 
-        lazy_static! {
-            static ref LOCK: Mutex<()> = Mutex::new(());
-        }
+        static LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
-        /// We want to prevent these tests from running concurrently, because they run multi-threaded.
+        /// We want to prevent these tests from running concurrently, because they run
+        /// multi-threaded.
         ///
-        /// If it is run as benchmark, it is OK. But if it is run as a test, they run in multiple threads
-        /// and some of them fight (especially the rwlock ones run for a really long time).
+        /// If it is run as benchmark, it is OK. But if it is run as a test, they run in multiple
+        /// threads and some of them fight (especially the rwlock ones run for a really long time).
         fn lock() -> MutexGuard<'static, ()> {
             LOCK.lock().unwrap_or_else(PoisonError::into_inner)
         }
@@ -123,9 +123,7 @@ macro_rules! noise {
 mod arc_swap_b {
     use super::ArcSwap;
 
-    lazy_static! {
-        static ref A: ArcSwap<usize> = ArcSwap::from(Arc::new(0));
-    }
+    static A: Lazy<ArcSwap<usize>> = Lazy::new(|| ArcSwap::from_pointee(0));
 
     fn lease() {
         for _ in 0..ITERS {
@@ -167,9 +165,7 @@ mod arc_swap_b {
 mod arc_swap_option {
     use super::ArcSwapOption;
 
-    lazy_static! {
-        static ref A: ArcSwapOption<usize> = ArcSwapOption::from(None);
-    }
+    static A: Lazy<ArcSwapOption<usize>> = Lazy::new(|| ArcSwapOption::from(None));
 
     fn lease() {
         for _ in 0..ITERS {
@@ -199,9 +195,7 @@ mod arc_swap_option {
 mod arc_swap_cached {
     use super::{ArcSwap, Cache};
 
-    lazy_static! {
-        static ref A: ArcSwap<usize> = ArcSwap::from_pointee(0);
-    }
+    static A: Lazy<ArcSwap<usize>> = Lazy::new(|| ArcSwap::from_pointee(0));
 
     fn read() {
         let mut cache = Cache::from(&A as &ArcSwap<usize>);
@@ -229,9 +223,7 @@ mod arc_swap_cached {
 }
 
 mod mutex {
-    lazy_static! {
-        static ref M: Mutex<Arc<usize>> = Mutex::new(Arc::new(0));
-    }
+    static M: Lazy<Mutex<Arc<usize>>> = Lazy::new(|| Mutex::new(Arc::new(0)));
 
     fn lease() {
         for _ in 0..ITERS {
@@ -260,9 +252,7 @@ mod mutex {
 mod parking_mutex {
     use parking_lot::Mutex as ParkingMutex;
 
-    lazy_static! {
-        static ref M: ParkingMutex<Arc<usize>> = ParkingMutex::new(Arc::new(0));
-    }
+    static M: Lazy<ParkingMutex<Arc<usize>>> = Lazy::new(|| ParkingMutex::new(Arc::new(0)));
 
     fn lease() {
         for _ in 0..ITERS {
@@ -291,9 +281,7 @@ mod parking_mutex {
 mod rwlock {
     use std::sync::RwLock;
 
-    lazy_static! {
-        static ref L: RwLock<Arc<usize>> = RwLock::new(Arc::new(0));
-    }
+    static L: Lazy<RwLock<Arc<usize>>> = Lazy::new(|| RwLock::new(Arc::new(0)));
 
     fn lease() {
         for _ in 0..ITERS {
@@ -322,9 +310,7 @@ mod rwlock {
 mod parking_rwlock {
     use parking_lot::RwLock;
 
-    lazy_static! {
-        static ref L: RwLock<Arc<usize>> = RwLock::new(Arc::new(0));
-    }
+    static L: Lazy<RwLock<Arc<usize>>> = Lazy::new(|| RwLock::new(Arc::new(0)));
 
     fn lease() {
         for _ in 0..ITERS {
@@ -353,9 +339,7 @@ mod parking_rwlock {
 mod arc_cell {
     use crossbeam::atomic::ArcCell;
 
-    lazy_static! {
-        static ref A: ArcCell<usize> = ArcCell::new(Arc::new(0));
-    }
+    static A: Lazy<ArcCell<usize>> = Lazy::new(|| ArcCell::new(Arc::new(0)));
 
     fn lease() {
         for _ in 0..ITERS {

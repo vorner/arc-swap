@@ -6,9 +6,8 @@
 extern crate arc_swap;
 extern crate crossbeam_utils;
 extern crate itertools;
-#[macro_use]
-extern crate lazy_static;
 extern crate num_cpus;
+extern crate once_cell;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex, MutexGuard, PoisonError};
@@ -17,10 +16,9 @@ use arc_swap::gen_lock::{Global, LockStorage, PrivateSharded, PrivateUnsharded, 
 use arc_swap::{ArcSwapAny, ArcSwapOption};
 use crossbeam_utils::thread;
 use itertools::Itertools;
+use once_cell::sync::Lazy;
 
-lazy_static! {
-    static ref LOCK: Mutex<()> = Mutex::new(());
-}
+static LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 /// We want to prevent these tests from running concurrently, because they run multi-threaded.
 fn lock() -> MutexGuard<'static, ()> {

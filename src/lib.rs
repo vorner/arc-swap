@@ -4,12 +4,7 @@
 )]
 #![deny(missing_docs, warnings)]
 // We aim at older rust too, one without dyn
-#![allow(
-    unknown_lints,
-    bare_trait_objects,
-    renamed_and_removed_lints,
-    clippy::needless_doctest_main
-)]
+#![allow(unknown_lints, bare_trait_objects, renamed_and_removed_lints)]
 #![cfg_attr(feature = "unstable-weak", feature(weak_into_raw))]
 
 //! Making [`Arc`][Arc] itself atomic
@@ -40,12 +35,13 @@
 //! blocked for arbitrary long time by a steady inflow of readers.
 //!
 //! ```rust
-//! # #[macro_use] extern crate lazy_static;
+//! # extern crate once_cell;
 //! # use std::sync::{Arc, RwLock};
+//! # use once_cell::sync::Lazy;
 //! # struct RoutingTable; struct Packet; impl RoutingTable { fn route(&self, _: Packet) {} }
-//! lazy_static! {
-//!     static ref ROUTING_TABLE: RwLock<Arc<RoutingTable>> = RwLock::new(Arc::new(RoutingTable));
-//! }
+//! static ROUTING_TABLE: Lazy<RwLock<Arc<RoutingTable>>> = Lazy::new(|| {
+//!     RwLock::new(Arc::new(RoutingTable))
+//! });
 //!
 //! fn process_packet(packet: Packet) {
 //!     let table = Arc::clone(&ROUTING_TABLE.read().unwrap());
@@ -59,12 +55,13 @@
 //!
 //! ```rust
 //! # extern crate arc_swap;
-//! # #[macro_use] extern crate lazy_static;
+//! # extern crate once_cell;
 //! # use arc_swap::ArcSwap;
+//! # use once_cell::sync::Lazy;
 //! # struct RoutingTable; struct Packet; impl RoutingTable { fn route(&self, _: Packet) {} }
-//! lazy_static! {
-//!     static ref ROUTING_TABLE: ArcSwap<RoutingTable> = ArcSwap::from_pointee(RoutingTable);
-//! }
+//! static ROUTING_TABLE: Lazy<ArcSwap<RoutingTable>> = Lazy::new(|| {
+//!     ArcSwap::from_pointee(RoutingTable)
+//! });
 //!
 //! fn process_packet(packet: Packet) {
 //!     let table = ROUTING_TABLE.load();
@@ -1026,51 +1023,45 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// might have updated the value.
     ///
     /// ```rust
-    /// extern crate arc_swap;
-    /// extern crate crossbeam_utils;
-    ///
-    /// use std::sync::Arc;
-    ///
-    /// use arc_swap::ArcSwap;
-    /// use crossbeam_utils::thread;
-    ///
-    /// fn main() {
-    ///     let cnt = ArcSwap::from(Arc::new(0));
-    ///     thread::scope(|scope| {
-    ///         for _ in 0..10 {
-    ///             scope.spawn(|_| {
-    ///                 let inner = cnt.load_full();
-    ///                 // Another thread might have stored some other number than what we have
-    ///                 // between the load and store.
-    ///                 cnt.store(Arc::new(*inner + 1));
-    ///             });
-    ///         }
-    ///     }).unwrap();
-    ///     // This will likely fail:
-    ///     // assert_eq!(10, *cnt.load_full());
-    /// }
+    /// # extern crate arc_swap;
+    /// # extern crate crossbeam_utils;
+    /// #
+    /// # use std::sync::Arc;
+    /// #
+    /// # use arc_swap::ArcSwap;
+    /// # use crossbeam_utils::thread;
+    /// #
+    /// let cnt = ArcSwap::from_pointee(0);
+    /// thread::scope(|scope| {
+    ///     for _ in 0..10 {
+    ///         scope.spawn(|_| {
+    ///            let inner = cnt.load_full();
+    ///             // Another thread might have stored some other number than what we have
+    ///             // between the load and store.
+    ///             cnt.store(Arc::new(*inner + 1));
+    ///         });
+    ///     }
+    /// }).unwrap();
+    /// // This will likely fail:
+    /// // assert_eq!(10, *cnt.load_full());
     /// ```
     ///
     /// This will, but it can call the closure multiple times to retry:
     ///
     /// ```rust
-    /// extern crate arc_swap;
-    /// extern crate crossbeam_utils;
-    ///
-    /// use std::sync::Arc;
-    ///
-    /// use arc_swap::ArcSwap;
-    /// use crossbeam_utils::thread;
-    ///
-    /// fn main() {
-    ///     let cnt = ArcSwap::from(Arc::new(0));
-    ///     thread::scope(|scope| {
-    ///         for _ in 0..10 {
-    ///             scope.spawn(|_| cnt.rcu(|inner| **inner + 1));
-    ///         }
-    ///     }).unwrap();
-    ///     assert_eq!(10, *cnt.load_full());
-    /// }
+    /// # extern crate arc_swap;
+    /// # extern crate crossbeam_utils;
+    /// #
+    /// # use arc_swap::ArcSwap;
+    /// # use crossbeam_utils::thread;
+    /// #
+    /// let cnt = ArcSwap::from_pointee(0);
+    /// thread::scope(|scope| {
+    ///     for _ in 0..10 {
+    ///         scope.spawn(|_| cnt.rcu(|inner| **inner + 1));
+    ///     }
+    /// }).unwrap();
+    /// assert_eq!(10, *cnt.load_full());
     /// ```
     ///
     /// Due to the retries, you might want to perform all the expensive operations *before* the
@@ -1078,25 +1069,22 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// to clone but the computations are not, you could do something like this:
     ///
     /// ```rust
-    /// extern crate arc_swap;
-    /// extern crate crossbeam_utils;
-    /// #[macro_use]
-    /// extern crate lazy_static;
-    ///
-    /// use std::collections::HashMap;
-    /// use std::sync::Arc;
-    ///
-    /// use arc_swap::ArcSwap;
-    ///
+    /// # extern crate arc_swap;
+    /// # extern crate crossbeam_utils;
+    /// # extern crate once_cell;
+    /// #
+    /// # use std::collections::HashMap;
+    /// #
+    /// # use arc_swap::ArcSwap;
+    /// # use once_cell::sync::Lazy;
+    /// #
     /// fn expensive_computation(x: usize) -> usize {
-    ///     x * 2 // Let's pretend multiplication is really expensive
+    ///     x * 2 // Let's pretend multiplication is *really expensive expensive*
     /// }
     ///
     /// type Cache = HashMap<usize, usize>;
     ///
-    /// lazy_static! {
-    ///     static ref CACHE: ArcSwap<Cache> = ArcSwap::from(Arc::new(HashMap::new()));
-    /// }
+    /// static CACHE: Lazy<ArcSwap<Cache>> = Lazy::new(|| ArcSwap::default());
     ///
     /// fn cached_computation(x: usize) -> usize {
     ///     let cache = CACHE.load();
@@ -1115,10 +1103,8 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     ///     result
     /// }
     ///
-    /// fn main() {
-    ///     assert_eq!(42, cached_computation(21));
-    ///     assert_eq!(42, cached_computation(21));
-    /// }
+    /// assert_eq!(42, cached_computation(21));
+    /// assert_eq!(42, cached_computation(21));
     /// ```
     ///
     /// # The cost of cloning
