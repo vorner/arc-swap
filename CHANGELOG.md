@@ -1,3 +1,7 @@
+# 0.4.4
+
+* Top-level docs rewrite (less rambling, hopefully more readable).
+
 # 0.4.3
 
 * Fix the `Display` implementation on `Guard` to correctly delegate to the
