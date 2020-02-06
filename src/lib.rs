@@ -606,7 +606,8 @@ const YIELD_EVERY: usize = 16;
 /// An atomic storage for a reference counted smart pointer like [`Arc`] or `Option<Arc>`.
 ///
 /// This is a storage where a smart pointer may live. It can be read and written atomically from
-/// several threads, but doesn't act like a pointer itself.
+/// several threads, but doesn't act like a pointer itself. (If you clone an `ArcSwapAny`
+/// and then call `.swap(...)`, the original `ArcSwapAny` will still point to the old contents.)
 ///
 /// One can be created [`from`] an [`Arc`]. To get the pointer back, use the
 /// [`load`](#method.load).
