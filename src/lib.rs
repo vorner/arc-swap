@@ -529,6 +529,15 @@ impl<'a, T: RefCnt> Guard<'a, T> {
     }
 }
 
+impl<'a, T: RefCnt> Clone for Guard<'a, T> {
+    fn clone(&self) -> Self {
+        Guard {
+            inner: self.inner.clone(),
+            protection: Protection::Unprotected,
+        }
+    }
+}
+
 impl<'a, T: RefCnt> Deref for Guard<'a, T> {
     type Target = T;
     #[inline]
@@ -1499,6 +1508,18 @@ mod tests {
         drop(shared);
         // Only a now
         assert_eq!(1, Arc::strong_count(&a));
+    }
+
+    #[test]
+    /// Make sure clone works as expected.
+    fn clone() {
+        let shared = ArcSwap::from(Arc::new(0));
+        let orig = shared.load();
+        // one inside shared
+        assert_eq!(1, Arc::strong_count(&orig));
+        let clone = orig.clone();
+        assert_eq!(&Guard::into_inner(orig), &Guard::into_inner(clone));
+        assert_eq!(1, Arc::strong_count(&shared.load()));
     }
 
     #[test]
