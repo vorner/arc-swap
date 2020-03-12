@@ -480,6 +480,13 @@ pub struct Guard<'l, T: RefCnt> {
 }
 
 impl<'a, T: RefCnt> Guard<'a, T> {
+    fn new(ptr: *const T::Base, protection: Protection<'a>) -> Guard<'a, T> {
+        Guard {
+            inner: ManuallyDrop::new(unsafe { T::from_ptr(ptr) }),
+            protection,
+        }
+    }
+
     /// Drop any debt and release any lock held by the given guard and return a
     /// full-featured value that even can outlive the ArcSwap it originated from.
     #[inline]
@@ -740,12 +747,8 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     fn lock_internal(&self, signal_safe: SignalSafety) -> Guard<'_, T> {
         let gen = GenLock::new(signal_safe, &self.lock_storage);
         let ptr = self.ptr.load(Ordering::Acquire);
-        let inner = ManuallyDrop::new(unsafe { T::from_ptr(ptr) });
 
-        Guard {
-            inner,
-            protection: Protection::Lock(gen),
-        }
+        Guard::new(ptr, Protection::Lock(gen))
     }
 
     /// An async-signal-safe version of [`load`](#method.load)
@@ -778,13 +781,9 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
         let debt = Debt::new(ptr as usize)?;
 
         let confirm = self.ptr.load(Ordering::Acquire);
-        let inner = ManuallyDrop::new(unsafe { T::from_ptr(ptr) });
         if ptr == confirm {
             // Successfully got a debt
-            Some(Guard {
-                inner,
-                protection: Protection::Debt(debt),
-            })
+            Some(Guard::new(ptr, Protection::Debt(debt)))
         } else if debt.pay::<T>(ptr) {
             // It changed in the meantime, we return the debt (that is on the outdated pointer,
             // possibly destroyed) and fail.
@@ -792,10 +791,7 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
         } else {
             // It changed in the meantime, but the debt for the previous pointer was already paid
             // for by someone else, so we are fine using it.
-            Some(Guard {
-                inner,
-                protection: Protection::Unprotected,
-            })
+            Some(Guard::new(ptr, Protection::Unprotected))
         }
     }
 
@@ -958,11 +954,7 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
             unsafe { T::dec(new) };
         }
 
-        let inner = ManuallyDrop::new(unsafe { T::from_ptr(previous_ptr) });
-        Guard {
-            inner,
-            protection: debt.into(),
-        }
+        Guard::new(previous_ptr, debt.into())
     }
 
     /// Wait until all readers go away.
