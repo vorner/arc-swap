@@ -523,6 +523,17 @@ impl<'a, T: RefCnt> Guard<'a, T> {
         mem::forget(lease);
         inner
     }
+
+    /// Create a guard for a given value `inner`.
+    ///
+    /// This can be useful on occasion to pass a specific object to code that expects or
+    /// wants to store a Guard.
+    pub fn from_inner(inner: T) -> Self {
+        Guard {
+            inner: ManuallyDrop::new(inner),
+            protection: Protection::Unprotected,
+        }
+    }
 }
 
 impl<'a, T: RefCnt> Deref for Guard<'a, T> {
@@ -840,11 +851,9 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     pub fn load(&self) -> Guard<'static, T> {
         self.load_fallible().unwrap_or_else(|| {
             let locked = self.lock_internal(SignalSafety::Unsafe);
-            let full_value = Guard::into_inner(locked);
-            Guard {
-                inner: ManuallyDrop::new(full_value),
-                protection: Protection::Unprotected,
-            }
+            // Extracting the object into a full-featured value has the
+            // side effect of dropping the lock.
+            Guard::from_inner(Guard::into_inner(locked))
         })
     }
 
