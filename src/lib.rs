@@ -480,12 +480,10 @@ pub struct Guard<'l, T: RefCnt> {
 }
 
 impl<'a, T: RefCnt> Guard<'a, T> {
-    /// Turns the given guard into an unprotected, independent one.
-    ///
-    /// It'll not hold any locks, will have no debts and will contain full-featured value inside
-    /// that even can outlive the ArcSwap it originated from.
+    /// Drop any debt and release any lock held by the given guard and return a
+    /// full-featured value that even can outlive the ArcSwap it originated from.
     #[inline]
-    fn unprotected(mut lease: Self) -> Guard<'static, T> {
+    fn inc_and_unprotect(mut lease: Self) -> T {
         match mem::replace(&mut lease.protection, Protection::Unprotected) {
             // Not protected, nothing to unprotect.
             Protection::Unprotected => (),
@@ -505,14 +503,12 @@ impl<'a, T: RefCnt> Guard<'a, T> {
                 lock.unlock();
             }
         }
+
         // The ptr::read & forget is something like a cheating move. We can't move it out, because
         // we have a destructor and Rust doesn't allow us to do that.
-        let inner = ManuallyDrop::new(unsafe { ptr::read(lease.inner.deref()) });
+        let inner = unsafe { ptr::read(lease.inner.deref()) };
         mem::forget(lease);
-        Guard {
-            inner,
-            protection: Protection::Unprotected,
-        }
+        inner
     }
 
     /// Converts it into the held value.
@@ -522,12 +518,7 @@ impl<'a, T: RefCnt> Guard<'a, T> {
     // Associated function on purpose, because of deref
     #[cfg_attr(feature = "cargo-clippy", allow(wrong_self_convention))]
     pub fn into_inner(lease: Self) -> T {
-        let unprotected = Guard::unprotected(lease);
-        // The ptr::read & forget is something like a cheating move. We can't move it out, because
-        // we have a destructor and Rust doesn't allow us to do that.
-        let res = unsafe { ptr::read(unprotected.inner.deref()) };
-        mem::forget(unprotected);
-        res
+        Guard::inc_and_unprotect(lease)
     }
 }
 
@@ -855,8 +846,14 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// ```
     #[inline]
     pub fn load(&self) -> Guard<'static, T> {
-        self.load_fallible()
-            .unwrap_or_else(|| Guard::unprotected(self.lock_internal(SignalSafety::Unsafe)))
+        self.load_fallible().unwrap_or_else(|| {
+            let locked = self.lock_internal(SignalSafety::Unsafe);
+            let full_value = Guard::inc_and_unprotect(locked);
+            Guard {
+                inner: ManuallyDrop::new(full_value),
+                protection: Protection::Unprotected,
+            }
+        })
     }
 
     /// Replaces the value inside this instance.
