@@ -527,14 +527,25 @@ impl<'a, T: RefCnt> Guard<'a, T> {
     pub fn into_inner(lease: Self) -> T {
         Guard::inc_and_unprotect(lease)
     }
+
+    fn clone_fallible(lease: &Self) -> Option<Self> {
+        if let Protection::Debt(_debt) = lease.protection {
+            let ptr = T::as_ptr(&lease.inner);
+            let clone_debt = Debt::new(ptr as usize)?;
+
+            Some(Guard::new(ptr, Protection::Debt(clone_debt)))
+        } else {
+            None
+        }
+    }
 }
 
 impl<'a, T: RefCnt> Clone for Guard<'a, T> {
     fn clone(&self) -> Self {
-        Guard {
+        Self::clone_fallible(self).unwrap_or_else(|| Guard {
             inner: self.inner.clone(),
             protection: Protection::Unprotected,
-        }
+        })
     }
 }
 
