@@ -1,3 +1,7 @@
+# 0.4.5
+
+* Added `Guard::from_inner`.
+
 # 0.4.4
 
 * Top-level docs rewrite (less rambling, hopefully more readable).
