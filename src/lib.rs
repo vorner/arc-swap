@@ -480,12 +480,23 @@ pub struct Guard<'l, T: RefCnt> {
 }
 
 impl<'a, T: RefCnt> Guard<'a, T> {
-    /// Turns the given guard into an unprotected, independent one.
+    fn new(ptr: *const T::Base, protection: Protection<'a>) -> Guard<'a, T> {
+        Guard {
+            inner: ManuallyDrop::new(unsafe { T::from_ptr(ptr) }),
+            protection,
+        }
+    }
+
+    /// Converts it into the held value.
     ///
-    /// It'll not hold any locks, will have no debts and will contain full-featured value inside
-    /// that even can outlive the ArcSwap it originated from.
+    /// This, on occasion, may be a tiny bit faster than cloning the Arc or whatever is being held
+    /// inside.
+    // Associated function on purpose, because of deref
+    #[cfg_attr(feature = "cargo-clippy", allow(wrong_self_convention))]
     #[inline]
-    fn unprotected(mut lease: Self) -> Guard<'static, T> {
+    pub fn into_inner(mut lease: Self) -> T {
+        // Drop any debt and release any lock held by the given guard and return a
+        // full-featured value that even can outlive the ArcSwap it originated from.
         match mem::replace(&mut lease.protection, Protection::Unprotected) {
             // Not protected, nothing to unprotect.
             Protection::Unprotected => (),
@@ -505,29 +516,35 @@ impl<'a, T: RefCnt> Guard<'a, T> {
                 lock.unlock();
             }
         }
+
         // The ptr::read & forget is something like a cheating move. We can't move it out, because
         // we have a destructor and Rust doesn't allow us to do that.
-        let inner = ManuallyDrop::new(unsafe { ptr::read(lease.inner.deref()) });
+        let inner = unsafe { ptr::read(lease.inner.deref()) };
         mem::forget(lease);
-        Guard {
-            inner,
-            protection: Protection::Unprotected,
-        }
+        inner
     }
 
-    /// Converts it into the held value.
+    /// Create a guard for a given value `inner`.
     ///
-    /// This, on occasion, may be a tiny bit faster than cloning the Arc or whatever is being held
-    /// inside.
-    // Associated function on purpose, because of deref
-    #[cfg_attr(feature = "cargo-clippy", allow(wrong_self_convention))]
-    pub fn into_inner(lease: Self) -> T {
-        let unprotected = Guard::unprotected(lease);
-        // The ptr::read & forget is something like a cheating move. We can't move it out, because
-        // we have a destructor and Rust doesn't allow us to do that.
-        let res = unsafe { ptr::read(unprotected.inner.deref()) };
-        mem::forget(unprotected);
-        res
+    /// This can be useful on occasion to pass a specific object to code that expects or
+    /// wants to store a Guard.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # use arc_swap::{ArcSwap, Guard};
+    /// # use std::sync::Arc;
+    /// # let p = ArcSwap::from_pointee(42);
+    /// // Create two guards pointing to the same object
+    /// let g1 = p.load();
+    /// let g2 = Guard::from_inner(Arc::clone(&*g1));
+    /// # drop(g2);
+    /// ```
+    pub fn from_inner(inner: T) -> Self {
+        Guard {
+            inner: ManuallyDrop::new(inner),
+            protection: Protection::Unprotected,
+        }
     }
 }
 
@@ -749,12 +766,8 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     fn lock_internal(&self, signal_safe: SignalSafety) -> Guard<'_, T> {
         let gen = GenLock::new(signal_safe, &self.lock_storage);
         let ptr = self.ptr.load(Ordering::Acquire);
-        let inner = ManuallyDrop::new(unsafe { T::from_ptr(ptr) });
 
-        Guard {
-            inner,
-            protection: Protection::Lock(gen),
-        }
+        Guard::new(ptr, Protection::Lock(gen))
     }
 
     /// An async-signal-safe version of [`load`](#method.load)
@@ -787,13 +800,9 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
         let debt = Debt::new(ptr as usize)?;
 
         let confirm = self.ptr.load(Ordering::Acquire);
-        let inner = ManuallyDrop::new(unsafe { T::from_ptr(ptr) });
         if ptr == confirm {
             // Successfully got a debt
-            Some(Guard {
-                inner,
-                protection: Protection::Debt(debt),
-            })
+            Some(Guard::new(ptr, Protection::Debt(debt)))
         } else if debt.pay::<T>(ptr) {
             // It changed in the meantime, we return the debt (that is on the outdated pointer,
             // possibly destroyed) and fail.
@@ -801,10 +810,7 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
         } else {
             // It changed in the meantime, but the debt for the previous pointer was already paid
             // for by someone else, so we are fine using it.
-            Some(Guard {
-                inner,
-                protection: Protection::Unprotected,
-            })
+            Some(Guard::new(ptr, Protection::Unprotected))
         }
     }
 
@@ -855,8 +861,12 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// ```
     #[inline]
     pub fn load(&self) -> Guard<'static, T> {
-        self.load_fallible()
-            .unwrap_or_else(|| Guard::unprotected(self.lock_internal(SignalSafety::Unsafe)))
+        self.load_fallible().unwrap_or_else(|| {
+            let locked = self.lock_internal(SignalSafety::Unsafe);
+            // Extracting the object into a full-featured value has the
+            // side effect of dropping the lock.
+            Guard::from_inner(Guard::into_inner(locked))
+        })
     }
 
     /// Replaces the value inside this instance.
@@ -961,11 +971,7 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
             unsafe { T::dec(new) };
         }
 
-        let inner = ManuallyDrop::new(unsafe { T::from_ptr(previous_ptr) });
-        Guard {
-            inner,
-            protection: debt.into(),
-        }
+        Guard::new(previous_ptr, debt.into())
     }
 
     /// Wait until all readers go away.
