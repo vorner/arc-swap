@@ -528,6 +528,18 @@ impl<'a, T: RefCnt> Guard<'a, T> {
     ///
     /// This can be useful on occasion to pass a specific object to code that expects or
     /// wants to store a Guard.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # use arc_swap::{ArcSwap, Guard};
+    /// # use std::sync::Arc;
+    /// # let p = ArcSwap::from_pointee(42);
+    /// // Create two guards pointing to the same object
+    /// let g1 = p.load();
+    /// let g2 = Guard::from_inner(Arc::clone(&*g1));
+    /// # drop(g2);
+    /// ```
     pub fn from_inner(inner: T) -> Self {
         Guard {
             inner: ManuallyDrop::new(inner),
