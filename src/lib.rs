@@ -237,6 +237,25 @@
 //! * [Making `Arc` more atomic](https://vorner.github.io/2018/06/24/arc-more-atomic.html)
 //! * [More tricks up in the ArcSwap's sleeve](https://vorner.github.io/2019/04/06/tricks-in-arc-swap.html)
 //!
+//! # Limitations
+//!
+//! This currently works only for `Sized` types. Unsized types have „fat pointers“, which are twice
+//! as large as the normal ones. The [`AtomicPtr`] doesn't support them. One could use something
+//! like `AtomicU128` for them. The catch is this doesn't exist and the difference would make it
+//! really hard to implement the debt storage/stripped down hazard pointers.
+//!
+//! A workaround is to use double indirection:
+//!
+//! ```rust
+//! # use arc_swap::ArcSwap;
+//! // This doesn't work:
+//! // let data: ArcSwap<[u8]> = ArcSwap::new(Arc::from([1, 2, 3]));
+//!
+//! // But this does:
+//! let data: ArcSwap<Box<[u8]>> = ArcSwap::from_pointee(Box::new([1, 2, 3]));
+//! # drop(data);
+//! ```
+//!
 //! [Arc]: https://doc.rust-lang.org/std/sync/struct.Arc.html
 //! [Weak]: https://doc.rust-lang.org/std/sync/struct.Arc.html
 //! [RwLock]: https://doc.rust-lang.org/std/sync/struct.RwLock.html
