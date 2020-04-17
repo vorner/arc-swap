@@ -997,7 +997,8 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     fn wait_for_readers(&self, old: *const T::Base) {
         let mut seen_group = [false; GEN_CNT];
         let mut iter = 0usize;
-        while !seen_group.iter().all(|seen| *seen) {
+
+        loop {
             // Note that we don't need the snapshot to be consistent. We just need to see both
             // halves being zero, not necessarily at the same time.
             let gen = self.lock_storage.gen_idx().load(Ordering::Relaxed);
@@ -1021,11 +1022,18 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
             for i in 0..GEN_CNT {
                 seen_group[i] = seen_group[i] || (groups[i] == 0);
             }
+
+            if seen_group.iter().all(|seen| *seen) {
+                break;
+            }
+
             iter = iter.wrapping_add(1);
-            if iter % YIELD_EVERY == 0 {
-                thread::yield_now();
-            } else {
-                atomic::spin_loop_hint();
+            if cfg!(not(miri)) {
+                if iter % YIELD_EVERY == 0 {
+                    thread::yield_now();
+                } else {
+                    atomic::spin_loop_hint();
+                }
             }
         }
         Debt::pay_all::<T>(old);
