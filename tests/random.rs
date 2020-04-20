@@ -1,10 +1,8 @@
 //! Let it torture the implementation with some randomized operations.
 
 extern crate arc_swap;
-#[macro_use]
-extern crate model;
+extern crate crossbeam_utils;
 extern crate once_cell;
-#[macro_use]
 extern crate proptest;
 
 use std::mem;
@@ -12,62 +10,52 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
+use proptest::prelude::*;
 
-#[test]
-fn ops() {
-    model! {
-        Model => let mut u = 0usize,
-        Implementation => let a: ArcSwap<usize> = ArcSwap::from(Arc::new(0usize)),
-        Store(usize)(v in any::<usize>()) => {
-            u = v;
-            a.store(Arc::new(v));
-        },
-        LoadFull(())(() in any::<()>()) => {
-            assert_eq!(u, *a.load_full());
-        },
-        LoadSignalSafe(())(() in any::<()>()) => {
-            assert_eq!(u, **a.load_signal_safe());
-        },
-        Load(())(() in any::<()>()) => {
-            assert_eq!(u, **a.load());
-        },
-        Swap(usize)(v in any::<usize>()) => {
-            let expected = u;
-            u = v;
-            let actual = a.swap(Arc::new(v));
-            assert_eq!(expected, *actual);
-        }
+#[derive(Copy, Clone, Debug)]
+enum OpsInstruction {
+    Store(usize),
+    Swap(usize),
+    LoadFull,
+    LoadSignalSafe,
+    Load,
+}
+
+impl OpsInstruction {
+    fn random() -> impl Strategy<Value = Self> {
+        prop_oneof![
+            any::<usize>().prop_map(Self::Store),
+            any::<usize>().prop_map(Self::Swap),
+            Just(Self::LoadFull),
+            Just(Self::LoadSignalSafe),
+            Just(Self::Load),
+        ]
     }
 }
 
-const LIMIT: usize = 5;
-
-static ARCS: Lazy<Vec<Arc<usize>>> = Lazy::new(|| (0..LIMIT).map(Arc::new).collect());
-
-#[test]
-fn selection() {
-    model! {
-        Model => let mut bare = Arc::clone(&ARCS[0]),
-        Implementation => let a: ArcSwap<usize> = ArcSwap::from(Arc::clone(&ARCS[0])),
-        Swap(usize)(idx in 0..LIMIT) => {
-            let mut expected = Arc::clone(&ARCS[idx]);
-            mem::swap(&mut expected, &mut bare);
-            let actual = a.swap(Arc::clone(&ARCS[idx]));
-            assert!(Arc::ptr_eq(&expected, &actual));
-        },
-        Cas((usize, usize))((current, new) in (0..LIMIT, 0..LIMIT)) => {
-            let expected = Arc::clone(&bare);
-            if bare == ARCS[current] {
-                bare = Arc::clone(&ARCS[new]);
+proptest! {
+    #[test]
+    fn ops(instructions in proptest::collection::vec(OpsInstruction::random(), 1..100)) {
+        use OpsInstruction::*;
+        let mut m = 0;
+        let a = ArcSwap::from_pointee(0usize);
+        for ins in instructions {
+            match ins {
+                Store(v) => {
+                    m = v;
+                    a.store(Arc::new(v));
+                }
+                Swap(v) => {
+                    let old = mem::replace(&mut m, v);
+                    assert_eq!(old, *a.swap(Arc::new(v)));
+                }
+                Load => assert_eq!(m, **a.load()),
+                LoadFull => assert_eq!(m, *a.load_full()),
+                LoadSignalSafe => assert_eq!(m, **a.load_signal_safe()),
             }
-            let actual = a.compare_and_swap(&ARCS[current], Arc::clone(&ARCS[new]));
-            assert!(Arc::ptr_eq(&expected, &actual));
         }
     }
-}
-
-#[test]
-fn linearize() {
+    /*
     use model::Shared;
 
     linearizable! {
@@ -81,6 +69,51 @@ fn linearize() {
         Cas((usize, usize))((current, new) in (0..LIMIT, 0..LIMIT)) -> usize {
             let new = Arc::clone(&ARCS[new]);
             **a.compare_and_swap(&ARCS[current], new)
+        }
+    }
+}
+    */
+}
+
+const LIMIT: usize = 5;
+static ARCS: Lazy<Vec<Arc<usize>>> = Lazy::new(|| (0..LIMIT).map(Arc::new).collect());
+
+#[derive(Copy, Clone, Debug)]
+enum SelInstruction {
+    Swap(usize),
+    Cas(usize, usize),
+}
+
+impl SelInstruction {
+    fn random() -> impl Strategy<Value = Self> {
+        prop_oneof![
+            (0..LIMIT).prop_map(Self::Swap),
+            (0..LIMIT, 0..LIMIT).prop_map(|(cur, new)| Self::Cas(cur, new)),
+        ]
+    }
+}
+
+proptest! {
+    #[test]
+    fn selection(instructions in proptest::collection::vec(SelInstruction::random(), 1..100)) {
+        let mut bare = Arc::clone(&ARCS[0]);
+        let a = ArcSwap::from(Arc::clone(&ARCS[0]));
+        for ins in instructions {
+            match ins {
+                SelInstruction::Swap(idx) => {
+                    let expected = mem::replace(&mut bare, Arc::clone(&ARCS[idx]));
+                    let actual = a.swap(Arc::clone(&ARCS[idx]));
+                    assert!(Arc::ptr_eq(&expected, &actual));
+                }
+                SelInstruction::Cas(cur, new) => {
+                    let expected = Arc::clone(&bare);
+                    if bare == ARCS[cur] {
+                        bare = Arc::clone(&ARCS[new]);
+                    }
+                    let actual = a.compare_and_swap(&ARCS[cur], Arc::clone(&ARCS[new]));
+                    assert!(Arc::ptr_eq(&expected, &actual));
+                }
+            }
         }
     }
 }
