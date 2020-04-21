@@ -6,7 +6,7 @@ use crate::RefCnt;
 unsafe impl<T> RefCnt for Weak<T> {
     type Base = T;
     fn as_ptr(me: &Self) -> *mut T {
-        Weak::as_raw(me) as *mut T
+        Weak::as_ptr(me) as *mut T
     }
     fn into_ptr(me: Self) -> *mut T {
         Weak::into_raw(me) as *mut T
@@ -19,7 +19,7 @@ unsafe impl<T> RefCnt for Weak<T> {
 unsafe impl<T> RefCnt for RcWeak<T> {
     type Base = T;
     fn as_ptr(me: &Self) -> *mut T {
-        RcWeak::as_raw(me) as *mut T
+        RcWeak::as_ptr(me) as *mut T
     }
     fn into_ptr(me: Self) -> *mut T {
         RcWeak::into_raw(me) as *mut T
