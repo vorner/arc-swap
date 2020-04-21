@@ -1,3 +1,11 @@
+# 0.4.6
+
+* Adjust to `Weak::as_ptr` from std (the weak pointer support, relying on
+  unstable features).
+* Support running on miri (without some optimizations), so dependencies may run
+  miri tests.
+* Little optimization when waiting out the contention on write operations.
+
 # 0.4.5
 
 * Added `Guard::from_inner`.
