@@ -1,3 +1,5 @@
+* Few more traits for Guard (`From<T: RefCnt>`, `Default`).
+
 # 0.4.6
 
 * Adjust to `Weak::as_ptr` from std (the weak pointer support, relying on
