@@ -1,3 +1,6 @@
+* Avoid `from_ptr(as_ptr())`. Slight change in `RefCnt::inc` which technically
+  is API breaking change, but this one should not matter in practice.
+
 # 0.4.6
 
 * Adjust to `Weak::as_ptr` from std (the weak pointer support, relying on

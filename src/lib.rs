@@ -523,8 +523,7 @@ impl<'a, T: RefCnt> Guard<'a, T> {
             // meantime, then we have to release it again, because it is extra. We can't check
             // first because of races.
             Protection::Debt(debt) => {
-                T::inc(&lease.inner);
-                let ptr = T::as_ptr(&lease.inner);
+                let ptr = T::inc(&lease.inner);
                 if !debt.pay::<T>(ptr) {
                     unsafe { T::dec(ptr) };
                 }
