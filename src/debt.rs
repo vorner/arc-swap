@@ -147,7 +147,7 @@ impl Debt {
     /// other accesses.
     // Turn the lint off in clippy, but don't complain anywhere else. clippy::new_ret_no_self
     // doesn't work yet, that thing is not stabilized.
-    #[allow(unknown_lints, new_ret_no_self)]
+    #[allow(unknown_lints, renamed_and_removed_lints, new_ret_no_self)]
     #[inline]
     pub(crate) fn new(ptr: usize) -> Option<&'static Self> {
         THREAD_HEAD
