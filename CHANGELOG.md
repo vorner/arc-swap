@@ -1,3 +1,6 @@
+* Rename the `unstable-weak` to `weak` feature. The support is now available on
+  1.45 (currently in beta).
+
 # 0.4.6
 
 * Adjust to `Weak::as_ptr` from std (the weak pointer support, relying on

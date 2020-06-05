@@ -16,7 +16,7 @@ appveyor = { repository = "vorner/arc-swap" }
 maintenance = { status = "actively-developed" }
 
 [features]
-unstable-weak = []
+weak = []
 
 [workspace]
 members = ["benchmarks"]

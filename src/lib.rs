@@ -5,7 +5,6 @@
 #![deny(missing_docs, warnings)]
 // We aim at older rust too, one without dyn
 #![allow(unknown_lints, bare_trait_objects, renamed_and_removed_lints)]
-#![cfg_attr(feature = "unstable-weak", feature(weak_into_raw))]
 
 //! Making [`Arc`][Arc] itself atomic
 //!
@@ -221,11 +220,9 @@
 //!
 //! # Features
 //!
-//! The `unstable-weak` feature adds the ability to use arc-swap with the [Weak] pointer too,
-//! through the [ArcSwapWeak] type. This requires the nightly Rust compiler. Also, the interface
-//! and support **is not** part of API stability guarantees and may be arbitrarily changed or
-//! removed in future releases (it is mostly waiting for the `weak_into_raw` nightly feature to
-//! stabilize before stabilizing it in this crate).
+//! The `weak` feature adds the ability to use arc-swap with the [Weak] pointer too,
+//! through the [ArcSwapWeak] type. The needed std support is stabilized in rust version 1.45 (as
+//! of now in beta).
 //!
 //! # Internal details
 //!
@@ -276,7 +273,7 @@ mod compile_fail_tests;
 mod debt;
 pub mod gen_lock;
 mod ref_cnt;
-#[cfg(feature = "unstable-weak")]
+#[cfg(feature = "weak")]
 mod weak;
 
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
@@ -1357,7 +1354,7 @@ pub type IndependentArcSwap<T> = ArcSwapAny<Arc<T>, PrivateUnsharded>;
 /// [`ArcSwapAny`](struct.ArcSwapAny.html).
 ///
 /// [Weak]: std::sync::Weak
-#[cfg(feature = "unstable-weak")]
+#[cfg(feature = "weak")]
 pub type ArcSwapWeak<T> = ArcSwapAny<std::sync::Weak<T>>;
 
 #[cfg(test)]
