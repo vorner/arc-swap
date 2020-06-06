@@ -1,3 +1,5 @@
+# 0.4.7
+
 * Rename the `unstable-weak` to `weak` feature. The support is now available on
   1.45 (currently in beta).
 
