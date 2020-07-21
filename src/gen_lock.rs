@@ -262,11 +262,9 @@ unsafe impl<S: AsRef<[Shard]> + Default> LockStorage for PrivateSharded<S> {
 
 #[cfg(test)]
 mod tests {
-    extern crate crossbeam_utils;
-
     use std::sync::Arc;
 
-    use self::crossbeam_utils::thread;
+    use crossbeam_utils::thread;
 
     use super::super::{ArcSwapAny, SignalSafety};
     use super::*;

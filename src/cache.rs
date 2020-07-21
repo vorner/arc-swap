@@ -151,8 +151,6 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// extern crate arc_swap;
-    ///
     /// use arc_swap::ArcSwap;
     /// use arc_swap::cache::{Access, Cache};
     ///
@@ -241,7 +239,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use {ArcSwap, ArcSwapOption};
+    use crate::{ArcSwap, ArcSwapOption};
 
     #[test]
     fn cached_value() {

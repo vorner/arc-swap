@@ -1,10 +1,5 @@
 //! Let it torture the implementation with some randomized operations.
 
-extern crate arc_swap;
-extern crate crossbeam_utils;
-extern crate once_cell;
-extern crate proptest;
-
 use std::mem;
 use std::sync::Arc;
 
@@ -36,7 +31,7 @@ impl OpsInstruction {
 proptest! {
     #[test]
     fn ops(instructions in proptest::collection::vec(OpsInstruction::random(), 1..100)) {
-        use OpsInstruction::*;
+        use crate::OpsInstruction::*;
         let mut m = 0;
         let a = ArcSwap::from_pointee(0usize);
         for ins in instructions {

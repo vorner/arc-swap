@@ -41,8 +41,6 @@
 //! # Examples
 //!
 //! ```rust
-//! extern crate arc_swap;
-//!
 //! use std::sync::Arc;
 //! use std::thread;
 //! use std::time::Duration;
@@ -181,8 +179,6 @@ impl<T: ?Sized> Deref for DynGuard<T> {
 /// # Examples
 ///
 /// ```rust
-/// extern crate arc_swap;
-///
 /// use std::thread;
 ///
 /// use arc_swap::access::{Constant, DynAccess};

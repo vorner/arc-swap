@@ -3,12 +3,6 @@
 //! The tests in here try to torture the implementation with multiple threads, in an attempt to
 //! discover any possible race condition.
 
-extern crate arc_swap;
-extern crate crossbeam_utils;
-extern crate itertools;
-extern crate num_cpus;
-extern crate once_cell;
-
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex, MutexGuard, PoisonError};
 

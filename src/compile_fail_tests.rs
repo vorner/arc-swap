@@ -18,8 +18,6 @@
 //! ```
 //!
 //! ```rust,compile_fail
-//! extern crate arc_swap;
-//! extern crate crossbeam_utils;
 //! let shared = arc_swap::ArcSwap::from_pointee(std::cell::Cell::new(42));
 //! let guard = shared.load_signal_safe();
 //! crossbeam_utils::thread::scope(|scope| {
@@ -30,8 +28,6 @@
 //! ```
 //!
 //! ```rust
-//! extern crate arc_swap;
-//! extern crate crossbeam_utils;
 //! let shared = arc_swap::ArcSwap::from_pointee(42);
 //! let guard = shared.load_signal_safe();
 //! crossbeam_utils::thread::scope(|scope| {
@@ -58,8 +54,6 @@
 //! ```
 //!
 //! ```rust,compile_fail
-//! extern crate arc_swap;
-//! extern crate crossbeam_utils;
 //! let shared = arc_swap::ArcSwap::from_pointee(std::cell::Cell::new(42));
 //! crossbeam_utils::thread::scope(|scope| {
 //!     scope.spawn(|_| {
@@ -69,8 +63,6 @@
 //! ```
 //!
 //! ```rust
-//! extern crate arc_swap;
-//! extern crate crossbeam_utils;
 //! let shared = arc_swap::ArcSwap::from_pointee(42);
 //! crossbeam_utils::thread::scope(|scope| {
 //!     scope.spawn(|_| {
@@ -80,8 +72,6 @@
 //! ```
 //!
 //! ```rust,compile_fail
-//! extern crate arc_swap;
-//! extern crate crossbeam_utils;
 //! let shared = arc_swap::ArcSwap::from_pointee(std::cell::Cell::new(42));
 //! let guard = shared.load_signal_safe();
 //! crossbeam_utils::thread::scope(|scope| {
@@ -92,8 +82,6 @@
 //! ```
 //!
 //! ```rust
-//! extern crate arc_swap;
-//! extern crate crossbeam_utils;
 //! let shared = arc_swap::ArcSwap::from_pointee(42);
 //! let guard = shared.load_signal_safe();
 //! crossbeam_utils::thread::scope(|scope| {
@@ -104,8 +92,6 @@
 //! ```
 //!
 //! ```rust,compile_fail
-//! extern crate arc_swap;
-//! extern crate crossbeam_utils;
 //! let shared = arc_swap::ArcSwap::from_pointee(std::cell::Cell::new(42));
 //! let guard = shared.load();
 //! crossbeam_utils::thread::scope(|scope| {
@@ -116,8 +102,6 @@
 //! ```
 //!
 //! ```rust
-//! extern crate arc_swap;
-//! extern crate crossbeam_utils;
 //! let shared = arc_swap::ArcSwap::from_pointee(42);
 //! let guard = shared.load();
 //! crossbeam_utils::thread::scope(|scope| {

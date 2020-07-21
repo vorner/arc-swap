@@ -6,8 +6,6 @@
 //! Note that this requires nightly to run (that's why it's not part of the crate
 //! itself).
 
-extern crate arc_swap;
-extern crate crossbeam_utils;
 extern crate test;
 
 use std::io::{self, Write};

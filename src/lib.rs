@@ -34,7 +34,6 @@
 //! blocked for arbitrary long time by a steady inflow of readers.
 //!
 //! ```rust
-//! # extern crate once_cell;
 //! # use std::sync::{Arc, RwLock};
 //! # use once_cell::sync::Lazy;
 //! # struct RoutingTable; struct Packet; impl RoutingTable { fn route(&self, _: Packet) {} }
@@ -53,8 +52,6 @@
 //! characteristics than the [RwLock], both in contended and non-contended scenarios.
 //!
 //! ```rust
-//! # extern crate arc_swap;
-//! # extern crate once_cell;
 //! # use arc_swap::ArcSwap;
 //! # use once_cell::sync::Lazy;
 //! # struct RoutingTable; struct Packet; impl RoutingTable { fn route(&self, _: Packet) {} }
@@ -224,9 +221,6 @@
 //! # Examples
 //!
 //! ```rust
-//! extern crate arc_swap;
-//! extern crate crossbeam_utils;
-//!
 //! use std::sync::Arc;
 //!
 //! use arc_swap::ArcSwap;
@@ -323,12 +317,12 @@ use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 
-use access::{Access, Map};
-use as_raw::AsRaw;
-pub use cache::Cache;
-use debt::Debt;
-use gen_lock::{Global, LockStorage, PrivateUnsharded, GEN_CNT};
-pub use ref_cnt::RefCnt;
+use crate::access::{Access, Map};
+use crate::as_raw::AsRaw;
+pub use crate::cache::Cache;
+use crate::debt::Debt;
+use crate::gen_lock::{Global, LockStorage, PrivateUnsharded, GEN_CNT};
+pub use crate::ref_cnt::RefCnt;
 
 // # Implementation details
 //
@@ -1089,9 +1083,6 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// might have updated the value.
     ///
     /// ```rust
-    /// # extern crate arc_swap;
-    /// # extern crate crossbeam_utils;
-    /// #
     /// # use std::sync::Arc;
     /// #
     /// # use arc_swap::ArcSwap;
@@ -1115,9 +1106,6 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// This will, but it can call the closure multiple times to retry:
     ///
     /// ```rust
-    /// # extern crate arc_swap;
-    /// # extern crate crossbeam_utils;
-    /// #
     /// # use arc_swap::ArcSwap;
     /// # use crossbeam_utils::thread;
     /// #
@@ -1135,10 +1123,6 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// to clone but the computations are not, you could do something like this:
     ///
     /// ```rust
-    /// # extern crate arc_swap;
-    /// # extern crate crossbeam_utils;
-    /// # extern crate once_cell;
-    /// #
     /// # use std::collections::HashMap;
     /// #
     /// # use arc_swap::ArcSwap;
@@ -1224,9 +1208,6 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// # Examples
     ///
     /// ```rust
-    /// extern crate arc_swap;
-    /// extern crate crossbeam_utils;
-    ///
     /// use std::sync::Arc;
     ///
     /// use arc_swap::ArcSwap;
@@ -1395,13 +1376,11 @@ pub type ArcSwapWeak<T> = ArcSwapAny<std::sync::Weak<T>>;
 
 #[cfg(test)]
 mod tests {
-    extern crate crossbeam_utils;
-
     use std::panic;
     use std::sync::atomic::AtomicUsize;
     use std::sync::Barrier;
 
-    use self::crossbeam_utils::thread;
+    use crossbeam_utils::thread;
 
     use super::*;
 

@@ -3,11 +3,6 @@
 // FIXME: This still uses old terminology in the bench names and internal functions. It should be
 // eventually renamed, eg. lease → load, etc.
 
-extern crate arc_swap;
-extern crate crossbeam;
-extern crate crossbeam_utils;
-extern crate once_cell;
-extern crate parking_lot;
 extern crate test;
 
 use std::sync::atomic::{AtomicBool, Ordering};
