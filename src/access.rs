@@ -159,7 +159,7 @@ impl<T, S: LockStorage> Access<T> for ArcSwapAny<Rc<T>, S> {
 /// Plumbing type.
 ///
 /// This is the guard of [`DynAccess`] trait. It is effectively `Box<Deref<Target = T>>`.
-pub struct DynGuard<T: ?Sized>(Box<Deref<Target = T>>);
+pub struct DynGuard<T: ?Sized>(Box<dyn Deref<Target = T>>);
 
 impl<T: ?Sized> Deref for DynGuard<T> {
     type Target = T;
@@ -354,11 +354,11 @@ mod tests {
         check_static_dispatch(a);
     }
 
-    fn check_dyn_dispatch_direct(a: &DynAccess<usize>) {
+    fn check_dyn_dispatch_direct(a: &dyn DynAccess<usize>) {
         assert_eq!(42, *a.load());
     }
 
-    fn check_dyn_dispatch(a: &DynAccess<Arc<usize>>) {
+    fn check_dyn_dispatch(a: &dyn DynAccess<Arc<usize>>) {
         assert_eq!(42, **a.load());
     }
 

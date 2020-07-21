@@ -4,7 +4,6 @@
 )]
 #![deny(missing_docs, warnings)]
 // We aim at older rust too, one without dyn
-#![allow(unknown_lints, bare_trait_objects, renamed_and_removed_lints)]
 
 //! Making [`Arc`][Arc] itself atomic
 //!
@@ -538,7 +537,7 @@ impl<'a, T: RefCnt> Guard<'a, T> {
     /// This, on occasion, may be a tiny bit faster than cloning the Arc or whatever is being held
     /// inside.
     // Associated function on purpose, because of deref
-    #[cfg_attr(feature = "cargo-clippy", allow(wrong_self_convention))]
+    #[allow(clippy::wrong_self_convention)]
     #[inline]
     pub fn into_inner(mut lease: Self) -> T {
         // Drop any debt and release any lock held by the given guard and return a
@@ -645,7 +644,7 @@ impl<'a, T: RefCnt> Drop for Guard<'a, T> {
 /// Comparison of two pointer-like things.
 // A and B are likely to *be* references, or thin wrappers around that. Calling that with extra
 // reference is just annoying.
-#[cfg_attr(feature = "cargo-clippy", allow(needless_pass_by_value))]
+#[allow(clippy::needless_pass_by_value)]
 fn ptr_eq<Base, A, B>(a: A, b: B) -> bool
 where
     A: AsRaw<Base>,
