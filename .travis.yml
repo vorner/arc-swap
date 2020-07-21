@@ -1,7 +1,7 @@
 language: rust
 cache: cargo
 rust:
-    - 1.26.0
+    - 1.31.0 # The first one with rust 2018
     - stable
     - beta
     - nightly
@@ -15,7 +15,7 @@ matrix:
 before_script:
     - |
       (travis_wait rustup component add rustfmt-preview || true) &&
-      (test "$TRAVIS_RUST_VERSION" == 1.26.0 || travis_wait rustup component add clippy-preview || true)
+      (test "$TRAVIS_RUST_VERSION" == 1.31.0 || travis_wait rustup component add clippy-preview || true)
 
 script:
     - |
@@ -23,10 +23,10 @@ script:
       export RUST_BACKTRACE=1 &&
       export CARGO_INCREMENTAL=1 &&
       cargo build &&
-      (test "$TRAVIS_RUST_VERSION" == 1.26.0 || cargo test --release) &&
-      (test "$TRAVIS_RUST_VERSION" == 1.26.0 || cargo test --release -- --ignored) &&
+      (test "$TRAVIS_RUST_VERSION" == 1.31.0 || cargo test --release) &&
+      (test "$TRAVIS_RUST_VERSION" == 1.31.0 || cargo test --release -- --ignored) &&
       cargo doc --no-deps &&
       (test "$TRAVIS_RUST_VERSION" != nightly || cargo test --all --release --benches --all-features) &&
       (test "$TRAVIS_RUST_VERSION" != beta || cargo test --all --release --all-features) &&
-      (test "$TRAVIS_RUST_VERSION" == 1.26.0 || cargo clippy --all --tests -- --deny clippy::all) &&
-      (test "$TRAVIS_RUST_VERSION" == 1.26.0 || cargo fmt --all -- --check)
+      (test "$TRAVIS_RUST_VERSION" == 1.31.0 || cargo clippy --all --tests -- --deny clippy::all) &&
+      (test "$TRAVIS_RUST_VERSION" == 1.31.0 || cargo fmt --all -- --check)
