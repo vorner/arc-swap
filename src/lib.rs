@@ -600,6 +600,18 @@ impl<'a, T: RefCnt> Deref for Guard<'a, T> {
     }
 }
 
+impl<T: RefCnt> From<T> for Guard<'static, T> {
+    fn from(inner: T) -> Self {
+        Self::from_inner(inner)
+    }
+}
+
+impl<T: Default + RefCnt> Default for Guard<'static, T> {
+    fn default() -> Self {
+        Self::from(T::default())
+    }
+}
+
 impl<'a, T: Debug + RefCnt> Debug for Guard<'a, T> {
     fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
         self.deref().fmt(formatter)

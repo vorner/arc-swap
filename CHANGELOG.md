@@ -1,6 +1,7 @@
 * Avoid `from_ptr(as_ptr())`. Slight change in `RefCnt::inc` which technically
   is API breaking change, but this one should not matter in practice.
 * Extend documentation about clone behaviour.
+* Few more traits for Guard (`From<T: RefCnt>`, `Default`).
 
 # 0.4.7
 
