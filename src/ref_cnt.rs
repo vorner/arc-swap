@@ -66,8 +66,10 @@ pub unsafe trait RefCnt: Clone {
     unsafe fn from_ptr(ptr: *const Self::Base) -> Self;
 
     /// Increments the reference count by one.
-    fn inc(me: &Self) {
-        Self::into_ptr(Self::clone(me));
+    ///
+    /// Return the pointer to the inner thing as a side effect.
+    fn inc(me: &Self) -> *mut Self::Base {
+        Self::into_ptr(Self::clone(me))
     }
 
     /// Decrements the reference count by one.
