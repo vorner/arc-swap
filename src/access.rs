@@ -8,9 +8,9 @@
 //! This module provides means to grant the parts access to the relevant subsets of such global
 //! data structure while masking the fact it is part of the bigger whole from the component.
 //!
-//! Note that the [`cache`][::cache] module has its own [`Access`][::cache::Access] trait that
-//! serves a similar purpose, but with cached access. The signatures are different, therefore an
-//! incompatible trait.
+//! Note that the [`cache`][crate::cache] module has its own [`Access`][crate::cache::Access] trait
+//! that serves a similar purpose, but with cached access. The signatures are different, therefore
+//! an incompatible trait.
 //!
 //! # The general idea
 //!
@@ -19,15 +19,15 @@
 //! relevant part, without knowing what the big structure is.
 //!
 //! For technical reasons, the [`Access`] trait is not object safe. If type erasure is desired, it
-//! is possible use the [`DynAccess`][::access::DynAccess] instead, which is object safe, but
+//! is possible use the [`DynAccess`][crate::access::DynAccess] instead, which is object safe, but
 //! slightly slower.
 //!
 //! For some cases, it is possible to use [`ArcSwapAny::map`]. If that is not flexible enough, the
 //! [`Map`] type can be created directly.
 //!
 //! Note that the [`Access`] trait is also implemented for [`ArcSwapAny`] itself. Additionally,
-//! there's the [`Constant`][::access::Constant] helper type, which is useful mostly for testing
-//! (it doesn't allow reloading).
+//! there's the [`Constant`][crate::access::Constant] helper type, which is useful mostly for
+//! testing (it doesn't allow reloading).
 //!
 //! # Performance
 //!

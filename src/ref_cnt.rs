@@ -33,7 +33,7 @@ use std::sync::Arc;
 ///
 /// [Arc]: std::sync::Arc
 /// [Rc]: std::rc::Rc
-/// [ArcSwapAny]: ::ArcSwapAny
+/// [ArcSwapAny]: crate::ArcSwapAny
 pub unsafe trait RefCnt: Clone {
     /// The base type the pointer points to.
     type Base;

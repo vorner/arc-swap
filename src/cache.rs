@@ -89,8 +89,8 @@ where
     /// it also can be a reference to it or `Arc`, which makes it possible to share the
     /// [`ArcSwapAny`] with multiple caches or access it in non-cached way too.
     ///
-    /// [`ArcSwapOption`]: ::ArcSwapOption
-    /// [`ArcSwap`]: ::ArcSwap
+    /// [`ArcSwapOption`]: crate::ArcSwapOption
+    /// [`ArcSwap`]: crate::ArcSwap
     pub fn new(arc_swap: A) -> Self {
         let cached = arc_swap.load_full();
         Self { arc_swap, cached }
