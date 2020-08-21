@@ -2,7 +2,7 @@
     html_root_url = "https://docs.rs/arc-swap/0.4.7/arc-swap/",
     test(attr(deny(warnings)))
 )]
-#![deny(missing_docs, warnings)]
+#![deny(missing_docs)]
 // We aim at older rust too, one without dyn
 
 //! Making [`Arc`][Arc] itself atomic

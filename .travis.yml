@@ -2,15 +2,13 @@ language: rust
 cache: cargo
 rust:
     - 1.31.0 # The first one with rust 2018
+    - 1.45.0 # The weak-into-raw feature stabilized
     - stable
     - beta
     - nightly
 os:
     - linux
     - osx
-matrix:
-    allow_failures:
-        - rust: nightly
 
 before_script:
     - |
@@ -18,15 +16,4 @@ before_script:
       (test "$TRAVIS_RUST_VERSION" == 1.31.0 || travis_wait rustup component add clippy-preview || true)
 
 script:
-    - |
-      export PATH="$PATH":~/.cargo/bin &&
-      export RUST_BACKTRACE=1 &&
-      export CARGO_INCREMENTAL=1 &&
-      cargo build &&
-      (test "$TRAVIS_RUST_VERSION" == 1.31.0 || cargo test --release) &&
-      (test "$TRAVIS_RUST_VERSION" == 1.31.0 || cargo test --release -- --ignored) &&
-      cargo doc --no-deps &&
-      (test "$TRAVIS_RUST_VERSION" != nightly || cargo test --all --release --benches --all-features) &&
-      (test "$TRAVIS_RUST_VERSION" != beta || cargo test --all --release --all-features) &&
-      (test "$TRAVIS_RUST_VERSION" == 1.31.0 || cargo clippy --all --tests -- --deny clippy::all) &&
-      (test "$TRAVIS_RUST_VERSION" == 1.31.0 || cargo fmt --all -- --check)
+    ./ci-check.sh
