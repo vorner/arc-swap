@@ -74,7 +74,7 @@ pub unsafe trait LockStorage: Default {
     /// Access to the generation index.
     ///
     /// Must return the same instance of the `AtomicUsize` for the lifetime of the storage, must
-    /// start at `0` and the trait itself must not modify it. Must be async-signal-safe.
+    /// start at `0` and the trait itself must not modify it.
     fn gen_idx(&self) -> &AtomicUsize;
 
     /// Access to the shards storage.
@@ -166,23 +166,6 @@ unsafe impl LockStorage for Global {
 /// each instance won't influence any other instances. On the other hand, the `ArcSwap` itself gets
 /// bigger and doesn't have multiple shards, so concurrent uses might contend each other a bit.
 ///
-/// ```rust
-/// # use std::sync::Arc;
-/// # use arc_swap::{ArcSwap, ArcSwapAny};
-/// # use arc_swap::gen_lock::PrivateUnsharded;
-/// // This one shares locks with others.
-/// let shared = ArcSwap::from_pointee(42);
-/// // But this one has an independent lock.
-/// let independent = ArcSwapAny::<Arc<usize>, PrivateUnsharded>::from_pointee(42);
-///
-/// // This'll hold a lock so any writers there wouldn't complete
-/// let l = independent.load_signal_safe();
-/// // But the lock doesn't influence the shared one, so this goes through just fine
-/// shared.store(Arc::new(43));
-///
-/// assert_eq!(42, **l);
-/// ```
-///
 /// Note that there`s a type alias [`IndependentArcSwap`](../type.IndependentArcSwap.html) that can
 /// be used instead.
 #[derive(Default)]
@@ -257,59 +240,5 @@ unsafe impl<S: AsRef<[Shard]> + Default> LockStorage for PrivateSharded<S> {
         PRIV_THREAD_ID
             .try_with(|id| id % self.shards.as_ref().len())
             .unwrap_or(0)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use crossbeam_utils::thread;
-
-    use super::super::{ArcSwapAny, SignalSafety};
-    use super::*;
-
-    const ITERATIONS: usize = 100;
-
-    // Does a kind of ping-pong between two threads, torturing the arc-swap somewhat.
-    fn basic_check<S: LockStorage + Send + Sync>() {
-        for _ in 0..ITERATIONS {
-            let shared = ArcSwapAny::<_, S>::from(Arc::new(usize::max_value()));
-            thread::scope(|scope| {
-                for i in 0..2 {
-                    let shared = &shared;
-                    scope.spawn(move |_| {
-                        for j in 0..50 {
-                            if j % 2 == i {
-                                while **shared.lock_internal(SignalSafety::Unsafe) != j {}
-                            } else {
-                                shared.store(Arc::new(j));
-                            }
-                        }
-                    });
-                }
-            })
-            .unwrap();
-        }
-    }
-
-    #[test]
-    fn basic_check_global() {
-        basic_check::<Global>();
-    }
-
-    #[test]
-    fn basic_check_private_unsharded() {
-        basic_check::<PrivateUnsharded>();
-    }
-
-    #[test]
-    fn basic_check_private_sharded_2() {
-        basic_check::<PrivateSharded<[Shard; 2]>>();
-    }
-
-    #[test]
-    fn basic_check_private_sharded_63() {
-        basic_check::<PrivateSharded<[Shard; 31]>>();
     }
 }

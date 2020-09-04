@@ -115,7 +115,7 @@ impl<T, A: Access<T>, P: Deref<Target = A>> Access<T> for P {
 }
 
 impl<T: RefCnt, S: LockStorage> Access<T> for ArcSwapAny<T, S> {
-    type Guard = Guard<'static, T>;
+    type Guard = Guard<T>;
 
     fn load(&self) -> Self::Guard {
         self.load()
@@ -126,7 +126,7 @@ impl<T: RefCnt, S: LockStorage> Access<T> for ArcSwapAny<T, S> {
 ///
 /// Accessible, but not expected to be used directly in general.
 #[derive(Debug)]
-pub struct DirectDeref<T: RefCnt>(Guard<'static, T>);
+pub struct DirectDeref<T: RefCnt>(Guard<T>);
 
 impl<T> Deref for DirectDeref<Arc<T>> {
     type Target = T;

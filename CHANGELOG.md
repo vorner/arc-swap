@@ -1,3 +1,5 @@
+* Get rid of the `load_signal_safe`. It only complicates things and it is niche;
+  signal-hook-registry has its own simplified version.
 * Avoid `from_ptr(as_ptr())`. Slight change in `RefCnt::inc` which technically
   is API breaking change, but this one should not matter in practice.
 * Extend documentation about clone behaviour.

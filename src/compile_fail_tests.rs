@@ -19,26 +19,6 @@
 //!
 //! ```rust,compile_fail
 //! let shared = arc_swap::ArcSwap::from_pointee(std::cell::Cell::new(42));
-//! let guard = shared.load_signal_safe();
-//! crossbeam_utils::thread::scope(|scope| {
-//!     scope.spawn(|_| {
-//!         drop(guard);
-//!     });
-//! }).unwrap();
-//! ```
-//!
-//! ```rust
-//! let shared = arc_swap::ArcSwap::from_pointee(42);
-//! let guard = shared.load_signal_safe();
-//! crossbeam_utils::thread::scope(|scope| {
-//!     scope.spawn(|_| {
-//!         drop(guard);
-//!     });
-//! }).unwrap();
-//! ```
-//!
-//! ```rust,compile_fail
-//! let shared = arc_swap::ArcSwap::from_pointee(std::cell::Cell::new(42));
 //! let guard = shared.load();
 //! std::thread::spawn(|| {
 //!     drop(guard);
@@ -67,26 +47,6 @@
 //! crossbeam_utils::thread::scope(|scope| {
 //!     scope.spawn(|_| {
 //!         let _ = &shared;
-//!     });
-//! }).unwrap();
-//! ```
-//!
-//! ```rust,compile_fail
-//! let shared = arc_swap::ArcSwap::from_pointee(std::cell::Cell::new(42));
-//! let guard = shared.load_signal_safe();
-//! crossbeam_utils::thread::scope(|scope| {
-//!     scope.spawn(|_| {
-//!         let _ = &guard;
-//!     });
-//! }).unwrap();
-//! ```
-//!
-//! ```rust
-//! let shared = arc_swap::ArcSwap::from_pointee(42);
-//! let guard = shared.load_signal_safe();
-//! crossbeam_utils::thread::scope(|scope| {
-//!     scope.spawn(|_| {
-//!         let _ = &guard;
 //!     });
 //! }).unwrap();
 //! ```

@@ -33,13 +33,13 @@ impl<'a, T: RefCnt> AsRaw<T::Base> for &'a T {
     }
 }
 
-impl<'a, T: RefCnt> AsRaw<T::Base> for &'a Guard<'a, T> {
+impl<'a, T: RefCnt> AsRaw<T::Base> for &'a Guard<T> {
     fn as_raw(&self) -> *mut T::Base {
         T::as_ptr(&self.inner)
     }
 }
 
-impl<'a, T: RefCnt> AsRaw<T::Base> for Guard<'a, T> {
+impl<'a, T: RefCnt> AsRaw<T::Base> for Guard<T> {
     fn as_raw(&self) -> *mut T::Base {
         T::as_ptr(&self.inner)
     }

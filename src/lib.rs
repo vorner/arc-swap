@@ -121,9 +121,6 @@
 //! There are some utilities that make the crate useful in more places than just the basics
 //! described above.
 //!
-//! The [load_signal_safe] method can be safely used inside unix signal handlers (it is the only
-//! one guaranteed to be safe there).
-//!
 //! The [Cache] allows further speed improvements over simply using [load] every time. The downside
 //! is less comfortable API (the caller needs to keep the cache around). Also, a cache may keep the
 //! older version of the value alive even when it is not in active use, until the cache is
@@ -209,10 +206,6 @@
 //! the borrow slots, which will make it more likely for following [load]s to have a slot
 //! available. Similarly, if some API needs an owned `Arc`, [load_full] is more convenient.
 //!
-//! There's also [load_signal_safe]. This is the only method guaranteed to be
-//! safely usable inside a unix signal handler. It has no advantages outside of them, so it makes
-//! it kind of niche one.
-//!
 //! Additionally, it is possible to use a [`Cache`][Cache] to get further speed improvement at the
 //! cost of less comfortable API and possibly keeping the older values alive for longer than
 //! necessary.
@@ -291,7 +284,6 @@
 //! [load]: struct.ArcSwapAny.html#method.load
 //! [into_inner]: struct.ArcSwapAny.html#method.into_inner
 //! [load_full]: struct.ArcSwapAny.html#method.load_full
-//! [load_signal_safe]: struct.ArcSwapAny.html#method.peek_signal_safe
 //! [benchmarks]: https://github.com/vorner/arc-swap/tree/master/benchmarks
 //! [ArcSwapWeak]: type.ArcSwapWeak.html
 
@@ -459,11 +451,8 @@ struct GenLock<'a> {
 
 impl<'a> GenLock<'a> {
     /// Creates a generation lock.
-    fn new<S: LockStorage + 'a>(signal_safe: SignalSafety, lock_storage: &'a S) -> Self {
-        let shard = match signal_safe {
-            SignalSafety::Safe => 0,
-            SignalSafety::Unsafe => lock_storage.choose_shard(),
-        };
+    fn new<S: LockStorage + 'a>(lock_storage: &'a S) -> Self {
+        let shard = lock_storage.choose_shard();
         let gen = lock_storage.gen_idx().load(Ordering::Relaxed) % GEN_CNT;
         // SeqCst: Acquire, so the dangerous section stays in. SeqCst to sync timelines with the
         // swap on the ptr in writer thread.
@@ -494,18 +483,15 @@ impl<'a> Drop for GenLock<'a> {
 }
 
 /// How the [Guard] content is protected.
-enum Protection<'l> {
+enum Protection {
     /// The [Guard] contains independent value and doesn't have to be protected in any way.
     Unprotected,
 
     /// One ref-count is owed in the given debt and needs to be paid on release of the [Guard].
     Debt(&'static Debt),
-
-    /// It is locked by a generation lock, needs to be unlocked.
-    Lock(GenLock<'l>),
 }
 
-impl<'l> From<Option<&'static Debt>> for Protection<'l> {
+impl<'l> From<Option<&'static Debt>> for Protection {
     fn from(debt: Option<&'static Debt>) -> Self {
         match debt {
             Some(d) => Protection::Debt(d),
@@ -519,13 +505,13 @@ impl<'l> From<Option<&'static Debt>> for Protection<'l> {
 /// This guard object is returned from most loading methods (with the notable exception of
 /// [`load_full`](struct.ArcSwapAny.html#method.load_full)). It dereferences to the smart pointer
 /// loaded, so most operations are to be done using that.
-pub struct Guard<'l, T: RefCnt> {
+pub struct Guard<T: RefCnt> {
     inner: ManuallyDrop<T>,
-    protection: Protection<'l>,
+    protection: Protection,
 }
 
-impl<'a, T: RefCnt> Guard<'a, T> {
-    fn new(ptr: *const T::Base, protection: Protection<'a>) -> Guard<'a, T> {
+impl<'a, T: RefCnt> Guard<T> {
+    fn new(ptr: *const T::Base, protection: Protection) -> Guard<T> {
         Guard {
             inner: ManuallyDrop::new(unsafe { T::from_ptr(ptr) }),
             protection,
@@ -553,11 +539,6 @@ impl<'a, T: RefCnt> Guard<'a, T> {
                 if !debt.pay::<T>(ptr) {
                     unsafe { T::dec(ptr) };
                 }
-            }
-            // If we had a lock, we first need to create our own copy, then unlock.
-            Protection::Lock(lock) => {
-                T::inc(&lease.inner);
-                lock.unlock();
             }
         }
 
@@ -592,7 +573,7 @@ impl<'a, T: RefCnt> Guard<'a, T> {
     }
 }
 
-impl<'a, T: RefCnt> Deref for Guard<'a, T> {
+impl<'a, T: RefCnt> Deref for Guard<T> {
     type Target = T;
     #[inline]
     fn deref(&self) -> &T {
@@ -600,31 +581,31 @@ impl<'a, T: RefCnt> Deref for Guard<'a, T> {
     }
 }
 
-impl<T: RefCnt> From<T> for Guard<'static, T> {
+impl<T: RefCnt> From<T> for Guard<T> {
     fn from(inner: T) -> Self {
         Self::from_inner(inner)
     }
 }
 
-impl<T: Default + RefCnt> Default for Guard<'static, T> {
+impl<T: Default + RefCnt> Default for Guard<T> {
     fn default() -> Self {
         Self::from(T::default())
     }
 }
 
-impl<'a, T: Debug + RefCnt> Debug for Guard<'a, T> {
+impl<'a, T: Debug + RefCnt> Debug for Guard<T> {
     fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
         self.deref().fmt(formatter)
     }
 }
 
-impl<'a, T: Display + RefCnt> Display for Guard<'a, T> {
+impl<'a, T: Display + RefCnt> Display for Guard<T> {
     fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
         self.deref().fmt(formatter)
     }
 }
 
-impl<'a, T: RefCnt> Drop for Guard<'a, T> {
+impl<'a, T: RefCnt> Drop for Guard<T> {
     #[inline]
     fn drop(&mut self) {
         match mem::replace(&mut self.protection, Protection::Unprotected) {
@@ -640,11 +621,6 @@ impl<'a, T: RefCnt> Drop for Guard<'a, T> {
                 }
                 // But if the debt was already paid for us, we need to release the pointer, as we
                 // were effectively already in the Unprotected mode.
-            }
-            // Similarly, we don't have anything owned, we just unlock and be done with it.
-            Protection::Lock(lock) => {
-                lock.unlock();
-                return;
             }
         }
         // Equivalent to T::dec(ptr)
@@ -664,12 +640,6 @@ where
     let a = a.as_raw();
     let b = b.as_raw();
     ptr::eq(a, b)
-}
-
-#[derive(Copy, Clone)]
-enum SignalSafety {
-    Safe,
-    Unsafe,
 }
 
 /// When waiting to something, yield the thread every so many iterations so something else might
@@ -819,37 +789,7 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     }
 
     #[inline]
-    fn lock_internal(&self, signal_safe: SignalSafety) -> Guard<'_, T> {
-        let gen = GenLock::new(signal_safe, &self.lock_storage);
-        let ptr = self.ptr.load(Ordering::Acquire);
-
-        Guard::new(ptr, Protection::Lock(gen))
-    }
-
-    /// An async-signal-safe version of [`load`](#method.load)
-    ///
-    /// This method uses only restricted set of primitives to be async-signal-safe, so it can be
-    /// used inside unix signal handlers. It has no advantages outside of them and it has its own
-    /// downsides, so there's no reason to use it outside of them.
-    ///
-    /// # Warning
-    ///
-    /// While the method itself is lock-free (it will not be blocked by anything other threads do),
-    /// methods that write are blocked from completion until the returned
-    /// [`Guard`](struct.Guard.html) is dropped. This includes [`store`](#method.store),
-    /// [`compare_and_swap`](#method.compare_and_swap) and [`rcu`](#method.rcu) and destruction of
-    /// the `ArcSwapAny` instance.
-    ///
-    /// By default, the locks are *shared* across all the instances in the program, therefore it
-    /// blocks writes even to *other* `ArcSwapAny` instances. It is possible to use a private lock
-    /// (which is recommended if you want to do use this method) by using the
-    /// [`IndependentArcSwap`](type.IndependentArcSwap.html) type alias.
-    pub fn load_signal_safe(&self) -> Guard<'_, T> {
-        self.lock_internal(SignalSafety::Safe)
-    }
-
-    #[inline]
-    fn load_fallible(&self) -> Option<Guard<'static, T>> {
+    fn load_fallible(&self) -> Option<Guard<T>> {
         // Relaxed is good enough here, see the Acquire below
         let ptr = self.ptr.load(Ordering::Relaxed);
         // Try to get a debt slot. If not possible, fail.
@@ -916,12 +856,14 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// # print_broken(&p);
     /// ```
     #[inline]
-    pub fn load(&self) -> Guard<'static, T> {
+    pub fn load(&self) -> Guard<T> {
         self.load_fallible().unwrap_or_else(|| {
-            let locked = self.lock_internal(SignalSafety::Unsafe);
-            // Extracting the object into a full-featured value has the
-            // side effect of dropping the lock.
-            Guard::from_inner(Guard::into_inner(locked))
+            let gen = GenLock::new(&self.lock_storage);
+            let ptr = self.ptr.load(Ordering::Acquire);
+            let ptr = unsafe { T::from_ptr(ptr) };
+            T::inc(&ptr);
+            gen.unlock();
+            Guard::from_inner(ptr)
         })
     }
 
@@ -934,23 +876,7 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
 
     /// Exchanges the value inside this instance.
     ///
-    /// Note that this method is *not* lock-free. In particular, it is possible to block this
-    /// method by using the [`load_signal_safe`](#method.load_signal_safe), but
-    /// [`load`](#method.load) may also block it for very short time (several CPU instructions). If
-    /// this happens, `swap` will busy-wait in the meantime.
-    ///
-    /// It is also possible to cause a deadlock (eg. this is an example of *broken* code):
-    ///
-    /// ```rust,no_run
-    /// # use std::sync::Arc;
-    /// # use arc_swap::ArcSwap;
-    /// let shared = ArcSwap::from(Arc::new(42));
-    /// let guard = shared.load_signal_safe();
-    /// // This will deadlock, because the guard is still active here and swap
-    /// // can't pull the value from under its feet.
-    /// shared.swap(Arc::new(0));
-    /// # drop(guard);
-    /// ```
+    /// Note that this method is *not* lock-free.
     pub fn swap(&self, new: T) -> T {
         let new = T::into_ptr(new);
         // AcqRel needed to publish the target of the new pointer and get the target of the old
@@ -983,7 +909,7 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
 
         // As noted above, this method has either semantics of load or of store. We don't know
         // which ones upfront, so we need to implement safety measures for both.
-        let gen = GenLock::new(SignalSafety::Unsafe, &self.lock_storage);
+        let gen = GenLock::new(&self.lock_storage);
 
         let previous_ptr = self.ptr.compare_and_swap(cur_ptr, new, Ordering::SeqCst);
         let swapped = ptr::eq(cur_ptr, previous_ptr);
@@ -1352,24 +1278,7 @@ impl<T, S: LockStorage> ArcSwapAny<Option<Arc<T>>, S> {
 /// An atomic storage that doesn't share the internal generation locks with others.
 ///
 /// This makes it bigger and it also might suffer contention (on the HW level) if used from many
-/// threads at once. But using [`load_signal_safe`](struct.ArcSwapAny.html#method.load_signal_safe)
-/// will not block writes on other instances.
-///
-/// ```rust
-/// # use std::sync::Arc;
-/// # use arc_swap::{ArcSwap, IndependentArcSwap};
-/// // This one shares locks with others.
-/// let shared = ArcSwap::from_pointee(42);
-/// // But this one has an independent lock.
-/// let independent = IndependentArcSwap::from_pointee(42);
-///
-/// // This'll hold a lock so any writers there wouldn't complete
-/// let l = independent.load_signal_safe();
-/// // But the lock doesn't influence the shared one, so this goes through just fine
-/// shared.store(Arc::new(43));
-///
-/// assert_eq!(42, **l);
-/// ```
+/// threads at once.
 pub type IndependentArcSwap<T> = ArcSwapAny<Arc<T>, PrivateUnsharded>;
 
 /// Arc swap for the [Weak] pointer.
@@ -1808,30 +1717,6 @@ mod tests {
         }
     }
 
-    /// Similar, but for peek guard.
-    #[test]
-    fn signal_drop_in_another_thread() {
-        for _ in 0..ITERATIONS {
-            let cnt = Arc::new(AtomicUsize::new(0));
-            let shared = ArcSwap::from_pointee(ReportDrop(cnt.clone()));
-            assert_eq!(cnt.load(Ordering::Relaxed), 0, "Dropped prematurely");
-            let guard = shared.load_signal_safe();
-
-            // We can't drop here, sorry. Or, not even replace, as that would deadlock.
-
-            thread::scope(|scope| {
-                scope.spawn(|_| {
-                    drop(guard);
-                });
-
-                assert_eq!(cnt.load(Ordering::Relaxed), 0, "Dropped prematurely");
-                shared.swap(Default::default());
-                assert_eq!(cnt.load(Ordering::Relaxed), 1, "Not dropped");
-            })
-            .unwrap();
-        }
-    }
-
     #[test]
     fn load_option() {
         let shared = ArcSwapOption::from_pointee(42);
@@ -1867,13 +1752,8 @@ mod tests {
         let lease = shared.load();
         let lease_ref = &lease;
         let lease = shared.load();
-        let guard = shared.load_signal_safe();
-        let guard_ref = &guard;
-        let guard = shared.load_signal_safe();
         thread::scope(|s| {
             s.spawn(move |_| {
-                let _ = guard;
-                let _ = guard_ref;
                 let _ = lease;
                 let _ = lease_ref;
                 let _ = shared_ref;

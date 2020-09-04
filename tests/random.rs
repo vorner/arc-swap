@@ -12,7 +12,6 @@ enum OpsInstruction {
     Store(usize),
     Swap(usize),
     LoadFull,
-    LoadSignalSafe,
     Load,
 }
 
@@ -22,7 +21,6 @@ impl OpsInstruction {
             any::<usize>().prop_map(Self::Store),
             any::<usize>().prop_map(Self::Swap),
             Just(Self::LoadFull),
-            Just(Self::LoadSignalSafe),
             Just(Self::Load),
         ]
     }
@@ -46,7 +44,6 @@ proptest! {
                 }
                 Load => assert_eq!(m, **a.load()),
                 LoadFull => assert_eq!(m, *a.load_full()),
-                LoadSignalSafe => assert_eq!(m, **a.load_signal_safe()),
             }
         }
     }
