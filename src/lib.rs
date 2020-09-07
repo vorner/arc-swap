@@ -293,6 +293,7 @@ pub mod cache;
 mod compile_fail_tests;
 mod debt;
 pub mod gen_lock;
+pub mod strategy;
 mod ref_cnt;
 #[cfg(feature = "weak")]
 mod weak;
