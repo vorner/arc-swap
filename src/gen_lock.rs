@@ -23,10 +23,14 @@
 //!   generate an independent but global storage.
 
 use std::cell::Cell;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{self, AtomicUsize, Ordering};
+use std::thread;
 
 /// Number of shards (see [`Shard`]).
 const SHARD_CNT: usize = 9;
+
+/// If waiting in a spin loop, do a thread yield to the OS scheduler this many iterations
+const YIELD_EVERY: usize = 16;
 
 /// How many generations we have in the lock.
 pub(crate) const GEN_CNT: usize = 2;
@@ -240,5 +244,47 @@ unsafe impl<S: AsRef<[Shard]> + Default> LockStorage for PrivateSharded<S> {
         PRIV_THREAD_ID
             .try_with(|id| id % self.shards.as_ref().len())
             .unwrap_or(0)
+    }
+}
+
+// TODO: Some nice docs about this thing
+pub(crate) fn wait_for_readers<S: LockStorage>(storage: &S) {
+    let mut seen_group = [false; GEN_CNT];
+    let mut iter = 0usize;
+    let gen_idk = storage.gen_idx();
+    let shards = storage.shards().as_ref();
+
+    loop {
+        // Note that we don't need the snapshot to be consistent. We just need to see both
+        // halves being zero, not necessarily at the same time.
+        let gen = gen_idk.load(Ordering::Relaxed);
+        let groups = shards
+            .iter()
+            .fold([0, 0], |[a1, a2], s| {
+                let [v1, v2] = s.snapshot();
+                [a1 + v1, a2 + v2]
+            });
+        // Should we increment the generation? Is the next one empty?
+        let next_gen = gen.wrapping_add(1);
+        if groups[next_gen % GEN_CNT] == 0 {
+            // Replace it only if someone else didn't do it in the meantime
+            gen_idk.compare_and_swap(gen, next_gen, Ordering::Relaxed);
+        }
+        for i in 0..GEN_CNT {
+            seen_group[i] = seen_group[i] || (groups[i] == 0);
+        }
+
+        if seen_group.iter().all(|seen| *seen) {
+            break;
+        }
+
+        iter = iter.wrapping_add(1);
+        if cfg!(not(miri)) {
+            if iter % YIELD_EVERY == 0 {
+                thread::yield_now();
+            } else {
+                atomic::spin_loop_hint();
+            }
+        }
     }
 }
