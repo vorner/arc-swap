@@ -7,7 +7,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex, MutexGuard, PoisonError};
 
 use arc_swap::gen_lock::{Global, LockStorage, PrivateSharded, PrivateUnsharded, Shard};
-use arc_swap::{ArcSwapAny, ArcSwapOption};
+use arc_swap::ArcSwapAny;
+use arc_swap::strategy::HybridStrategy;
 use crossbeam_utils::thread;
 use itertools::Itertools;
 use once_cell::sync::Lazy;
@@ -23,15 +24,16 @@ fn lock() -> MutexGuard<'static, ()> {
 ///
 /// The idea here is to stress-test the RCU implementation and see that no items get lost and that
 /// the ref counts are correct afterwards.
+// TODO: Other strategies too
 fn storm_link_list<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) {
-    struct LLNode {
-        next: ArcSwapOption<LLNode>,
+    struct LLNode<S: LockStorage + Send + Sync> {
+        next: ArcSwapAny<Option<Arc<LLNode<S>>>, HybridStrategy<S>>,
         num: usize,
         owner: usize,
     }
 
     let _lock = lock();
-    let head = ArcSwapAny::<_, S>::from(None::<Arc<LLNode>>);
+    let head = ArcSwapAny::<_, HybridStrategy<S>>::from(None::<Arc<LLNode<S>>>);
     let cpus = num_cpus::get();
     // FIXME: If one thread fails, but others don't, it'll deadlock.
     let barr = Barrier::new(cpus);
@@ -147,6 +149,7 @@ fn storm_link_list_large_private_sharded() {
 }
 
 /// Test where we build and then deconstruct a linked list using multiple threads.
+// TODO: Other strategies
 fn storm_unroll<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) {
     struct LLNode<'a> {
         next: Option<Arc<LLNode<'a>>>,
@@ -168,7 +171,7 @@ fn storm_unroll<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) {
     let global_cnt = AtomicUsize::new(0);
     // We plan to create this many nodes during the whole test.
     let live_cnt = AtomicUsize::new(cpus * node_cnt * iters);
-    let head = ArcSwapAny::<_, S>::from(None);
+    let head = ArcSwapAny::<_, HybridStrategy<S>>::from(None);
     thread::scope(|scope| {
         for thread in 0..cpus {
             // Borrow these instead of moving.
@@ -254,7 +257,7 @@ fn storm_unroll_large_private_sharded() {
 fn load_parallel<S: LockStorage + Send + Sync>(iters: usize) {
     let _lock = lock();
     let cpus = num_cpus::get();
-    let shared = ArcSwapAny::<_, S>::from(Arc::new(0));
+    let shared = ArcSwapAny::<_, HybridStrategy<S>>::from(Arc::new(0));
     thread::scope(|scope| {
         scope.spawn(|_| {
             for i in 0..iters {

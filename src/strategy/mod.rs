@@ -7,6 +7,8 @@ use inner::Sealed;
 mod hybrid;
 mod rw_lock;
 
+pub use self::hybrid::HybridStrategy;
+
 mod inner {
     // TODO: When we are ready to un-seal, should these traits become unsafe?
     pub trait Sealed {}

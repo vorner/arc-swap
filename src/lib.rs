@@ -298,23 +298,24 @@ mod ref_cnt;
 #[cfg(feature = "weak")]
 mod weak;
 
+use std::borrow::Borrow;
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
-use std::isize;
 use std::marker::PhantomData;
-use std::mem::{self, ManuallyDrop};
+use std::mem;
 use std::ops::Deref;
-use std::process;
 use std::ptr;
-use std::sync::atomic::{self, AtomicPtr, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
 use std::thread;
 
 use crate::access::{Access, Map};
 use crate::as_raw::AsRaw;
 pub use crate::cache::Cache;
-use crate::debt::Debt;
-use crate::gen_lock::{Global, LockStorage, PrivateUnsharded, GEN_CNT};
+use crate::gen_lock::{Global, PrivateUnsharded};
 pub use crate::ref_cnt::RefCnt;
+use crate::strategy::{HybridStrategy, Protected, Strategy};
+
+pub type DefaultStrategy = HybridStrategy<Global>;
 
 // # Implementation details
 //
@@ -443,82 +444,16 @@ pub use crate::ref_cnt::RefCnt;
 // synchronize with anything else, or they are failed attempts at something ‒ and another attempt
 // will be made, the successful one will do the necessary synchronization).
 
-const MAX_GUARDS: usize = (isize::MAX) as usize;
-
-/// Generation lock, to abstract locking and unlocking readers.
-struct GenLock<'a> {
-    slot: &'a AtomicUsize,
-}
-
-impl<'a> GenLock<'a> {
-    /// Creates a generation lock.
-    fn new<S: LockStorage + 'a>(lock_storage: &'a S) -> Self {
-        let shard = lock_storage.choose_shard();
-        let gen = lock_storage.gen_idx().load(Ordering::Relaxed) % GEN_CNT;
-        // SeqCst: Acquire, so the dangerous section stays in. SeqCst to sync timelines with the
-        // swap on the ptr in writer thread.
-        let slot = &lock_storage.shards().as_ref()[shard].0[gen];
-        let old = slot.fetch_add(1, Ordering::SeqCst);
-        // The trick is taken from Arc.
-        if old > MAX_GUARDS {
-            process::abort();
-        }
-        GenLock { slot }
-    }
-
-    /// Removes a generation lock.
-    fn unlock(self) {
-        // Release, so the dangerous section stays in. Acquire to chain the operations.
-        self.slot.fetch_sub(1, Ordering::AcqRel);
-        // Disarm the drop-bomb
-        mem::forget(self);
-    }
-}
-
-/// A bomb so one doesn't forget to unlock generations.
-#[cfg(debug_assertions)] // The bomb actually makes it ~20% slower, so don't put it into production
-impl<'a> Drop for GenLock<'a> {
-    fn drop(&mut self) {
-        unreachable!("Forgot to unlock generation");
-    }
-}
-
-/// How the [Guard] content is protected.
-enum Protection {
-    /// The [Guard] contains independent value and doesn't have to be protected in any way.
-    Unprotected,
-
-    /// One ref-count is owed in the given debt and needs to be paid on release of the [Guard].
-    Debt(&'static Debt),
-}
-
-impl<'l> From<Option<&'static Debt>> for Protection {
-    fn from(debt: Option<&'static Debt>) -> Self {
-        match debt {
-            Some(d) => Protection::Debt(d),
-            None => Protection::Unprotected,
-        }
-    }
-}
-
 /// A temporary storage of the pointer.
 ///
 /// This guard object is returned from most loading methods (with the notable exception of
 /// [`load_full`](struct.ArcSwapAny.html#method.load_full)). It dereferences to the smart pointer
 /// loaded, so most operations are to be done using that.
-pub struct Guard<T: RefCnt> {
-    inner: ManuallyDrop<T>,
-    protection: Protection,
+pub struct Guard<T: RefCnt, S: Strategy<T> = DefaultStrategy> {
+    inner: S::Protected,
 }
 
-impl<'a, T: RefCnt> Guard<T> {
-    fn new(ptr: *const T::Base, protection: Protection) -> Guard<T> {
-        Guard {
-            inner: ManuallyDrop::new(unsafe { T::from_ptr(ptr) }),
-            protection,
-        }
-    }
-
+impl<'a, T: RefCnt, S: Strategy<T>> Guard<T, S> {
     /// Converts it into the held value.
     ///
     /// This, on occasion, may be a tiny bit faster than cloning the Arc or whatever is being held
@@ -526,28 +461,8 @@ impl<'a, T: RefCnt> Guard<T> {
     // Associated function on purpose, because of deref
     #[allow(clippy::wrong_self_convention)]
     #[inline]
-    pub fn into_inner(mut lease: Self) -> T {
-        // Drop any debt and release any lock held by the given guard and return a
-        // full-featured value that even can outlive the ArcSwap it originated from.
-        match mem::replace(&mut lease.protection, Protection::Unprotected) {
-            // Not protected, nothing to unprotect.
-            Protection::Unprotected => (),
-            // If we owe, we need to create a new copy of the Arc. But if it gets payed in the
-            // meantime, then we have to release it again, because it is extra. We can't check
-            // first because of races.
-            Protection::Debt(debt) => {
-                let ptr = T::inc(&lease.inner);
-                if !debt.pay::<T>(ptr) {
-                    unsafe { T::dec(ptr) };
-                }
-            }
-        }
-
-        // The ptr::read & forget is something like a cheating move. We can't move it out, because
-        // we have a destructor and Rust doesn't allow us to do that.
-        let inner = unsafe { ptr::read(lease.inner.deref()) };
-        mem::forget(lease);
-        inner
+    pub fn into_inner(lease: Self) -> T {
+        lease.inner.into_inner()
     }
 
     /// Create a guard for a given value `inner`.
@@ -568,64 +483,40 @@ impl<'a, T: RefCnt> Guard<T> {
     /// ```
     pub fn from_inner(inner: T) -> Self {
         Guard {
-            inner: ManuallyDrop::new(inner),
-            protection: Protection::Unprotected,
+            inner: S::Protected::from_inner(inner),
         }
     }
 }
 
-impl<'a, T: RefCnt> Deref for Guard<T> {
+impl<'a, T: RefCnt, S: Strategy<T>> Deref for Guard<T, S> {
     type Target = T;
     #[inline]
     fn deref(&self) -> &T {
-        self.inner.deref()
+        self.inner.borrow()
     }
 }
 
-impl<T: RefCnt> From<T> for Guard<T> {
+impl<T: RefCnt, S: Strategy<T>> From<T> for Guard<T, S> {
     fn from(inner: T) -> Self {
         Self::from_inner(inner)
     }
 }
 
-impl<T: Default + RefCnt> Default for Guard<T> {
+impl<T: Default + RefCnt, S: Strategy<T>> Default for Guard<T, S> {
     fn default() -> Self {
         Self::from(T::default())
     }
 }
 
-impl<'a, T: Debug + RefCnt> Debug for Guard<T> {
+impl<T: Debug + RefCnt, S: Strategy<T>> Debug for Guard<T, S> {
     fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
         self.deref().fmt(formatter)
     }
 }
 
-impl<'a, T: Display + RefCnt> Display for Guard<T> {
+impl<T: Display + RefCnt, S: Strategy<T>> Display for Guard<T, S> {
     fn fmt(&self, formatter: &mut Formatter) -> FmtResult {
         self.deref().fmt(formatter)
-    }
-}
-
-impl<'a, T: RefCnt> Drop for Guard<T> {
-    #[inline]
-    fn drop(&mut self) {
-        match mem::replace(&mut self.protection, Protection::Unprotected) {
-            // We have our own copy of Arc, so we don't need a protection. Do nothing (but release
-            // the Arc below).
-            Protection::Unprotected => (),
-            // If we owed something, just return the debt. We don't have a pointer owned, so
-            // nothing to release.
-            Protection::Debt(debt) => {
-                let ptr = T::as_ptr(&self.inner);
-                if debt.pay::<T>(ptr) {
-                    return;
-                }
-                // But if the debt was already paid for us, we need to release the pointer, as we
-                // were effectively already in the Unprotected mode.
-            }
-        }
-        // Equivalent to T::dec(ptr)
-        unsafe { ManuallyDrop::drop(&mut self.inner) };
     }
 }
 
@@ -642,10 +533,6 @@ where
     let b = b.as_raw();
     ptr::eq(a, b)
 }
-
-/// When waiting to something, yield the thread every so many iterations so something else might
-/// get a chance to run and release whatever is being held.
-const YIELD_EVERY: usize = 16;
 
 /// An atomic storage for a reference counted smart pointer like [`Arc`] or `Option<Arc>`.
 ///
@@ -694,7 +581,7 @@ const YIELD_EVERY: usize = 16;
 /// [`Arc`]: https://doc.rust-lang.org/std/sync/struct.Arc.html
 /// [`from`]: https://doc.rust-lang.org/nightly/std/convert/trait.From.html#tymethod.from
 /// [`RefCnt`]: trait.RefCnt.html
-pub struct ArcSwapAny<T: RefCnt, S: LockStorage = Global> {
+pub struct ArcSwapAny<T: RefCnt, S: Strategy<T> = DefaultStrategy> {
     // Notes: AtomicPtr needs Sized
     /// The actual pointer, extracted from the Arc.
     ptr: AtomicPtr<T::Base>,
@@ -703,40 +590,34 @@ pub struct ArcSwapAny<T: RefCnt, S: LockStorage = Global> {
     /// it.
     _phantom_arc: PhantomData<T>,
 
-    lock_storage: S,
+    strategy: S,
 }
 
-impl<T: RefCnt, S: LockStorage> From<T> for ArcSwapAny<T, S> {
+impl<T: RefCnt, S: Default + Strategy<T>> From<T> for ArcSwapAny<T, S> {
     fn from(val: T) -> Self {
-        // The AtomicPtr requires *mut in its interface. We are more like *const, so we cast it.
-        // However, we always go back to *const right away when we get the pointer on the other
-        // side, so it should be fine.
-        let ptr = T::into_ptr(val);
-        Self {
-            ptr: AtomicPtr::new(ptr),
-            _phantom_arc: PhantomData,
-            lock_storage: S::default(),
+        Self::with_strategy(val, S::default())
+    }
+}
+
+impl<T: RefCnt, S: Strategy<T>> Drop for ArcSwapAny<T, S> {
+    fn drop(&mut self) {
+        let ptr = *self.ptr.get_mut();
+        unsafe {
+            // To pay any possible debts
+            self.strategy.wait_for_readers(ptr);
+            // We are getting rid of the one stored ref count
+            T::dec(ptr);
         }
     }
 }
 
-impl<T: RefCnt, S: LockStorage> Drop for ArcSwapAny<T, S> {
-    fn drop(&mut self) {
-        let ptr = *self.ptr.get_mut();
-        // To pay any possible debts
-        self.wait_for_readers(ptr);
-        // We are getting rid of the one stored ref count
-        unsafe { T::dec(ptr) };
-    }
-}
-
-impl<T: RefCnt, S: LockStorage> Clone for ArcSwapAny<T, S> {
+impl<T: RefCnt, S: Clone + Strategy<T>> Clone for ArcSwapAny<T, S> {
     fn clone(&self) -> Self {
-        Self::from(self.load_full())
+        Self::with_strategy(self.load_full(), self.strategy.clone())
     }
 }
 
-impl<T, S: LockStorage> Debug for ArcSwapAny<T, S>
+impl<T, S: Strategy<T>> Debug for ArcSwapAny<T, S>
 where
     T: Debug + RefCnt,
 {
@@ -748,7 +629,7 @@ where
     }
 }
 
-impl<T, S: LockStorage> Display for ArcSwapAny<T, S>
+impl<T, S: Strategy<T>> Display for ArcSwapAny<T, S>
 where
     T: Display + RefCnt,
 {
@@ -757,23 +638,38 @@ where
     }
 }
 
-impl<T: RefCnt + Default, S: LockStorage> Default for ArcSwapAny<T, S> {
+impl<T: RefCnt + Default, S: Default + Strategy<T>> Default for ArcSwapAny<T, S> {
     fn default() -> Self {
         Self::new(T::default())
     }
 }
 
-impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
+impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
     /// Constructs a new value.
-    pub fn new(val: T) -> Self {
+    pub fn new(val: T) -> Self
+    where
+        S: Default,
+    {
         Self::from(val)
+    }
+
+    pub fn with_strategy(val: T, strategy: S) -> Self {
+        // The AtomicPtr requires *mut in its interface. We are more like *const, so we cast it.
+        // However, we always go back to *const right away when we get the pointer on the other
+        // side, so it should be fine.
+        let ptr = T::into_ptr(val);
+        Self {
+            ptr: AtomicPtr::new(ptr),
+            _phantom_arc: PhantomData,
+            strategy,
+        }
     }
 
     /// Extracts the value inside.
     pub fn into_inner(mut self) -> T {
         let ptr = *self.ptr.get_mut();
         // To pay all the debts
-        self.wait_for_readers(ptr);
+        unsafe { self.strategy.wait_for_readers(ptr) };
         mem::forget(self);
         unsafe { T::from_ptr(ptr) }
     }
@@ -787,28 +683,6 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// [`load`](#method.load).
     pub fn load_full(&self) -> T {
         Guard::into_inner(self.load())
-    }
-
-    #[inline]
-    fn load_fallible(&self) -> Option<Guard<T>> {
-        // Relaxed is good enough here, see the Acquire below
-        let ptr = self.ptr.load(Ordering::Relaxed);
-        // Try to get a debt slot. If not possible, fail.
-        let debt = Debt::new(ptr as usize)?;
-
-        let confirm = self.ptr.load(Ordering::Acquire);
-        if ptr == confirm {
-            // Successfully got a debt
-            Some(Guard::new(ptr, Protection::Debt(debt)))
-        } else if debt.pay::<T>(ptr) {
-            // It changed in the meantime, we return the debt (that is on the outdated pointer,
-            // possibly destroyed) and fail.
-            None
-        } else {
-            // It changed in the meantime, but the debt for the previous pointer was already paid
-            // for by someone else, so we are fine using it.
-            Some(Guard::new(ptr, Protection::Unprotected))
-        }
     }
 
     /// Provides a temporary borrow of the object inside.
@@ -857,15 +731,11 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     /// # print_broken(&p);
     /// ```
     #[inline]
-    pub fn load(&self) -> Guard<T> {
-        self.load_fallible().unwrap_or_else(|| {
-            let gen = GenLock::new(&self.lock_storage);
-            let ptr = self.ptr.load(Ordering::Acquire);
-            let ptr = unsafe { T::from_ptr(ptr) };
-            T::inc(&ptr);
-            gen.unlock();
-            Guard::from_inner(ptr)
-        })
+    pub fn load(&self) -> Guard<T, S> {
+        let protected = unsafe { self.strategy.load(&self.ptr) };
+        Guard {
+            inner: protected,
+        }
     }
 
     /// Replaces the value inside this instance.
@@ -885,8 +755,10 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
         //
         // SeqCst to synchronize the time lines with the group counters.
         let old = self.ptr.swap(new, Ordering::SeqCst);
-        self.wait_for_readers(old);
-        unsafe { T::from_ptr(old) }
+        unsafe {
+            self.strategy.wait_for_readers(old);
+            T::from_ptr(old)
+        }
     }
 
     /// Swaps the stored Arc if it equals to `current`.
@@ -904,7 +776,9 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
     ///
     /// The `current` can be specified as `&Arc`, [`Guard`](struct.Guard.html),
     /// [`&Guards`](struct.Guards.html) or as a raw pointer.
-    pub fn compare_and_swap<C: AsRaw<T::Base>>(&self, current: C, new: T) -> Guard<T> {
+    pub fn compare_and_swap<C: AsRaw<T::Base>>(&self, current: C, new: T) -> Guard<T, S> {
+        unimplemented!()
+        /*
         let cur_ptr = current.as_raw();
         let new = T::into_ptr(new);
 
@@ -955,54 +829,10 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
         }
 
         Guard::new(previous_ptr, debt.into())
+        */
     }
 
     /// Wait until all readers go away.
-    fn wait_for_readers(&self, old: *const T::Base) {
-        let mut seen_group = [false; GEN_CNT];
-        let mut iter = 0usize;
-
-        loop {
-            // Note that we don't need the snapshot to be consistent. We just need to see both
-            // halves being zero, not necessarily at the same time.
-            let gen = self.lock_storage.gen_idx().load(Ordering::Relaxed);
-            let groups = self
-                .lock_storage
-                .shards()
-                .as_ref()
-                .iter()
-                .fold([0, 0], |[a1, a2], s| {
-                    let [v1, v2] = s.snapshot();
-                    [a1 + v1, a2 + v2]
-                });
-            // Should we increment the generation? Is the next one empty?
-            let next_gen = gen.wrapping_add(1);
-            if groups[next_gen % GEN_CNT] == 0 {
-                // Replace it only if someone else didn't do it in the meantime
-                self.lock_storage
-                    .gen_idx()
-                    .compare_and_swap(gen, next_gen, Ordering::Relaxed);
-            }
-            for i in 0..GEN_CNT {
-                seen_group[i] = seen_group[i] || (groups[i] == 0);
-            }
-
-            if seen_group.iter().all(|seen| *seen) {
-                break;
-            }
-
-            iter = iter.wrapping_add(1);
-            if cfg!(not(miri)) {
-                if iter % YIELD_EVERY == 0 {
-                    thread::yield_now();
-                } else {
-                    atomic::spin_loop_hint();
-                }
-            }
-        }
-        Debt::pay_all::<T>(old);
-    }
-
     /// Read-Copy-Update of the pointer inside.
     ///
     /// This is useful in read-heavy situations with several threads that sometimes update the data
@@ -1110,8 +940,8 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
         let mut cur = self.load();
         loop {
             let new = f(&cur).into();
-            let prev = self.compare_and_swap(&cur, new);
-            let swapped = ptr_eq(&cur, &prev);
+            let prev = self.compare_and_swap(&*cur, new);
+            let swapped = ptr_eq(&*cur, &*prev);
             if swapped {
                 return Guard::into_inner(prev);
             } else {
@@ -1184,11 +1014,14 @@ impl<T: RefCnt, S: LockStorage> ArcSwapAny<T, S> {
 /// [`ArcSwapAny`](struct.ArcSwapAny.html).
 pub type ArcSwap<T> = ArcSwapAny<Arc<T>>;
 
-impl<T, S: LockStorage> ArcSwapAny<Arc<T>, S> {
+impl<T, S: Strategy<Arc<T>>> ArcSwapAny<Arc<T>, S> {
     /// A convenience constructor directly from the pointed-to value.
     ///
     /// Direct equivalent for `ArcSwap::new(Arc::new(val))`.
-    pub fn from_pointee(val: T) -> Self {
+    pub fn from_pointee(val: T) -> Self
+    where
+        S: Default,
+    {
         Self::from(Arc::new(val))
     }
 
@@ -1249,7 +1082,7 @@ impl<T, S: LockStorage> ArcSwapAny<Arc<T>, S> {
 /// ```
 pub type ArcSwapOption<T> = ArcSwapAny<Option<Arc<T>>>;
 
-impl<T, S: LockStorage> ArcSwapAny<Option<Arc<T>>, S> {
+impl<T, S: Strategy<Option<Arc<T>>>> ArcSwapAny<Option<Arc<T>>, S> {
     /// A convenience constructor directly from a pointed-to value.
     ///
     /// This just allocates the `Arc` under the hood.
@@ -1264,14 +1097,20 @@ impl<T, S: LockStorage> ArcSwapAny<Option<Arc<T>>, S> {
     /// let non_empty: ArcSwapOption<usize> = ArcSwapOption::from_pointee(42);
     /// assert_eq!(42, **non_empty.load().as_ref().unwrap());
     /// ```
-    pub fn from_pointee<V: Into<Option<T>>>(val: V) -> Self {
+    pub fn from_pointee<V: Into<Option<T>>>(val: V) -> Self
+    where
+        S: Default,
+    {
         Self::new(val.into().map(Arc::new))
     }
 
     /// A convenience constructor for an empty value.
     ///
     /// This is equivalent to `ArcSwapOption::new(None)`.
-    pub fn empty() -> Self {
+    pub fn empty() -> Self
+    where
+        S: Default,
+    {
         Self::new(None)
     }
 }
@@ -1280,7 +1119,7 @@ impl<T, S: LockStorage> ArcSwapAny<Option<Arc<T>>, S> {
 ///
 /// This makes it bigger and it also might suffer contention (on the HW level) if used from many
 /// threads at once.
-pub type IndependentArcSwap<T> = ArcSwapAny<Arc<T>, PrivateUnsharded>;
+pub type IndependentArcSwap<T> = ArcSwapAny<Arc<T>, HybridStrategy<PrivateUnsharded>>;
 
 /// Arc swap for the [Weak] pointer.
 ///
@@ -1297,7 +1136,7 @@ pub type ArcSwapWeak<T> = ArcSwapAny<std::sync::Weak<T>>;
 #[cfg(test)]
 mod tests {
     use std::panic;
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{self, AtomicUsize};
     use std::sync::Barrier;
 
     use crossbeam_utils::thread;

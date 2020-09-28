@@ -135,7 +135,7 @@ thread_local! {
 /// is only one machine word large, but a lock on one instance blocks the other, independent ones.
 ///
 /// It has several shards so threads are less likely to collide (HW-contend) on them.
-#[derive(Default)]
+#[derive(Copy, Clone, Default)]
 pub struct Global;
 
 unsafe impl LockStorage for Global {

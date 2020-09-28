@@ -84,8 +84,8 @@ use std::ops::Deref;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use super::gen_lock::LockStorage;
 use super::ref_cnt::RefCnt;
+use super::strategy::Strategy;
 use super::{ArcSwapAny, Guard};
 
 /// Abstracts over ways code can get access to a value of type `T`.
@@ -114,8 +114,8 @@ impl<T, A: Access<T>, P: Deref<Target = A>> Access<T> for P {
     }
 }
 
-impl<T: RefCnt, S: LockStorage> Access<T> for ArcSwapAny<T, S> {
-    type Guard = Guard<T>;
+impl<T: RefCnt, S: Strategy<T>> Access<T> for ArcSwapAny<T, S> {
+    type Guard = Guard<T, S>;
 
     fn load(&self) -> Self::Guard {
         self.load()
@@ -126,31 +126,31 @@ impl<T: RefCnt, S: LockStorage> Access<T> for ArcSwapAny<T, S> {
 ///
 /// Accessible, but not expected to be used directly in general.
 #[derive(Debug)]
-pub struct DirectDeref<T: RefCnt>(Guard<T>);
+pub struct DirectDeref<T: RefCnt, S: Strategy<T>>(Guard<T, S>);
 
-impl<T> Deref for DirectDeref<Arc<T>> {
+impl<T, S: Strategy<Arc<T>>> Deref for DirectDeref<Arc<T>, S> {
     type Target = T;
     fn deref(&self) -> &T {
         self.0.deref().deref()
     }
 }
 
-impl<T, S: LockStorage> Access<T> for ArcSwapAny<Arc<T>, S> {
-    type Guard = DirectDeref<Arc<T>>;
+impl<T, S: Strategy<Arc<T>>> Access<T> for ArcSwapAny<Arc<T>, S> {
+    type Guard = DirectDeref<Arc<T>, S>;
     fn load(&self) -> Self::Guard {
         DirectDeref(self.load())
     }
 }
 
-impl<T> Deref for DirectDeref<Rc<T>> {
+impl<T, S: Strategy<Rc<T>>> Deref for DirectDeref<Rc<T>, S> {
     type Target = T;
     fn deref(&self) -> &T {
         self.0.deref().deref()
     }
 }
 
-impl<T, S: LockStorage> Access<T> for ArcSwapAny<Rc<T>, S> {
-    type Guard = DirectDeref<Rc<T>>;
+impl<T, S: Strategy<Rc<T>>> Access<T> for ArcSwapAny<Rc<T>, S> {
+    type Guard = DirectDeref<Rc<T>, S>;
     fn load(&self) -> Self::Guard {
         DirectDeref(self.load())
     }

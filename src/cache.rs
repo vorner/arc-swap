@@ -9,8 +9,8 @@
 use std::ops::Deref;
 use std::sync::atomic::Ordering;
 
-use super::gen_lock::LockStorage;
 use super::ref_cnt::RefCnt;
+use super::strategy::Strategy;
 use super::ArcSwapAny;
 
 /// Generalization of caches providing access to `T`.
@@ -80,7 +80,7 @@ impl<A, T, S> Cache<A, T>
 where
     A: Deref<Target = ArcSwapAny<T, S>>,
     T: RefCnt,
-    S: LockStorage,
+    S: Strategy<T>,
 {
     /// Creates a new caching handle.
     ///
@@ -194,7 +194,7 @@ impl<A, T, S> Access<T::Target> for Cache<A, T>
 where
     A: Deref<Target = ArcSwapAny<T, S>>,
     T: Deref<Target = <T as RefCnt>::Base> + RefCnt,
-    S: LockStorage,
+    S: Strategy<T>,
 {
     fn load(&mut self) -> &T::Target {
         self.load().deref()
@@ -205,7 +205,7 @@ impl<A, T, S> From<A> for Cache<A, T>
 where
     A: Deref<Target = ArcSwapAny<T, S>>,
     T: RefCnt,
-    S: LockStorage,
+    S: Strategy<T>,
 {
     fn from(arc_swap: A) -> Self {
         Self::new(arc_swap)
@@ -226,7 +226,7 @@ impl<A, T, S, F, U> Access<U> for MapCache<A, T, F>
 where
     A: Deref<Target = ArcSwapAny<T, S>>,
     T: RefCnt,
-    S: LockStorage,
+    S: Strategy<T>,
     F: FnMut(&T) -> &U,
 {
     fn load(&mut self) -> &U {

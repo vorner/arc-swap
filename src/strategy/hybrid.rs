@@ -18,12 +18,14 @@ pub struct HybridProtection<T: RefCnt> {
 }
 
 impl<T: RefCnt> HybridProtection<T> {
+    #[inline]
     unsafe fn new(ptr: *const T::Base, debt: Option<&'static Debt>) -> Self {
         Self {
             debt,
             ptr: ManuallyDrop::new(T::from_ptr(ptr)),
         }
     }
+    #[inline]
     fn attempt(storage: &AtomicPtr<T::Base>) -> Option<Self> {
         // Relaxed is good enough here, see the Acquire below
         let ptr = storage.load(Ordering::Relaxed);
@@ -108,6 +110,7 @@ impl<T: RefCnt> Borrow<T> for HybridProtection<T> {
     }
 }
 
+#[derive(Clone, Default)]
 pub struct HybridStrategy<L> {
     lock: L,
 }
@@ -132,6 +135,7 @@ impl<T: RefCnt, L: LockStorage> Strategy<T> for HybridStrategy<L> {
 
             let ptr = storage.load(Ordering::Acquire);
             let result = HybridProtection::new(ptr, None);
+            T::inc(result.borrow());
 
             // Release, so the dangerous section stays in. Acquire to chain the operations.
             // Do not drop the inner (maybe we should do into_raw for proper measures?)
