@@ -313,7 +313,8 @@ use crate::as_raw::AsRaw;
 pub use crate::cache::Cache;
 use crate::gen_lock::{Global, PrivateUnsharded};
 pub use crate::ref_cnt::RefCnt;
-use crate::strategy::{HybridStrategy, Protected, Strategy};
+use crate::strategy::{HybridStrategy, Strategy};
+use crate::strategy::sealed::{InnerStrategy, Protected};
 
 pub type DefaultStrategy = HybridStrategy<Global>;
 

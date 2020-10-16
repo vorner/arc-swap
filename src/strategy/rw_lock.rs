@@ -2,9 +2,8 @@ use std::sync::RwLock;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
 use crate::ref_cnt::RefCnt;
-use super::{Protected, Sealed, Strategy};
+use super::sealed::{Protected, InnerStrategy};
 
-impl<T: RefCnt> Sealed for T {}
 impl<T: RefCnt> Protected<T> for T {
     #[inline]
     fn from_inner(ptr: T) -> Self {
@@ -17,8 +16,7 @@ impl<T: RefCnt> Protected<T> for T {
     }
 }
 
-impl Sealed for RwLock<()> {}
-impl<T: RefCnt> Strategy<T> for RwLock<()> {
+impl<T: RefCnt> InnerStrategy<T> for RwLock<()> {
     type Protected = T;
     unsafe fn load(&self, storage: &AtomicPtr<T::Base>) -> T {
         let _guard = self.read().expect("We don't panic in here");

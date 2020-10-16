@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 use crate::debt::Debt;
 use crate::ref_cnt::RefCnt;
 use crate::gen_lock::{self, LockStorage, GEN_CNT};
-use super::{Protected, Sealed, Strategy};
+use super::sealed::{InnerStrategy, Protected};
 
 const MAX_GUARDS: usize = (isize::MAX) as usize;
 
@@ -71,7 +71,6 @@ impl<T: RefCnt> Drop for HybridProtection<T> {
     }
 }
 
-impl<T: RefCnt> Sealed for HybridProtection<T> {}
 impl<T: RefCnt> Protected<T> for HybridProtection<T> {
     #[inline]
     fn from_inner(ptr: T) -> Self {
@@ -115,8 +114,7 @@ pub struct HybridStrategy<L> {
     lock: L,
 }
 
-impl<L> Sealed for HybridStrategy<L> {}
-impl<T: RefCnt, L: LockStorage> Strategy<T> for HybridStrategy<L> {
+impl<T: RefCnt, L: LockStorage> InnerStrategy<T> for HybridStrategy<L> {
     type Protected = HybridProtection<T>;
     unsafe fn load(&self, storage: &AtomicPtr<T::Base>) -> Self::Protected {
         HybridProtection::attempt(storage).unwrap_or_else(|| {
