@@ -3,12 +3,12 @@ use std::mem::{self, ManuallyDrop};
 use std::ops::Deref;
 use std::ptr;
 use std::process;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 use crate::debt::Debt;
 use crate::ref_cnt::RefCnt;
 use crate::gen_lock::{self, LockStorage, GEN_CNT};
-use super::sealed::{InnerStrategy, Protected};
+use super::sealed::{CaS, InnerStrategy, Protected};
 
 const MAX_GUARDS: usize = (isize::MAX) as usize;
 
@@ -109,6 +109,39 @@ impl<T: RefCnt> Borrow<T> for HybridProtection<T> {
     }
 }
 
+struct GenLock<'a> {
+    slot: &'a AtomicUsize,
+}
+
+impl<'a> GenLock<'a> {
+    fn new<S: LockStorage + 'a>(storage: &'a S) -> Self {
+        let shard = storage.choose_shard();
+        let gen = storage.gen_idx().load(Ordering::Relaxed) % GEN_CNT;
+        // TODO: Is this still needed? Is the other SeqCst needed, in the writer? Is *there* any?
+        // Or should it be Release in there and SeqCst barrier as part of wait_for_readers?
+        // SeqCst: Acquire, so the dangerous section stays in. SeqCst to sync timelines with the
+        // swap on the ptr in writer thread.
+        let slot = &storage.shards().as_ref()[shard].0[gen];
+        let old = slot.fetch_add(1, Ordering::SeqCst);
+        // The trick is taken from Arc.
+        if old > MAX_GUARDS {
+            process::abort();
+        }
+
+        Self {
+            slot
+        }
+    }
+}
+
+impl Drop for GenLock<'_> {
+    fn drop(&mut self) {
+        // Release, so the dangerous section stays in. Acquire to chain the operations.
+        // Do not drop the inner (maybe we should do into_raw for proper measures?)
+        self.slot.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct HybridStrategy<L> {
     lock: L,
@@ -118,26 +151,13 @@ impl<T: RefCnt, L: LockStorage> InnerStrategy<T> for HybridStrategy<L> {
     type Protected = HybridProtection<T>;
     unsafe fn load(&self, storage: &AtomicPtr<T::Base>) -> Self::Protected {
         HybridProtection::attempt(storage).unwrap_or_else(|| {
-            let shard = self.lock.choose_shard();
-            let gen = self.lock.gen_idx().load(Ordering::Relaxed) % GEN_CNT;
-            // TODO: Is this still needed? Is the other SeqCst needed, in the writer? Is *there* any?
-            // Or should it be Release in there and SeqCst barrier as part of wait_for_readers?
-            // SeqCst: Acquire, so the dangerous section stays in. SeqCst to sync timelines with the
-            // swap on the ptr in writer thread.
-            let slot = &self.lock.shards().as_ref()[shard].0[gen];
-            let old = slot.fetch_add(1, Ordering::SeqCst);
-            // The trick is taken from Arc.
-            if old > MAX_GUARDS {
-                process::abort();
-            }
+            let lock = GenLock::new(&self.lock);
 
             let ptr = storage.load(Ordering::Acquire);
             let result = HybridProtection::new(ptr, None);
             T::inc(result.borrow());
 
-            // Release, so the dangerous section stays in. Acquire to chain the operations.
-            // Do not drop the inner (maybe we should do into_raw for proper measures?)
-            slot.fetch_sub(1, Ordering::AcqRel);
+            drop(lock);
 
             result
         })
@@ -145,5 +165,62 @@ impl<T: RefCnt, L: LockStorage> InnerStrategy<T> for HybridStrategy<L> {
     unsafe fn wait_for_readers(&self, old: *const T::Base) {
         gen_lock::wait_for_readers(&self.lock);
         Debt::pay_all::<T>(old);
+    }
+}
+
+impl<T: RefCnt, L: LockStorage> CaS<T> for HybridStrategy<L> {
+    unsafe fn compare_and_swap<C: crate::as_raw::AsRaw<T::Base>>(&self, storage: &AtomicPtr<T::Base>, current: C, new: T) -> Self::Protected {
+        let cur_ptr = current.as_raw();
+        let new = T::into_ptr(new);
+
+        // As noted above, this method has either semantics of load or of store. We don't know
+        // which ones upfront, so we need to implement safety measures for both.
+        let gen = GenLock::new(&self.lock);
+
+        let previous_ptr = storage.compare_and_swap(cur_ptr, new, Ordering::SeqCst);
+        let swapped = ptr::eq(cur_ptr, previous_ptr);
+
+        // Drop it here, because:
+        // * We can't drop it before the compare_and_swap ‒ in such case, it could get recycled,
+        //   put into the pointer by another thread with a different value and create a fake
+        //   success (ABA).
+        // * We drop it before waiting for readers, because it could have been a Guard with a
+        //   generation lock. In such case, the caller doesn't have it any more and can't check if
+        //   it succeeded, but that's OK.
+        drop(current);
+
+        let debt = if swapped {
+            // New went in, previous out, but their ref counts are correct. So nothing to do here.
+            None
+        } else {
+            // Previous is a new copy of what is inside (and it stays there as well), so bump its
+            // ref count. New is thrown away so dec its ref count (but do it outside of the
+            // gen-lock).
+            //
+            // We try to do that by registering a debt and only if that fails by actually bumping
+            // the ref.
+            let debt = Debt::new(previous_ptr as usize);
+            if debt.is_none() {
+                let previous = T::from_ptr(previous_ptr);
+                T::inc(&previous);
+                T::into_ptr(previous);
+            }
+            debt
+        };
+
+        drop(gen);
+
+        if swapped {
+            // We swapped. Before releasing the (possibly only) ref count of previous to user, wait
+            // for all readers to make sure there are no more untracked copies of it.
+            //
+            // Why is rustc confused about self.wait_for_readers???
+            InnerStrategy::<T>::wait_for_readers(self, previous_ptr);
+        } else {
+            // We didn't swap, so new is black-holed.
+            T::dec(new);
+        }
+
+        HybridProtection::new(previous_ptr, debt)
     }
 }

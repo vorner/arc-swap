@@ -313,8 +313,8 @@ use crate::as_raw::AsRaw;
 pub use crate::cache::Cache;
 use crate::gen_lock::{Global, PrivateUnsharded};
 pub use crate::ref_cnt::RefCnt;
-use crate::strategy::{HybridStrategy, Strategy};
-use crate::strategy::sealed::{InnerStrategy, Protected};
+use crate::strategy::{CaS, HybridStrategy, Strategy};
+use crate::strategy::sealed::Protected;
 
 pub type DefaultStrategy = HybridStrategy<Global>;
 
@@ -474,12 +474,12 @@ impl<'a, T: RefCnt, S: Strategy<T>> Guard<T, S> {
     /// # Example
     ///
     /// ```rust
-    /// # use arc_swap::{ArcSwap, Guard};
+    /// # use arc_swap::{ArcSwap, DefaultStrategy, Guard};
     /// # use std::sync::Arc;
     /// # let p = ArcSwap::from_pointee(42);
     /// // Create two guards pointing to the same object
     /// let g1 = p.load();
-    /// let g2 = Guard::from_inner(Arc::clone(&*g1));
+    /// let g2 = Guard::<_, DefaultStrategy>::from_inner(Arc::clone(&*g1));
     /// # drop(g2);
     /// ```
     pub fn from_inner(inner: T) -> Self {
@@ -777,59 +777,16 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
     ///
     /// The `current` can be specified as `&Arc`, [`Guard`](struct.Guard.html),
     /// [`&Guards`](struct.Guards.html) or as a raw pointer.
-    pub fn compare_and_swap<C: AsRaw<T::Base>>(&self, current: C, new: T) -> Guard<T, S> {
-        unimplemented!()
-        /*
-        let cur_ptr = current.as_raw();
-        let new = T::into_ptr(new);
-
-        // As noted above, this method has either semantics of load or of store. We don't know
-        // which ones upfront, so we need to implement safety measures for both.
-        let gen = GenLock::new(&self.lock_storage);
-
-        let previous_ptr = self.ptr.compare_and_swap(cur_ptr, new, Ordering::SeqCst);
-        let swapped = ptr::eq(cur_ptr, previous_ptr);
-
-        // Drop it here, because:
-        // * We can't drop it before the compare_and_swap ‒ in such case, it could get recycled,
-        //   put into the pointer by another thread with a different value and create a fake
-        //   success (ABA).
-        // * We drop it before waiting for readers, because it could have been a Guard with a
-        //   generation lock. In such case, the caller doesn't have it any more and can't check if
-        //   it succeeded, but that's OK.
-        drop(current);
-
-        let debt = if swapped {
-            // New went in, previous out, but their ref counts are correct. So nothing to do here.
-            None
-        } else {
-            // Previous is a new copy of what is inside (and it stays there as well), so bump its
-            // ref count. New is thrown away so dec its ref count (but do it outside of the
-            // gen-lock).
-            //
-            // We try to do that by registering a debt and only if that fails by actually bumping
-            // the ref.
-            let debt = Debt::new(previous_ptr as usize);
-            if debt.is_none() {
-                let previous = unsafe { T::from_ptr(previous_ptr) };
-                T::inc(&previous);
-                T::into_ptr(previous);
-            }
-            debt
-        };
-
-        gen.unlock();
-
-        if swapped {
-            // We swapped. Before releasing the (possibly only) ref count of previous to user, wait
-            // for all readers to make sure there are no more untracked copies of it.
-            self.wait_for_readers(previous_ptr);
-        } else {
-            // We didn't swap, so new is black-holed.
-            unsafe { T::dec(new) };
+    pub fn compare_and_swap<C>(&self, current: C, new: T) -> Guard<T, S>
+    where
+        C: AsRaw<T::Base>,
+        S: CaS<T>,
+    {
+        let protected = unsafe { self.strategy.compare_and_swap(&self.ptr, current, new) };
+        Guard {
+            inner: protected,
         }
-
-        Guard::new(previous_ptr, debt.into())
+        /*
         */
     }
 
@@ -937,6 +894,7 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
     where
         F: FnMut(&T) -> R,
         R: Into<T>,
+        S: CaS<T>,
     {
         let mut cur = self.load();
         loop {
@@ -1047,6 +1005,7 @@ impl<T, S: Strategy<Arc<T>>> ArcSwapAny<Arc<T>, S> {
     where
         F: FnMut(&T) -> R,
         R: Into<Arc<T>>,
+        S: CaS<Arc<T>>,
     {
         let mut wrapped = self.rcu(|prev| f(&*prev));
         loop {
