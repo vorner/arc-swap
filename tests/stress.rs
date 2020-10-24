@@ -6,9 +6,8 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex, MutexGuard, PoisonError};
 
-use arc_swap::gen_lock::{Global, LockStorage, PrivateSharded, PrivateUnsharded, Shard};
 use arc_swap::ArcSwapAny;
-use arc_swap::strategy::HybridStrategy;
+use arc_swap::strategy::{CaS, DefaultStrategy, IndependentStrategy, Strategy};
 use crossbeam_utils::thread;
 use itertools::Itertools;
 use once_cell::sync::Lazy;
@@ -20,20 +19,22 @@ fn lock() -> MutexGuard<'static, ()> {
     LOCK.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+struct LLNode<S: Strategy<Option<Arc<LLNode<S>>>>> {
+    next: ArcSwapAny<Option<Arc<LLNode<S>>>, S>,
+    num: usize,
+    owner: usize,
+}
+
 /// A test that repeatedly builds a linked list concurrently with multiple threads.
 ///
 /// The idea here is to stress-test the RCU implementation and see that no items get lost and that
 /// the ref counts are correct afterwards.
-// TODO: Other strategies too
-fn storm_link_list<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) {
-    struct LLNode<S: LockStorage + Send + Sync> {
-        next: ArcSwapAny<Option<Arc<LLNode<S>>>, HybridStrategy<S>>,
-        num: usize,
-        owner: usize,
-    }
-
+fn storm_link_list<S>(node_cnt: usize, iters: usize)
+where
+    S: Default + CaS<Option<Arc<LLNode<S>>>> + Send + Sync,
+{
     let _lock = lock();
-    let head = ArcSwapAny::<_, HybridStrategy<S>>::from(None::<Arc<LLNode<S>>>);
+    let head = ArcSwapAny::<_, S>::from(None::<Arc<LLNode<S>>>);
     let cpus = num_cpus::get();
     // FIXME: If one thread fails, but others don't, it'll deadlock.
     let barr = Barrier::new(cpus);
@@ -117,52 +118,45 @@ fn storm_link_list<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) 
 
 #[test]
 fn storm_link_list_small() {
-    storm_link_list::<Global>(100, 5);
+    storm_link_list::<DefaultStrategy>(100, 5);
 }
 
 #[test]
 fn storm_link_list_small_private() {
-    storm_link_list::<PrivateUnsharded>(100, 5);
-}
-
-#[test]
-fn storm_link_list_small_private_sharded() {
-    storm_link_list::<PrivateSharded<[Shard; 3]>>(100, 5);
+    storm_link_list::<IndependentStrategy>(100, 5);
 }
 
 #[test]
 #[ignore]
 fn storm_list_link_large() {
-    storm_link_list::<Global>(10_000, 50);
+    storm_link_list::<DefaultStrategy>(10_000, 50);
 }
 
 #[test]
 #[ignore]
 fn storm_list_link_large_private() {
-    storm_link_list::<PrivateUnsharded>(10_000, 50);
+    storm_link_list::<IndependentStrategy>(10_000, 50);
 }
 
-#[test]
-#[ignore]
-fn storm_link_list_large_private_sharded() {
-    storm_link_list::<PrivateSharded<[Shard; 3]>>(10_000, 50);
+struct LLNodeCnt<'a> {
+    next: Option<Arc<LLNodeCnt<'a>>>,
+    num: usize,
+    owner: usize,
+    live_cnt: &'a AtomicUsize,
+}
+
+impl<'a> Drop for LLNodeCnt<'a> {
+    fn drop(&mut self) {
+        self.live_cnt.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 /// Test where we build and then deconstruct a linked list using multiple threads.
-// TODO: Other strategies
-fn storm_unroll<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) {
-    struct LLNode<'a> {
-        next: Option<Arc<LLNode<'a>>>,
-        num: usize,
-        owner: usize,
-        live_cnt: &'a AtomicUsize,
-    }
-
-    impl<'a> Drop for LLNode<'a> {
-        fn drop(&mut self) {
-            self.live_cnt.fetch_sub(1, Ordering::Relaxed);
-        }
-    }
+fn storm_unroll<S>(node_cnt: usize, iters: usize)
+where
+    S: Default + Send + Sync,
+    for<'a> S: CaS<Option<Arc<LLNodeCnt<'a>>>>,
+{
 
     let _lock = lock();
 
@@ -171,7 +165,7 @@ fn storm_unroll<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) {
     let global_cnt = AtomicUsize::new(0);
     // We plan to create this many nodes during the whole test.
     let live_cnt = AtomicUsize::new(cpus * node_cnt * iters);
-    let head = ArcSwapAny::<_, HybridStrategy<S>>::from(None);
+    let head = ArcSwapAny::<_, S>::from(None);
     thread::scope(|scope| {
         for thread in 0..cpus {
             // Borrow these instead of moving.
@@ -184,7 +178,7 @@ fn storm_unroll<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) {
                     barr.wait();
                     // Create bunch of nodes and put them into the list.
                     for i in 0..node_cnt {
-                        let mut node = Arc::new(LLNode {
+                        let mut node = Arc::new(LLNodeCnt {
                             next: None,
                             num: i,
                             owner: thread,
@@ -223,41 +217,33 @@ fn storm_unroll<S: LockStorage + Send + Sync>(node_cnt: usize, iters: usize) {
 
 #[test]
 fn storm_unroll_small() {
-    storm_unroll::<Global>(100, 5);
+    storm_unroll::<DefaultStrategy>(100, 5);
 }
 
 #[test]
 fn storm_unroll_small_private() {
-    storm_unroll::<PrivateUnsharded>(100, 5);
-}
-
-#[test]
-fn storm_unroll_small_private_sharded() {
-    storm_unroll::<PrivateSharded<[Shard; 3]>>(100, 5);
+    storm_unroll::<IndependentStrategy>(100, 5);
 }
 
 #[test]
 #[ignore]
 fn storm_unroll_large() {
-    storm_unroll::<Global>(10_000, 50);
+    storm_unroll::<DefaultStrategy>(10_000, 50);
 }
 
 #[test]
 #[ignore]
 fn storm_unroll_large_private() {
-    storm_unroll::<PrivateUnsharded>(10_000, 50);
+    storm_unroll::<IndependentStrategy>(10_000, 50);
 }
 
-#[test]
-#[ignore]
-fn storm_unroll_large_private_sharded() {
-    storm_unroll::<PrivateSharded<[Shard; 3]>>(10_000, 50);
-}
-
-fn load_parallel<S: LockStorage + Send + Sync>(iters: usize) {
+fn load_parallel<S>(iters: usize)
+where
+    S: Default + Strategy<Arc<usize>> + Send + Sync,
+{
     let _lock = lock();
     let cpus = num_cpus::get();
-    let shared = ArcSwapAny::<_, HybridStrategy<S>>::from(Arc::new(0));
+    let shared = ArcSwapAny::<_, S>::from(Arc::new(0));
     thread::scope(|scope| {
         scope.spawn(|_| {
             for i in 0..iters {
@@ -282,33 +268,22 @@ fn load_parallel<S: LockStorage + Send + Sync>(iters: usize) {
 
 #[test]
 fn load_parallel_small() {
-    load_parallel::<Global>(1000);
+    load_parallel::<DefaultStrategy>(1000);
 }
 
 #[test]
 fn load_parallel_small_private() {
-    load_parallel::<PrivateUnsharded>(1000);
-}
-
-#[test]
-fn load_parallel_small_private_sharded() {
-    load_parallel::<PrivateSharded<[Shard; 3]>>(1000);
+    load_parallel::<IndependentStrategy>(1000);
 }
 
 #[test]
 #[ignore]
 fn load_parallel_large() {
-    load_parallel::<Global>(100_000);
+    load_parallel::<DefaultStrategy>(100_000);
 }
 
 #[test]
 #[ignore]
 fn load_parallel_large_private() {
-    load_parallel::<PrivateUnsharded>(100_000);
-}
-
-#[test]
-#[ignore]
-fn load_parallel_large_private_sharded() {
-    load_parallel::<PrivateSharded<[Shard; 3]>>(100_000);
+    load_parallel::<IndependentStrategy>(100_000);
 }

@@ -292,7 +292,7 @@ mod as_raw;
 pub mod cache;
 mod compile_fail_tests;
 mod debt;
-pub mod gen_lock;
+mod gen_lock;
 pub mod strategy;
 mod ref_cnt;
 #[cfg(feature = "weak")]
@@ -311,12 +311,10 @@ use std::thread;
 use crate::access::{Access, Map};
 use crate::as_raw::AsRaw;
 pub use crate::cache::Cache;
-use crate::gen_lock::{Global, PrivateUnsharded};
 pub use crate::ref_cnt::RefCnt;
-use crate::strategy::{CaS, HybridStrategy, Strategy};
+use crate::strategy::{CaS, Strategy};
+pub use crate::strategy::{DefaultStrategy, IndependentStrategy};
 use crate::strategy::sealed::Protected;
-
-pub type DefaultStrategy = HybridStrategy<Global>;
 
 // # Implementation details
 //
@@ -1079,7 +1077,7 @@ impl<T, S: Strategy<Option<Arc<T>>>> ArcSwapAny<Option<Arc<T>>, S> {
 ///
 /// This makes it bigger and it also might suffer contention (on the HW level) if used from many
 /// threads at once.
-pub type IndependentArcSwap<T> = ArcSwapAny<Arc<T>, HybridStrategy<PrivateUnsharded>>;
+pub type IndependentArcSwap<T> = ArcSwapAny<Arc<T>, IndependentStrategy>;
 
 /// Arc swap for the [Weak] pointer.
 ///

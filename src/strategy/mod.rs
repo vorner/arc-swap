@@ -2,11 +2,15 @@ use std::borrow::Borrow;
 use std::sync::atomic::AtomicPtr;
 
 use crate::ref_cnt::RefCnt;
+use crate::gen_lock::{Global, PrivateUnsharded};
 
 mod hybrid;
 mod rw_lock;
 
-pub use self::hybrid::HybridStrategy;
+pub(crate) use self::hybrid::HybridStrategy;
+
+pub type DefaultStrategy = HybridStrategy<Global>;
+pub type IndependentStrategy = HybridStrategy<PrivateUnsharded>;
 
 // TODO: When we are ready to un-seal, should these traits become unsafe?
 
