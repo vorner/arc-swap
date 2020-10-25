@@ -10,7 +10,7 @@ use crate::debt::Debt;
 use crate::gen_lock::{self, LockStorage, GEN_CNT};
 use crate::ref_cnt::RefCnt;
 
-const MAX_GUARDS: usize = (isize::MAX) as usize;
+const MAX_GUARDS: usize = (std::isize::MAX) as usize;
 
 pub struct HybridProtection<T: RefCnt> {
     debt: Option<&'static Debt>,

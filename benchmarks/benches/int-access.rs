@@ -133,12 +133,4 @@ fn main() {
             arc.rcu(|_| Arc::new(i));
         },
     );
-    test_round(
-        "arc-rcu-unwrap",
-        100_000,
-        || **arc.load(),
-        |i| {
-            arc.rcu_unwrap(|_| i);
-        },
-    );
 }
