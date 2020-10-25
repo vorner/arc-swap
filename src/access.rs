@@ -122,10 +122,8 @@ impl<T: RefCnt, S: Strategy<T>> Access<T> for ArcSwapAny<T, S> {
     }
 }
 
-/// Plumbing type.
-///
-/// Accessible, but not expected to be used directly in general.
 #[derive(Debug)]
+#[doc(hidden)]
 pub struct DirectDeref<T: RefCnt, S: Strategy<T>>(Guard<T, S>);
 
 impl<T, S: Strategy<Arc<T>>> Deref for DirectDeref<Arc<T>, S> {
@@ -156,9 +154,7 @@ impl<T, S: Strategy<Rc<T>>> Access<T> for ArcSwapAny<Rc<T>, S> {
     }
 }
 
-/// Plumbing type.
-///
-/// This is the guard of [`DynAccess`] trait. It is effectively `Box<Deref<Target = T>>`.
+#[doc(hidden)]
 pub struct DynGuard<T: ?Sized>(Box<dyn Deref<Target = T>>);
 
 impl<T: ?Sized> Deref for DynGuard<T> {
@@ -207,10 +203,7 @@ where
     }
 }
 
-/// A plumbing type.
-///
-/// This is the guard type for [`Map`]. It is accessible and nameable, but is not expected to be
-/// generally used directly.
+#[doc(hidden)]
 #[derive(Copy, Clone, Debug)]
 pub struct MapGuard<G, T> {
     _guard: G,
@@ -299,10 +292,7 @@ where
     }
 }
 
-/// A plumbing type.
-///
-/// This is the guard type for [`Constant`]. It is accessible, but is not expected to be generally
-/// used directly.
+#[doc(hidden)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct ConstantDeref<T>(T);
 

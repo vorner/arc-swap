@@ -258,12 +258,10 @@ pub(crate) fn wait_for_readers<S: LockStorage>(storage: &S) {
         // Note that we don't need the snapshot to be consistent. We just need to see both
         // halves being zero, not necessarily at the same time.
         let gen = gen_idk.load(Ordering::Relaxed);
-        let groups = shards
-            .iter()
-            .fold([0, 0], |[a1, a2], s| {
-                let [v1, v2] = s.snapshot();
-                [a1 + v1, a2 + v2]
-            });
+        let groups = shards.iter().fold([0, 0], |[a1, a2], s| {
+            let [v1, v2] = s.snapshot();
+            [a1 + v1, a2 + v2]
+        });
         // Should we increment the generation? Is the next one empty?
         let next_gen = gen.wrapping_add(1);
         if groups[next_gen % GEN_CNT] == 0 {

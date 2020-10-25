@@ -3,13 +3,15 @@
     test(attr(deny(warnings)))
 )]
 #![warn(missing_docs)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // We aim at older rust too, one without dyn
 
 //! Making [`Arc`][Arc] itself atomic
 //!
-//! The library provides a type that is somewhat similar to what `RwLock<Arc<T>>` is or
-//! `Atomic<Arc<T>>` would be if it existed, optimized for read-mostly update-seldom scenarios,
-//! with consistent performance characteristics.
+//! The [`ArcSwap`] type is a container for an `Arc` that can be changed atomically. Semantically,
+//! it is similar to something like `Atomic<Arc<T>>` (if there was such a thing) or
+//! `RwLock<Arc<T>>` (but without the need for the locking). It is optimized for read-mostly
+//! scenarios, with consistent performance characteristics.
 //!
 //! # Motivation
 //!
@@ -18,7 +20,8 @@
 //! snapshot of some data that is renewed every few minutes, etc.
 //!
 //! In all these cases one needs:
-//! * Being able to read the current value of the data structure, *fast*.
+//! * Being able to read the current value of the data structure, fast, often and concurrently from
+//!   many threads.
 //! * Using the same version of the data structure over longer period of time ‒ a query should be
 //!   answered by a consistent version of data, a packet should be routed either by an old or by a
 //!   new version of the routing table but not by a combination, etc.
@@ -65,150 +68,29 @@
 //! # fn main() { process_packet(Packet); }
 //! ```
 //!
-//! # Type aliases
+//! # Crate contents
 //!
-//! The most interesting types in the crate are the [ArcSwap] and [ArcSwapOption] (the latter
-//! similar to `Atomic<Option<Arc<T>>>`). These are the types users will want to use.
+//! At the heart of the crate there are [`ArcSwap`] and [`ArcSwapOption`] types, containers for an
+//! [`Arc`] and [`Option<Arc>`][Option].
 //!
-//! Note, however, that these are type aliases of the [ArcSwapAny]. While that type is the
-//! low-level implementation and usually isn't referred to directly in the user code, all the
-//! relevant methods (and therefore documentation) is on it.
+//! Technically, these are type aliases for partial instantiations of the [`ArcSwapAny`] type. The
+//! [`ArcSwapAny`] is more flexible and allows tweaking of many things (can store other things than
+//! [`Arc`]s, can configure the locking [`Strategy`]). For details about the tweaking, see the
+//! documentation of the [`strategy`] module and the [`RefCnt`] trait.
 //!
-//! # Cloning behaviour
+//! The [`cache`] module provides means for speeding up read access of the contained data at the
+//! cost of delayed reclamation.
 //!
-//! When the [ArcSwap] is cloned, a new *independent* storage for `Arc` is created, originally
-//! containing the same one. This is similar to cloning `RwLock<Arc<T>>` ‒ the instances also can
-//! be manipulated independently.
+//! The [`access`] module can be used to do projections into the contained data to separate parts
+//! of application from each other (eg. giving a component access to only its own part of
+//! configuration while still having it reloaded as a whole).
 //!
-//! ```rust
-//! # use std::sync::Arc;
-//! # use arc_swap::ArcSwap;
-//! let first: ArcSwap<String> = ArcSwap::from_pointee("Hello".to_owned());
-//! let second: ArcSwap<String> = first.clone(); // Now they both point to the same thing
-//! assert_eq!("Hello", **first.load());
-//! assert_eq!("Hello", **second.load());
-//! // Second points to a new thing
-//! second.swap(Arc::new("World".to_owned()));
-//! assert_eq!("World", **second.load());
-//! // But first is independent and still points to the old value
-//! assert_eq!("Hello", **first.load());
-//! ```
+//! # Before using
 //!
-//! It is often more useful to share the same instance, either as a global variable, as a reference
-//! or wrapping it into an Arc.
-//!
-//! ```rust
-//! # use std::sync::Arc;
-//! # use arc_swap::ArcSwap;
-//! let first = Arc::new(ArcSwap::from_pointee("Hello".to_owned()));
-//! let second = Arc::clone(&first);
-//! assert_eq!("Hello", **first.load());
-//! assert_eq!("Hello", **second.load());
-//!
-//! second.swap(Arc::new("World".to_owned()));
-//! assert_eq!("World", **second.load());
-//! assert_eq!("World", **first.load());
-//! ```
-//!
-//! # Atomic orderings
-//!
-//! Each operation on the [ArcSwapAny] type callable concurrently (eg. [load], but not
-//! [into_inner]) contains at least one SeqCst atomic read-write operation, therefore even
-//! operations on different instances have a defined global order of operations.
-//!
-//! # Less usual needs
-//!
-//! There are some utilities that make the crate useful in more places than just the basics
-//! described above.
-//!
-//! The [Cache] allows further speed improvements over simply using [load] every time. The downside
-//! is less comfortable API (the caller needs to keep the cache around). Also, a cache may keep the
-//! older version of the value alive even when it is not in active use, until the cache is
-//! re-validated.
-//!
-//! The [access] module (and similar traits in the [cache] module) allows shielding independent
-//! parts of application from each other and from the exact structure of the *whole* configuration.
-//! This helps structuring the application and giving it access only to its own parts of the
-//! configuration.
-//!
-//! Finally, the [gen_lock] module allows further customization of low-level locking/concurrency
-//! details.
-//!
-//! # Performance characteristics
-//!
-//! There are several performance advantages of [ArcSwap] over [RwLock].
-//!
-//! ## Lock-free readers
-//!
-//! All the read operations are always [lock-free]. Most of the time, they are actually
-//! [wait-free], the notable exception is the first [load] access in each thread (across all the
-//! instances of [ArcSwap]), as it sets up some thread-local data structures.
-//!
-//! Whenever the documentation talks about *contention* in the context of [ArcSwap], it talks about
-//! contention on the CPU level ‒ multpile cores having to deal with accessing the same cache line.
-//! This slows things down (compared to each one accessing its own cache line), but an eventual
-//! progress is still guaranteed and the cost is significantly lower than parking threads as with
-//! mutex-style contention.
-//!
-//! Unfortunately writers are *not* [lock-free]. A reader stuck (suspended/killed) in a critical
-//! section (few instructions long in case of [load]) may block a writer from completion.
-//! Nevertheless, a steady inflow of new readers nor other writers will not block the writer.
-//!
-//! ## Speeds
-//!
-//! The base line speed of read operations is similar to using an *uncontended* [`Mutex`][Mutex].
-//! However, [load] suffers no contention from any other read operations and only slight
-//! ones during updates. The [`load_full`][load_full] operation is additionally contended only on
-//! the reference count of the [Arc] inside ‒ so, in general, while [Mutex] rapidly
-//! loses its performance when being in active use by multiple threads at once and
-//! [RwLock] is slow to start with, [ArcSwap] mostly keeps its performance even when read by many
-//! threads in parallel.
-//!
-//! Write operations are considered expensive. A write operation is more expensive than access to
-//! an *uncontended* [Mutex] and on some architectures even slower than uncontended
-//! [RwLock]. However, it is faster than either under contention.
-//!
-//! There are some (very unscientific) [benchmarks] within the source code of the library.
-//!
-//! The exact numbers are highly dependant on the machine used (both absolute numbers and relative
-//! between different data structures). Not only architectures have a huge impact (eg. x86 vs ARM),
-//! but even AMD vs. Intel or two different Intel processors. Therefore, if what matters is more
-//! the speed than the wait-free guarantees, you're advised to do your own measurements.
-//!
-//! Further speed improvements may be gained by the use of the [Cache].
-//!
-//! ## Consistency
-//!
-//! The combination of [wait-free] guarantees of readers and no contention between concurrent
-//! [load]s provides *consistent* performance characteristics of the synchronization mechanism.
-//! This might be important for soft-realtime applications (the CPU-level contention caused by a
-//! recent update/write operation might be problematic for some hard-realtime cases, though).
-//!
-//! ## Choosing the right reading operation
-//!
-//! There are several load operations available. While the general go-to one should be
-//! [load], there may be situations in which the others are a better match.
-//!
-//! The [load] usually only borrows the instance from the shared [ArcSwap]. This makes
-//! it faster, because different threads don't contend on the reference count. There are two
-//! situations when this borrow isn't possible. If the content gets changed, all existing
-//! [`Guard`][Guard]s are promoted to contain an owned instance. The promotion is done by the
-//! writer, but the readers still need to decrement the reference counts of the old instance when
-//! they no longer use it, contending on the count.
-//!
-//! The other situation derives from internal implementation. The number of borrows each thread can
-//! have at each time (across all [Guard]s) is limited. If this limit is exceeded, an onwed
-//! instance is created instead.
-//!
-//! Therefore, if you intend to hold onto the loaded value for extended time span, you may prefer
-//! [load_full]. It loads the pointer instance (`Arc`) without borrowing, which is
-//! slower (because of the possible contention on the reference count), but doesn't consume one of
-//! the borrow slots, which will make it more likely for following [load]s to have a slot
-//! available. Similarly, if some API needs an owned `Arc`, [load_full] is more convenient.
-//!
-//! Additionally, it is possible to use a [`Cache`][Cache] to get further speed improvement at the
-//! cost of less comfortable API and possibly keeping the older values alive for longer than
-//! necessary.
+//! The data structure is a bit niche. Before using, please check the
+//! [limitations and common pitfalls][docs::limitations] and the [performance
+//! characteristics][docs::performance], including choosing the right [read
+//! operation][docs::performance#read-operations].
 //!
 //! # Examples
 //!
@@ -240,11 +122,9 @@
 //! }
 //! ```
 //!
-//! # Features
+//! [RwLock]: https://doc.rust-lang.org/std/sync/struct.RwLock.html
+/*
 //!
-//! The `weak` feature adds the ability to use arc-swap with the [Weak] pointer too,
-//! through the [ArcSwapWeak] type. The needed std support is stabilized in rust version 1.45 (as
-//! of now in beta).
 //!
 //! # Internal details
 //!
@@ -256,45 +136,26 @@
 //! * [Making `Arc` more atomic](https://vorner.github.io/2018/06/24/arc-more-atomic.html)
 //! * [More tricks up in the ArcSwap's sleeve](https://vorner.github.io/2019/04/06/tricks-in-arc-swap.html)
 //!
-//! # Limitations
-//!
-//! This currently works only for `Sized` types. Unsized types have „fat pointers“, which are twice
-//! as large as the normal ones. The [`AtomicPtr`] doesn't support them. One could use something
-//! like `AtomicU128` for them. The catch is this doesn't exist and the difference would make it
-//! really hard to implement the debt storage/stripped down hazard pointers.
-//!
-//! A workaround is to use double indirection:
-//!
-//! ```rust
-//! # use arc_swap::ArcSwap;
-//! // This doesn't work:
-//! // let data: ArcSwap<[u8]> = ArcSwap::new(Arc::from([1, 2, 3]));
-//!
-//! // But this does:
-//! let data: ArcSwap<Box<[u8]>> = ArcSwap::from_pointee(Box::new([1, 2, 3]));
-//! # drop(data);
 //! ```
 //!
 //! [Arc]: https://doc.rust-lang.org/std/sync/struct.Arc.html
 //! [Weak]: https://doc.rust-lang.org/std/sync/struct.Arc.html
-//! [RwLock]: https://doc.rust-lang.org/std/sync/struct.RwLock.html
 //! [Mutex]: https://doc.rust-lang.org/std/sync/struct.Mutex.html
-//! [lock-free]: https://en.wikipedia.org/wiki/Non-blocking_algorithm#Lock-freedom
-//! [wait-free]: https://en.wikipedia.org/wiki/Non-blocking_algorithm#Wait-freedom
 //! [load]: struct.ArcSwapAny.html#method.load
 //! [into_inner]: struct.ArcSwapAny.html#method.into_inner
 //! [load_full]: struct.ArcSwapAny.html#method.load_full
-//! [benchmarks]: https://github.com/vorner/arc-swap/tree/master/benchmarks
 //! [ArcSwapWeak]: type.ArcSwapWeak.html
+*/
 
 pub mod access;
 mod as_raw;
 pub mod cache;
 mod compile_fail_tests;
 mod debt;
+pub mod docs;
 mod gen_lock;
-pub mod strategy;
 mod ref_cnt;
+pub mod strategy;
 #[cfg(feature = "weak")]
 mod weak;
 
@@ -306,142 +167,14 @@ use std::ops::Deref;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
-use std::thread;
 
 use crate::access::{Access, Map};
-use crate::as_raw::AsRaw;
+pub use crate::as_raw::AsRaw;
 pub use crate::cache::Cache;
 pub use crate::ref_cnt::RefCnt;
+use crate::strategy::sealed::Protected;
 use crate::strategy::{CaS, Strategy};
 pub use crate::strategy::{DefaultStrategy, IndependentStrategy};
-use crate::strategy::sealed::Protected;
-
-// # Implementation details
-//
-// The first idea would be to just use AtomicPtr with whatever the Arc::into_raw returns. Then
-// replacing it would be fine (there's no need to update ref counts). The load needs to increment
-// the reference count ‒ one still stays inside and another is returned to the caller. This is done
-// by re-creating the Arc from the raw pointer and then cloning it, throwing one instance away
-// (without destroying it).
-//
-// This approach has a problem. There's a short time between we read the raw pointer and increment
-// the count. If some other thread replaces the stored Arc and throws it away, the ref count could
-// drop to 0, get destroyed and we would be trying to bump ref counts in a ghost, which would be
-// totally broken.
-//
-// To prevent this, we actually use two approaches in a hybrid manner.
-//
-// The first one is based on hazard pointers idea, but slightly modified. There's a global
-// repository of pointers that owe a reference. When someone swaps a pointer, it walks this list
-// and pays all the debts (and takes them out of the repository).
-//
-// For simplicity and performance, storing into the repository is fallible. If storing into the
-// repository fails (because the thread used up all its own slots, or because the pointer got
-// replaced in just the wrong moment and it can't confirm the reservation), unlike the full
-// hazard-pointers approach, we don't retry, but fall back onto secondary strategy.
-//
-// Each reader registers itself so it can be tracked, but only as a number. Each writer first
-// switches the pointer. Then it takes a snapshot of all the current readers and waits until all of
-// them confirm bumping their reference count. Only then the writer returns to the caller, handing
-// it the ownership of the Arc and allowing possible bad things (like being destroyed) to happen to
-// it. This has its own disadvantages, so it is only the second approach.
-//
-// # Unsafety
-//
-// All the uses of the unsafe keyword is just to turn the raw pointer back to Arc. It originated
-// from an Arc in the first place, so the only thing to ensure is it is still valid. That means its
-// ref count never dropped to 0.
-//
-// At the beginning, there's ref count of 1 stored in the raw pointer (and maybe some others
-// elsewhere, but we can't rely on these). This 1 stays there for the whole time the pointer is
-// stored there. When the arc is replaced, this 1 is returned to the caller, so we just have to
-// make sure no more readers access it by that time.
-//
-// # Tracking of readers
-//
-// The simple way would be to have a count of all readers that could be in the dangerous area
-// between reading the pointer and bumping the reference count. We could „lock“ the ref count by
-// incrementing this atomic counter and „unlock“ it when done. The writer would just have to
-// busy-wait for this number to drop to 0 ‒ then there are no readers at all. This is safe, but a
-// steady inflow of readers could make a writer wait forever.
-//
-// Therefore, we separate readers into two groups, odd and even ones (see below how). When we see
-// both groups to drop to 0 (not necessarily at the same time, though), we are sure all the
-// previous readers were flushed ‒ each of them had to be either odd or even.
-//
-// To do that, we define a generation. A generation is a number, incremented at certain times and a
-// reader decides by this number if it is odd or even.
-//
-// One of the writers may increment the generation when it sees a zero in the next-generation's
-// group (if the writer sees 0 in the odd group and the current generation is even, all the current
-// writers are even ‒ so it remembers it saw odd-zero and increments the generation, so new readers
-// start to appear in the odd group and the even has a chance to drop to zero later on). Only one
-// writer does this switch, but all that witness the zero can remember it.
-//
-// We also split the reader threads into shards ‒ we have multiple copies of the counters, which
-// prevents some contention and sharing of the cache lines. The writer reads them all and sums them
-// up.
-//
-// # Leases and debts
-//
-// Instead of incrementing the reference count, the pointer reference can be owed. In such case, it
-// is recorded into a global storage. As each thread has its own storage (the global storage is
-// composed of multiple thread storages), the readers don't contend. When the pointer is no longer
-// in use, the debt is erased.
-//
-// The writer pays all the existing debts, therefore the reader have the full Arc with ref count at
-// that time. The reader is made aware the debt was paid and decrements the reference count.
-//
-// # Memory orders
-//
-// ## Synchronizing the data pointed to by the pointer.
-//
-// We have AcqRel (well, SeqCst, but that's included) on the swap and Acquire on the loads. In case
-// of the double read around the debt allocation, we do that on the *second*, because of ABA.
-// That's also why that SeqCst on the allocation of debt itself is not enough.
-//
-// ## The generation lock
-//
-// Second, the dangerous area when we borrowed the pointer but haven't yet incremented its ref
-// count needs to stay between incrementing and decrementing the reader count (in either group). To
-// accomplish that, using Acquire on the increment and Release on the decrement would be enough.
-// The loads in the writer use Acquire to complete the edge and make sure no part of the dangerous
-// area leaks outside of it in the writers view. This Acquire, however, forms the edge only with
-// the *latest* decrement. By making both the increment and decrement AcqRel, we effectively chain
-// the edges together.
-//
-// Now the hard part :-). We need to ensure that whatever zero a writer sees is not stale in the
-// sense that it happened before the switch of the pointer. In other words, we need to make sure
-// that at the time we start to look for the zeroes, we already see all the current readers. To do
-// that, we need to synchronize the time lines of the pointer itself and the corresponding group
-// counters. As these are separate, unrelated, atomics, it calls for SeqCst ‒ on the swap and on
-// the increment. This'll guarantee that they'll know which happened first (either increment or the
-// swap), making a base line for the following operations (load of the pointer or looking for
-// zeroes).
-//
-// # Memory orders around debts
-//
-// The linked list of debt nodes only grows. The shape of the list (existence of nodes) is
-// synchronized through Release on creation and Acquire on load on the head pointer.
-//
-// The debts work similar to locks ‒ Acquire and Release make all the pointer manipulation at the
-// interval where it is written down. However, we use the SeqCst on the allocation of the debt for
-// the same reason we do so with the generation lock.
-//
-// In case the writer pays the debt, it sees the new enough data (for the same reasons the stale
-// zeroes are not seen). The reference count on the Arc is AcqRel and makes sure it is not
-// destroyed too soon. The writer traverses all the slots, therefore they don't need to synchronize
-// with each other.
-//
-// # Orderings on the rest
-//
-// We don't really care much if we use a stale generation number ‒ it only works to route the
-// readers into one or another bucket, but even if it was completely wrong, it would only slow the
-// waiting for 0 down. So, the increments of it are just hints.
-//
-// All other operations can be Relaxed (they either only claim something, which doesn't need to
-// synchronize with anything else, or they are failed attempts at something ‒ and another attempt
-// will be made, the successful one will do the necessary synchronization).
 
 /// A temporary storage of the pointer.
 ///
@@ -557,8 +290,9 @@ where
 /// * `T`: The smart pointer to be kept inside. This crate provides implementation for `Arc<_>` and
 ///   `Option<Arc<_>>` (`Rc` too, but that one is not practically useful). But third party could
 ///   provide implementations of the [`RefCnt`] trait and plug in others.
-/// * `S`: This describes where the generation lock is stored and how it works (this allows tuning
-///   some of the performance trade-offs). See the [`LockStorage`][LockStorage] trait.
+/// * `S`: Chooses the [strategy] used to protect the data inside. They come with various
+///   performance trade offs, the default [`DefaultStrategy`] is good rule of thumb for most use
+///   cases.
 ///
 /// # Examples
 ///
@@ -589,6 +323,7 @@ pub struct ArcSwapAny<T: RefCnt, S: Strategy<T> = DefaultStrategy> {
     /// it.
     _phantom_arc: PhantomData<T>,
 
+    /// Strategy to protect the data.
     strategy: S,
 }
 
@@ -644,7 +379,7 @@ impl<T: RefCnt + Default, S: Default + Strategy<T>> Default for ArcSwapAny<T, S>
 }
 
 impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
-    /// Constructs a new value.
+    /// Constructs a new storage.
     pub fn new(val: T) -> Self
     where
         S: Default,
@@ -652,6 +387,7 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
         Self::from(val)
     }
 
+    /// Constructs a new storage while customizing the protection strategy.
     pub fn with_strategy(val: T, strategy: S) -> Self {
         // The AtomicPtr requires *mut in its interface. We are more like *const, so we cast it.
         // However, we always go back to *const right away when we get the pointer on the other
@@ -686,7 +422,7 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
 
     /// Provides a temporary borrow of the object inside.
     ///
-    /// This returns a proxy object allowing access to the thing held inside.  However, there's
+    /// This returns a proxy object allowing access to the thing held inside. However, there's
     /// only limited amount of possible cheap proxies in existence for each thread ‒ if more are
     /// created, it falls back to equivalent of [`load_full`](#method.load_full) internally.
     ///
@@ -732,9 +468,7 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
     #[inline]
     pub fn load(&self) -> Guard<T, S> {
         let protected = unsafe { self.strategy.load(&self.ptr) };
-        Guard {
-            inner: protected,
-        }
+        Guard { inner: protected }
     }
 
     /// Replaces the value inside this instance.
@@ -746,7 +480,7 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
 
     /// Exchanges the value inside this instance.
     ///
-    /// Note that this method is *not* lock-free.
+    /// Note that this method is *not* lock-free with the [`DefaultStrategy`].
     pub fn swap(&self, new: T) -> T {
         let new = T::into_ptr(new);
         // AcqRel needed to publish the target of the new pointer and get the target of the old
@@ -781,14 +515,11 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
         S: CaS<T>,
     {
         let protected = unsafe { self.strategy.compare_and_swap(&self.ptr, current, new) };
-        Guard {
-            inner: protected,
-        }
+        Guard { inner: protected }
         /*
-        */
+         */
     }
 
-    /// Wait until all readers go away.
     /// Read-Copy-Update of the pointer inside.
     ///
     /// This is useful in read-heavy situations with several threads that sometimes update the data
@@ -921,7 +652,8 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
     /// # Lifetimes & flexibility
     ///
     /// This method is not the most flexible way, as the returned type borrows into the `ArcSwap`.
-    /// To provide access into eg. `Arc<ArcSwap<T>>`, you can create the [`Map`] type directly.
+    /// To provide access into eg. `Arc<ArcSwap<T>>`, you can create the [`Map`] type directly. See
+    /// the [`access`] module.
     ///
     /// # Performance
     ///
@@ -980,41 +712,6 @@ impl<T, S: Strategy<Arc<T>>> ArcSwapAny<Arc<T>, S> {
         S: Default,
     {
         Self::from(Arc::new(val))
-    }
-
-    /// An [`rcu`](struct.ArcSwapAny.html#method.rcu) which waits to be the sole owner of the
-    /// original value and unwraps it.
-    ///
-    /// This one works the same way as the [`rcu`](struct.ArcSwapAny.html#method.rcu) method, but
-    /// works on the inner type instead of `Arc`. After replacing the original, it waits until
-    /// there are no other owners of the arc and unwraps it.
-    ///
-    /// Possible use case might be an RCU with a structure that is rather slow to drop ‒ if it was
-    /// left to random reader (the last one to hold the old value), it could cause a timeout or
-    /// jitter in a query time. With this, the deallocation is done in the updater thread,
-    /// therefore outside of the hot path.
-    ///
-    /// # Warning
-    ///
-    /// Note that if you store a copy of the `Arc` somewhere except the `ArcSwap` itself for
-    /// extended period of time, this'll busy-wait the whole time. Unless you need the assurance
-    /// the `Arc` is deconstructed here, prefer [`rcu`](#method.rcu).
-    pub fn rcu_unwrap<R, F>(&self, mut f: F) -> T
-    where
-        F: FnMut(&T) -> R,
-        R: Into<Arc<T>>,
-        S: CaS<Arc<T>>,
-    {
-        let mut wrapped = self.rcu(|prev| f(&*prev));
-        loop {
-            match Arc::try_unwrap(wrapped) {
-                Ok(val) => return val,
-                Err(w) => {
-                    wrapped = w;
-                    thread::yield_now();
-                }
-            }
-        }
     }
 }
 
@@ -1076,7 +773,9 @@ impl<T, S: Strategy<Option<Arc<T>>>> ArcSwapAny<Option<Arc<T>>, S> {
 /// An atomic storage that doesn't share the internal generation locks with others.
 ///
 /// This makes it bigger and it also might suffer contention (on the HW level) if used from many
-/// threads at once.
+/// threads at once. On the other hand, it can't block writes in other instances.
+///
+/// See the [`IndependentStrategy`] for further details.
 pub type IndependentArcSwap<T> = ArcSwapAny<Arc<T>, IndependentStrategy>;
 
 /// Arc swap for the [Weak] pointer.
@@ -1285,25 +984,6 @@ mod tests {
                 scope.spawn(|_| {
                     for _ in 0..ITERATIONS {
                         shared.rcu(|old| **old + 1);
-                    }
-                });
-            }
-        })
-        .unwrap();
-        assert_eq!(THREADS * ITERATIONS, **shared.load());
-    }
-
-    #[test]
-    /// Multiple RCUs interacting, with unwrapping.
-    fn rcu_unwrap() {
-        const ITERATIONS: usize = 50;
-        const THREADS: usize = 10;
-        let shared = ArcSwap::from(Arc::new(0));
-        thread::scope(|scope| {
-            for _ in 0..THREADS {
-                scope.spawn(|_| {
-                    for _ in 0..ITERATIONS {
-                        shared.rcu_unwrap(|old| *old + 1);
                     }
                 });
             }

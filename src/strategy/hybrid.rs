@@ -1,14 +1,14 @@
 use std::borrow::Borrow;
 use std::mem::{self, ManuallyDrop};
 use std::ops::Deref;
-use std::ptr;
 use std::process;
+use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
-use crate::debt::Debt;
-use crate::ref_cnt::RefCnt;
-use crate::gen_lock::{self, LockStorage, GEN_CNT};
 use super::sealed::{CaS, InnerStrategy, Protected};
+use crate::debt::Debt;
+use crate::gen_lock::{self, LockStorage, GEN_CNT};
+use crate::ref_cnt::RefCnt;
 
 const MAX_GUARDS: usize = (isize::MAX) as usize;
 
@@ -128,9 +128,7 @@ impl<'a> GenLock<'a> {
             process::abort();
         }
 
-        Self {
-            slot
-        }
+        Self { slot }
     }
 }
 
@@ -169,7 +167,12 @@ impl<T: RefCnt, L: LockStorage> InnerStrategy<T> for HybridStrategy<L> {
 }
 
 impl<T: RefCnt, L: LockStorage> CaS<T> for HybridStrategy<L> {
-    unsafe fn compare_and_swap<C: crate::as_raw::AsRaw<T::Base>>(&self, storage: &AtomicPtr<T::Base>, current: C, new: T) -> Self::Protected {
+    unsafe fn compare_and_swap<C: crate::as_raw::AsRaw<T::Base>>(
+        &self,
+        storage: &AtomicPtr<T::Base>,
+        current: C,
+        new: T,
+    ) -> Self::Protected {
         let cur_ptr = current.as_raw();
         let new = T::into_ptr(new);
 

@@ -6,8 +6,8 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex, MutexGuard, PoisonError};
 
-use arc_swap::ArcSwapAny;
 use arc_swap::strategy::{CaS, DefaultStrategy, IndependentStrategy, Strategy};
+use arc_swap::ArcSwapAny;
 use crossbeam_utils::thread;
 use itertools::Itertools;
 use once_cell::sync::Lazy;
@@ -157,7 +157,6 @@ where
     S: Default + Send + Sync,
     for<'a> S: CaS<Option<Arc<LLNodeCnt<'a>>>>,
 {
-
     let _lock = lock();
 
     let cpus = num_cpus::get();
