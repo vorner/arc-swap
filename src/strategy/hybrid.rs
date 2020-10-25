@@ -1,16 +1,13 @@
 use std::borrow::Borrow;
 use std::mem::{self, ManuallyDrop};
 use std::ops::Deref;
-use std::process;
 use std::ptr;
-use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 use super::sealed::{CaS, InnerStrategy, Protected};
 use crate::debt::Debt;
-use crate::gen_lock::{self, LockStorage, GEN_CNT};
+use crate::gen_lock::{self, GenLock, LockStorage};
 use crate::ref_cnt::RefCnt;
-
-const MAX_GUARDS: usize = (std::isize::MAX) as usize;
 
 pub struct HybridProtection<T: RefCnt> {
     debt: Option<&'static Debt>,
@@ -106,37 +103,6 @@ impl<T: RefCnt> Borrow<T> for HybridProtection<T> {
     #[inline]
     fn borrow(&self) -> &T {
         &self.ptr
-    }
-}
-
-struct GenLock<'a> {
-    slot: &'a AtomicUsize,
-}
-
-impl<'a> GenLock<'a> {
-    fn new<S: LockStorage + 'a>(storage: &'a S) -> Self {
-        let shard = storage.choose_shard();
-        let gen = storage.gen_idx().load(Ordering::Relaxed) % GEN_CNT;
-        // TODO: Is this still needed? Is the other SeqCst needed, in the writer? Is *there* any?
-        // Or should it be Release in there and SeqCst barrier as part of wait_for_readers?
-        // SeqCst: Acquire, so the dangerous section stays in. SeqCst to sync timelines with the
-        // swap on the ptr in writer thread.
-        let slot = &storage.shards().as_ref()[shard].0[gen];
-        let old = slot.fetch_add(1, Ordering::SeqCst);
-        // The trick is taken from Arc.
-        if old > MAX_GUARDS {
-            process::abort();
-        }
-
-        Self { slot }
-    }
-}
-
-impl Drop for GenLock<'_> {
-    fn drop(&mut self) {
-        // Release, so the dangerous section stays in. Acquire to chain the operations.
-        // Do not drop the inner (maybe we should do into_raw for proper measures?)
-        self.slot.fetch_sub(1, Ordering::AcqRel);
     }
 }
 

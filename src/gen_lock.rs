@@ -22,7 +22,9 @@
 //!   either as a reference (but then each `ArcSwap` would get a bit bigger), or a macro that could
 //!   generate an independent but global storage.
 
+use std::borrow::Borrow;
 use std::cell::Cell;
+use std::process;
 use std::sync::atomic::{self, AtomicUsize, Ordering};
 use std::thread;
 
@@ -31,6 +33,9 @@ const SHARD_CNT: usize = 9;
 
 /// If waiting in a spin loop, do a thread yield to the OS scheduler this many iterations
 const YIELD_EVERY: usize = 16;
+
+/// Maximum number of guards in the critical section
+const MAX_GUARDS: usize = (std::isize::MAX) as usize;
 
 /// How many generations we have in the lock.
 pub(crate) const GEN_CNT: usize = 2;
@@ -51,13 +56,17 @@ pub(crate) const GEN_CNT: usize = 2;
 #[derive(Default)]
 pub struct Shard(pub(crate) [AtomicUsize; GEN_CNT]);
 
-impl Shard {
-    /// Takes a snapshot of current values (with Acquire ordering)
-    pub(crate) fn snapshot(&self) -> [usize; GEN_CNT] {
-        [
-            self.0[0].load(Ordering::Acquire),
-            self.0[1].load(Ordering::Acquire),
-        ]
+fn snapshot(shard: &[AtomicUsize; GEN_CNT]) -> [usize; GEN_CNT] {
+    [
+        shard[0].load(Ordering::Acquire),
+        shard[1].load(Ordering::Acquire),
+    ]
+}
+
+impl Borrow<[AtomicUsize; GEN_CNT]> for Shard {
+    #[inline]
+    fn borrow(&self) -> &[AtomicUsize; GEN_CNT] {
+        &self.0
     }
 }
 
@@ -69,11 +78,14 @@ impl Shard {
 /// there. In other words, it is expected the trait is only a dumb storage and doesn't actively do
 /// anything.
 pub unsafe trait LockStorage: Default {
+    /// Type of one shard.
+    type Shard: Borrow<[AtomicUsize; GEN_CNT]>;
+
     /// The type for keeping several shards.
     ///
     /// In general, it is expected to be a fixed-size array, but different implementations can have
     /// different sizes.
-    type Shards: AsRef<[Shard]>;
+    type Shards: AsRef<[Self::Shard]>;
 
     /// Access to the generation index.
     ///
@@ -139,6 +151,7 @@ thread_local! {
 pub struct Global;
 
 unsafe impl LockStorage for Global {
+    type Shard = Shard;
     type Shards = Shards;
 
     #[inline]
@@ -175,11 +188,12 @@ unsafe impl LockStorage for Global {
 #[derive(Default)]
 pub struct PrivateUnsharded {
     gen_idx: AtomicUsize,
-    shard: [Shard; 1],
+    shard: [[AtomicUsize; GEN_CNT]; 1],
 }
 
 unsafe impl LockStorage for PrivateUnsharded {
-    type Shards = [Shard; 1];
+    type Shard = [AtomicUsize; GEN_CNT];
+    type Shards = [Self::Shard; 1];
 
     #[inline]
     fn gen_idx(&self) -> &AtomicUsize {
@@ -187,7 +201,7 @@ unsafe impl LockStorage for PrivateUnsharded {
     }
 
     #[inline]
-    fn shards(&self) -> &[Shard; 1] {
+    fn shards(&self) -> &[Self::Shard; 1] {
         &self.shard
     }
 
@@ -227,6 +241,7 @@ thread_local! {
 }
 
 unsafe impl<S: AsRef<[Shard]> + Default> LockStorage for PrivateSharded<S> {
+    type Shard = Shard;
     type Shards = S;
 
     #[inline]
@@ -259,7 +274,7 @@ pub(crate) fn wait_for_readers<S: LockStorage>(storage: &S) {
         // halves being zero, not necessarily at the same time.
         let gen = gen_idk.load(Ordering::Relaxed);
         let groups = shards.iter().fold([0, 0], |[a1, a2], s| {
-            let [v1, v2] = s.snapshot();
+            let [v1, v2] = snapshot(s.borrow());
             [a1 + v1, a2 + v2]
         });
         // Should we increment the generation? Is the next one empty?
@@ -284,5 +299,36 @@ pub(crate) fn wait_for_readers<S: LockStorage>(storage: &S) {
                 atomic::spin_loop_hint();
             }
         }
+    }
+}
+
+pub(crate) struct GenLock<'a> {
+    slot: &'a AtomicUsize,
+}
+
+impl<'a> GenLock<'a> {
+    pub(crate) fn new<S: LockStorage + 'a>(storage: &'a S) -> Self {
+        let shard = storage.choose_shard();
+        let gen = storage.gen_idx().load(Ordering::Relaxed) % GEN_CNT;
+        // TODO: Is this still needed? Is the other SeqCst needed, in the writer? Is *there* any?
+        // Or should it be Release in there and SeqCst barrier as part of wait_for_readers?
+        // SeqCst: Acquire, so the dangerous section stays in. SeqCst to sync timelines with the
+        // swap on the ptr in writer thread.
+        let slot = &storage.shards().as_ref()[shard].borrow()[gen];
+        let old = slot.fetch_add(1, Ordering::SeqCst);
+        // The trick is taken from Arc.
+        if old > MAX_GUARDS {
+            process::abort();
+        }
+
+        Self { slot }
+    }
+}
+
+impl Drop for GenLock<'_> {
+    fn drop(&mut self) {
+        // Release, so the dangerous section stays in. Acquire to chain the operations.
+        // Do not drop the inner (maybe we should do into_raw for proper measures?)
+        self.slot.fetch_sub(1, Ordering::AcqRel);
     }
 }
