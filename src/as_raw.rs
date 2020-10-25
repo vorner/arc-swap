@@ -1,5 +1,11 @@
 use super::{Guard, RefCnt};
 
+mod sealed {
+    pub trait Sealed {}
+}
+
+use self::sealed::Sealed;
+
 /// A trait describing things that can be turned into a raw pointer.
 ///
 /// This is just an abstraction of things that can be passed to the
@@ -22,35 +28,40 @@ use super::{Guard, RefCnt};
 /// shared.compare_and_swap(&shared.load(), Some(Arc::clone(&a)));
 /// shared.compare_and_swap(ptr::null(), Some(Arc::clone(&a)));
 /// ```
-pub trait AsRaw<T> {
+pub trait AsRaw<T>: Sealed {
     /// Converts the value into a raw pointer.
     fn as_raw(&self) -> *mut T;
 }
 
+impl<'a, T: RefCnt> Sealed for &'a T {}
 impl<'a, T: RefCnt> AsRaw<T::Base> for &'a T {
     fn as_raw(&self) -> *mut T::Base {
         T::as_ptr(self)
     }
 }
 
+impl<'a, T: RefCnt> Sealed for &'a Guard<T> {}
 impl<'a, T: RefCnt> AsRaw<T::Base> for &'a Guard<T> {
     fn as_raw(&self) -> *mut T::Base {
         T::as_ptr(&self)
     }
 }
 
+impl<'a, T: RefCnt> Sealed for Guard<T> {}
 impl<'a, T: RefCnt> AsRaw<T::Base> for Guard<T> {
     fn as_raw(&self) -> *mut T::Base {
         T::as_ptr(&self)
     }
 }
 
+impl<T> Sealed for *mut T {}
 impl<T> AsRaw<T> for *mut T {
     fn as_raw(&self) -> *mut T {
         *self
     }
 }
 
+impl<T> Sealed for *const T {}
 impl<T> AsRaw<T> for *const T {
     fn as_raw(&self) -> *mut T {
         *self as *mut T
