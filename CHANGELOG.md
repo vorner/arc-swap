@@ -4,6 +4,12 @@
   is API breaking change, but this one should not matter in practice.
 * Extend documentation about clone behaviour.
 * Few more traits for Guard (`From<T: RefCnt>`, `Default`).
+* Get rid of `rcu_unwap`, the whole concept is a trap.
+* Hide the whole gen lock thing.
+* Introduce the `Strategy`, as a high level way to choose how exactly the
+  logging happens.
+  - Not possible to implement by downstream users just yet, or call them.
+  - The CaS is its own trait for flexibility.
 
 # 0.4.7
 
