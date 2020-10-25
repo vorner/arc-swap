@@ -17,6 +17,10 @@
 //! through the [`ArcSwapWeak`] type. The needed std support is stabilized in rust version 1.45 (as
 //! of now in beta).
 //!
+//! The `experimental-strategies` enables few more strategies that can be used. Note that these
+//! **are not** part of the API stability guarantees and they may be changed, renamed or removed at
+//! any time.
+//!
 //! # Minimal compiler version
 //!
 //! The `1` versions will compile on all compilers supporting the 2018 edition. Note that this

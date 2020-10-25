@@ -10,6 +10,8 @@
   logging happens.
   - Not possible to implement by downstream users just yet, or call them.
   - The CaS is its own trait for flexibility.
+* Adding the SimpleGenLock experimental strategy.
+  - Not part of stability guarantees.
 
 # 0.4.7
 

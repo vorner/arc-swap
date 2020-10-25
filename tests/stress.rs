@@ -116,28 +116,6 @@ where
     .unwrap();
 }
 
-#[test]
-fn storm_link_list_small() {
-    storm_link_list::<DefaultStrategy>(100, 5);
-}
-
-#[test]
-fn storm_link_list_small_private() {
-    storm_link_list::<IndependentStrategy>(100, 5);
-}
-
-#[test]
-#[ignore]
-fn storm_list_link_large() {
-    storm_link_list::<DefaultStrategy>(10_000, 50);
-}
-
-#[test]
-#[ignore]
-fn storm_list_link_large_private() {
-    storm_link_list::<IndependentStrategy>(10_000, 50);
-}
-
 struct LLNodeCnt<'a> {
     next: Option<Arc<LLNodeCnt<'a>>>,
     num: usize,
@@ -214,28 +192,6 @@ where
     assert_eq!(0, live_cnt.load(Ordering::Relaxed));
 }
 
-#[test]
-fn storm_unroll_small() {
-    storm_unroll::<DefaultStrategy>(100, 5);
-}
-
-#[test]
-fn storm_unroll_small_private() {
-    storm_unroll::<IndependentStrategy>(100, 5);
-}
-
-#[test]
-#[ignore]
-fn storm_unroll_large() {
-    storm_unroll::<DefaultStrategy>(10_000, 50);
-}
-
-#[test]
-#[ignore]
-fn storm_unroll_large_private() {
-    storm_unroll::<IndependentStrategy>(10_000, 50);
-}
-
 fn load_parallel<S>(iters: usize)
 where
     S: Default + Strategy<Arc<usize>> + Send + Sync,
@@ -265,24 +221,51 @@ where
     assert_eq!(2, Arc::strong_count(&v));
 }
 
-#[test]
-fn load_parallel_small() {
-    load_parallel::<DefaultStrategy>(1000);
+macro_rules! t {
+    ($name: ident, $strategy: ty) => {
+        mod $name {
+            use super::*;
+
+            #[test]
+            fn storm_link_list_small() {
+                storm_link_list::<$strategy>(100, 5);
+            }
+
+            #[test]
+            #[ignore]
+            fn storm_link_list_large() {
+                storm_link_list::<$strategy>(10_000, 50);
+            }
+
+            #[test]
+            fn storm_unroll_small() {
+                storm_unroll::<$strategy>(100, 5);
+            }
+
+            #[test]
+            #[ignore]
+            fn storm_unroll_large() {
+                storm_unroll::<$strategy>(10_000, 50);
+            }
+
+            #[test]
+            fn load_parallel_small() {
+                load_parallel::<$strategy>(1000);
+            }
+
+            #[test]
+            #[ignore]
+            fn load_parallel_large() {
+                load_parallel::<$strategy>(100_000);
+            }
+        }
+    };
 }
 
-#[test]
-fn load_parallel_small_private() {
-    load_parallel::<IndependentStrategy>(1000);
-}
-
-#[test]
-#[ignore]
-fn load_parallel_large() {
-    load_parallel::<DefaultStrategy>(100_000);
-}
-
-#[test]
-#[ignore]
-fn load_parallel_large_private() {
-    load_parallel::<IndependentStrategy>(100_000);
-}
+t!(default, DefaultStrategy);
+t!(independent, IndependentStrategy);
+#[cfg(feature = "experimental-strategies")]
+t!(
+    simple_genlock,
+    arc_swap::strategy::experimental::SimpleGenLock
+);

@@ -4,9 +4,10 @@ use std::ops::Deref;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
+use super::gen_lock::GenLockStrategy;
 use super::sealed::{CaS, InnerStrategy, Protected};
 use crate::debt::Debt;
-use crate::gen_lock::{self, GenLock, LockStorage};
+use crate::gen_lock::{GenLock, LockStorage};
 use crate::ref_cnt::RefCnt;
 
 pub struct HybridProtection<T: RefCnt> {
@@ -107,32 +108,32 @@ impl<T: RefCnt> Borrow<T> for HybridProtection<T> {
 }
 
 #[derive(Clone, Default)]
-pub struct HybridStrategy<L> {
-    lock: L,
+pub struct HybridStrategy<F> {
+    fallback: F,
 }
 
-impl<T: RefCnt, L: LockStorage> InnerStrategy<T> for HybridStrategy<L> {
+impl<T, F> InnerStrategy<T> for HybridStrategy<F>
+where
+    T: RefCnt,
+    F: InnerStrategy<T, Protected = T>,
+{
     type Protected = HybridProtection<T>;
     unsafe fn load(&self, storage: &AtomicPtr<T::Base>) -> Self::Protected {
         HybridProtection::attempt(storage).unwrap_or_else(|| {
-            let lock = GenLock::new(&self.lock);
-
-            let ptr = storage.load(Ordering::Acquire);
-            let result = HybridProtection::new(ptr, None);
-            T::inc(result.borrow());
-
-            drop(lock);
-
-            result
+            let loaded = self.fallback.load(storage);
+            HybridProtection {
+                debt: None,
+                ptr: ManuallyDrop::new(loaded),
+            }
         })
     }
     unsafe fn wait_for_readers(&self, old: *const T::Base) {
-        gen_lock::wait_for_readers(&self.lock);
+        self.fallback.wait_for_readers(old);
         Debt::pay_all::<T>(old);
     }
 }
 
-impl<T: RefCnt, L: LockStorage> CaS<T> for HybridStrategy<L> {
+impl<T: RefCnt, L: LockStorage> CaS<T> for HybridStrategy<GenLockStrategy<L>> {
     unsafe fn compare_and_swap<C: crate::as_raw::AsRaw<T::Base>>(
         &self,
         storage: &AtomicPtr<T::Base>,
@@ -144,7 +145,7 @@ impl<T: RefCnt, L: LockStorage> CaS<T> for HybridStrategy<L> {
 
         // As noted above, this method has either semantics of load or of store. We don't know
         // which ones upfront, so we need to implement safety measures for both.
-        let gen = GenLock::new(&self.lock);
+        let gen = GenLock::new(&self.fallback.0);
 
         let previous_ptr = storage.compare_and_swap(cur_ptr, new, Ordering::SeqCst);
         let swapped = ptr::eq(cur_ptr, previous_ptr);

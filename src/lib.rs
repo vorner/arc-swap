@@ -4,7 +4,6 @@
 )]
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-// We aim at older rust too, one without dyn
 
 //! Making [`Arc`][Arc] itself atomic
 //!
@@ -123,29 +122,6 @@
 //! ```
 //!
 //! [RwLock]: https://doc.rust-lang.org/std/sync/struct.RwLock.html
-/*
-//!
-//!
-//! # Internal details
-//!
-//! The crate uses a hybrid approach of stripped-down hazard pointers and something close to a
-//! sharded spin lock with asymmetric read/write usage (called the generation lock).
-//!
-//! Further details are described in comments inside the source code and in two blog posts:
-//!
-//! * [Making `Arc` more atomic](https://vorner.github.io/2018/06/24/arc-more-atomic.html)
-//! * [More tricks up in the ArcSwap's sleeve](https://vorner.github.io/2019/04/06/tricks-in-arc-swap.html)
-//!
-//! ```
-//!
-//! [Arc]: https://doc.rust-lang.org/std/sync/struct.Arc.html
-//! [Weak]: https://doc.rust-lang.org/std/sync/struct.Arc.html
-//! [Mutex]: https://doc.rust-lang.org/std/sync/struct.Mutex.html
-//! [load]: struct.ArcSwapAny.html#method.load
-//! [into_inner]: struct.ArcSwapAny.html#method.into_inner
-//! [load_full]: struct.ArcSwapAny.html#method.load_full
-//! [ArcSwapWeak]: type.ArcSwapWeak.html
-*/
 
 pub mod access;
 mod as_raw;
