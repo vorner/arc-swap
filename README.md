@@ -11,9 +11,13 @@ Read [the documentation](https://docs.rs/arc-swap) before using.
 
 ## Rust version policy
 
-There's no hard policy yet. However, currently the crate builds with Rust 1.26
-and is tested for that. There would have to be a very good reason to increase
-the required version.
+The 1. version will build on any edition 2018 capable compiler. This does not
+include:
+
+* Tests. Tests build and run on recent compilers, mostly because of
+  dependencies.
+* Additional feature flags. Most feature flags are guaranteed to build since the
+  version they are introduced. Experimental features are without any guarantees.
 
 ## License
 
