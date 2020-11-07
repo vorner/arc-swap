@@ -321,12 +321,6 @@ impl<T: RefCnt, S: Strategy<T>> Drop for ArcSwapAny<T, S> {
     }
 }
 
-impl<T: RefCnt, S: Clone + Strategy<T>> Clone for ArcSwapAny<T, S> {
-    fn clone(&self) -> Self {
-        Self::with_strategy(self.load_full(), self.strategy.clone())
-    }
-}
-
 impl<T, S: Strategy<T>> Debug for ArcSwapAny<T, S>
 where
     T: Debug + RefCnt,

@@ -1,3 +1,8 @@
+* Remove Clone implementation. People are often confused by it and it is easy to
+  emulate by hand in the rare case it is actually needed.
+
+# 1.0.0-rc1
+
 * Get rid of the `load_signal_safe`. It only complicates things and it is niche;
   signal-hook-registry has its own simplified version.
 * Avoid `from_ptr(as_ptr())`. Slight change in `RefCnt::inc` which technically
@@ -7,7 +12,7 @@
 * Get rid of `rcu_unwap`, the whole concept is a trap.
 * Hide the whole gen lock thing.
 * Introduce the `Strategy`, as a high level way to choose how exactly the
-  logging happens.
+  locking happens.
   - Not possible to implement by downstream users just yet, or call them.
   - The CaS is its own trait for flexibility.
 * Adding the SimpleGenLock experimental strategy.
