@@ -91,6 +91,9 @@
 //! characteristics][docs::performance], including choosing the right [read
 //! operation][docs::performance#read-operations].
 //!
+//! You can also get an inspiration about what's possible in the [common patterns][docs::patterns]
+//! section.
+//!
 //! # Examples
 //!
 //! ```rust

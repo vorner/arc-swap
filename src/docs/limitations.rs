@@ -31,3 +31,18 @@
 //! [`ArcSwap`]: crate::ArcSwap
 //! [`Guard`]: crate::Guard
 //! [`AtomicPtr`]: std::sync::atomic::AtomicPtr
+//!
+//! # No `Clone` implementation
+//!
+//! Previous version implemented [`Clone`], but it turned out to be very confusing to people, since
+//! it created fully independent [`ArcSwap`]. Users expected the instances to be tied to each
+//! other, that store in one would change the result of future load of the other.
+//!
+//! To emulate the original behaviour, one can do something like this:
+//!
+//! ```rust
+//! # use arc_swap::ArcSwap;
+//! # let old = ArcSwap::from_pointee(42);
+//! let new = ArcSwap::new(old.load_full());
+//! # let _ = new;
+//! ```

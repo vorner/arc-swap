@@ -37,4 +37,5 @@
 
 pub mod internal;
 pub mod limitations;
+pub mod patterns;
 pub mod performance;
