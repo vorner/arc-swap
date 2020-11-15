@@ -1,5 +1,5 @@
 #![doc(
-    html_root_url = "https://docs.rs/arc-swap/1.0.0-rc1/arc-swap/",
+    html_root_url = "https://docs.rs/arc-swap/1.0.0/arc-swap/",
     test(attr(deny(warnings)))
 )]
 #![warn(missing_docs)]

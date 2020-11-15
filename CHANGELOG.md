@@ -1,3 +1,5 @@
+# 1.0.0
+
 * Remove Clone implementation. People are often confused by it and it is easy to
   emulate by hand in the rare case it is actually needed.
 
