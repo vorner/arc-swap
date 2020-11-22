@@ -6,4 +6,4 @@ coverage:
   status:
     project:
       # Don't fail on coverage, only show
-        informational: true
+      target: 0

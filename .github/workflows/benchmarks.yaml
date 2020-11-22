@@ -1,0 +1,51 @@
+on:
+  - pull_request
+
+name: benchmark pull requests
+
+jobs:
+  runBenchmark:
+    name: run benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          default: true
+          profile: minimal
+
+      - name: Restore compile cache
+        uses: Swatinem/rust-cache@v1
+
+      - name: Restore previous benchmark data
+        uses: actions/cache@v1
+        with:
+          path: ./bench-cache
+          key: ${{ runner.os }}-benchmark
+
+      - name: Run benchmarks
+        # We choose just the tracking ones. There's a whole fleet that we check
+        # that compile, but they are too heavy both to run in CI and to show in
+        # the PRs. And they mostly compare us to other methods.
+        #
+        # Provide the bencher output, as the following tool knows how to read that.
+        run: cargo bench --bench track -- --output-format bencher | grep -v 'Gnuplot not found' | tee benches.out
+
+      - name: Compare benchmarks
+        uses: rhysd/github-action-benchmark@4eed2c2f4cd0d374720c4b913f79faa8aafcfa6b
+        with:
+          name: Track benchmarks
+          tool: cargo
+          output-file-path: benches.out
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: false
+          alert-threshold: '125%'
+          comment-on-alert: true
+          fail-on-alert: false
+          external-data-json-path: ./bench-cache/benchmark-data.json
