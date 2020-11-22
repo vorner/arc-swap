@@ -773,18 +773,18 @@ mod tests {
 
     use super::*;
 
+    const ITERATIONS: usize = 10;
+
     /// Similar to the one in doc tests of the lib, but more times and more intensive (we want to
     /// torture it a bit).
-    ///
-    /// Takes some time, presumably because this starts 21 000 threads during its lifetime and 20
-    /// 000 of them just wait in a tight loop for the other thread to happen.
     #[test]
     fn publish() {
-        for _ in 0..100 {
+        const READERS: usize = 3;
+        for _ in 0..ITERATIONS {
             let config = ArcSwap::<String>::default();
             let ended = AtomicUsize::new(0);
             thread::scope(|scope| {
-                for _ in 0..20 {
+                for _ in 0..READERS {
                     scope.spawn(|_| loop {
                         let cfg = config.load_full();
                         if !cfg.is_empty() {
@@ -801,7 +801,7 @@ mod tests {
                 });
             })
             .unwrap();
-            assert_eq!(20, ended.load(Ordering::Relaxed));
+            assert_eq!(READERS, ended.load(Ordering::Relaxed));
             let arc = config.load_full();
             assert_eq!(2, Arc::strong_count(&arc));
             assert_eq!(0, Arc::weak_count(&arc));
@@ -1094,8 +1094,6 @@ mod tests {
             self.0.fetch_add(1, Ordering::Relaxed);
         }
     }
-
-    const ITERATIONS: usize = 50;
 
     /// Interaction of two threads about a guard and dropping it.
     ///
