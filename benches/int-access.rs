@@ -1,18 +1,12 @@
-#![feature(test)]
-
 //! These are very minimal benchmarks ‒ reading and writing an integer shared in
 //! different ways. You can compare the times and see the characteristics.
-//!
-//! Note that this requires nightly to run (that's why it's not part of the crate
-//! itself).
-
-extern crate test;
 
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use arc_swap::ArcSwap;
+use criterion::black_box;
 use crossbeam_utils::thread;
 
 fn test_run<R, W>(
@@ -36,14 +30,14 @@ fn test_run<R, W>(
         for _ in 0..read_threads {
             scope.spawn(|_| {
                 for _ in 0..iterations {
-                    test::black_box(r());
+                    black_box(r());
                 }
             });
         }
         for _ in 0..write_threads {
             scope.spawn(|_| {
                 for i in 0..iterations {
-                    test::black_box(w(i));
+                    black_box(w(i));
                 }
             });
         }

@@ -24,21 +24,31 @@ experimental-strategies = []
 # ArcSwapWeak (for std::sycn::Weak) support
 weak = []
 
-[workspace]
-members = ["benchmarks"]
-
 [dependencies]
 
 [dev-dependencies]
+criterion = "~0.3"
 crossbeam-utils = "~0.7"
 itertools = "~0.9"
 num_cpus = "~1"
 once_cell = "~1"
+parking_lot = "~0.11"
 proptest = "~0.10"
-version-sync = "~0.9"
 
 [profile.bench]
 debug = true
 
 [package.metadata.docs.rs]
 all-features = true
+
+[[bench]]
+name = "background"
+harness = false
+
+[[bench]]
+name = "int-access"
+harness = false
+
+[[bench]]
+name = "track"
+harness = false
