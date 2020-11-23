@@ -5,5 +5,5 @@ comment:
 coverage:
   status:
     project:
-      # Don't fail on coverage, only show
-      target: 0
+      default:
+        informational: true
