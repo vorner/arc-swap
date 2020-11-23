@@ -1,5 +1,12 @@
 on:
-  - pull_request
+  pull_request:
+  push:
+    branches:
+      - master
+  # Run once a week to preserve the cache
+  # (even though it still feels the cache gets lost sometimes?)
+  schedule:
+    - cron: '0 0 * * 0'
 
 name: benchmark pull requests
 
@@ -24,7 +31,7 @@ jobs:
         uses: Swatinem/rust-cache@v1
 
       - name: Restore previous benchmark data
-        uses: actions/cache@v1
+        uses: actions/cache@v2
         with:
           path: ./bench-cache
           key: ${{ runner.os }}-benchmark
@@ -45,7 +52,10 @@ jobs:
           output-file-path: benches.out
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: false
-          alert-threshold: '125%'
+          alert-threshold: '150%'
           comment-on-alert: true
-          fail-on-alert: false
+          comment-always: true
+          fail-on-alert: true
           external-data-json-path: ./bench-cache/benchmark-data.json
+          # Because it doesn't put it into the PR, it puts it into the commit :-|
+          alert-comment-cc-users: '@vorner'
