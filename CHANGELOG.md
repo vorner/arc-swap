@@ -1,3 +1,8 @@
+# 0.4.8
+
+* Backport of fix to soundness issue in #45 (access::Map from Constant can lead
+  to dangling references).
+
 # 0.4.7
 
 * Rename the `unstable-weak` to `weak` feature. The support is now available on

@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 //! Abstracting over accessing parts of stored value.
 //!
 //! Sometimes, there's a big globalish data structure (like a configuration for the whole program).
@@ -216,39 +218,20 @@ where
 /// This is the guard type for [`Map`]. It is accessible and nameable, but is not expected to be
 /// generally used directly.
 #[derive(Copy, Clone, Debug)]
-pub struct MapGuard<G, T> {
-    _guard: G,
-    value: *const T,
+pub struct MapGuard<G, F, T, R> {
+    guard: G,
+    projection: F,
+    _t: PhantomData<fn(&T) -> &R>,
 }
 
-// Why these are safe:
-// * The *const T is actually used just as a &const T with 'self lifetime (which can't be done in
-//   Rust). So if the reference is Send/Sync, so is the raw pointer.
-unsafe impl<G, T> Send for MapGuard<G, T>
+impl<G, F, T, R> Deref for MapGuard<G, F, T, R>
 where
-    G: Send,
-    for<'a> &'a T: Send,
+    G: Deref<Target = T>,
+    F: Fn(&T) -> &R,
 {
-}
-
-unsafe impl<G, T> Sync for MapGuard<G, T>
-where
-    G: Sync,
-    for<'a> &'a T: Sync,
-{
-}
-
-impl<G, T> Deref for MapGuard<G, T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        // Why this is safe:
-        // * The pointer is originally converted from a reference. It's not null, it's aligned,
-        //   it's the right type, etc.
-        // * The pointee couldn't have gone away ‒ the guard keeps the original reference alive, so
-        //   must the new one still be alive too. Moving the guard is fine, we assume the RefCnt is
-        //   Pin (because it's Arc or Rc or something like that ‒ when that one moves, the data it
-        //   points to stay at the same place).
-        unsafe { &*self.value }
+    type Target = R;
+    fn deref(&self) -> &R {
+        (self.projection)(&self.guard)
     }
 }
 
@@ -277,7 +260,7 @@ impl<A, T, F> Map<A, T, F> {
     ///   *cheap* (like only taking reference).
     pub fn new<R>(access: A, projection: F) -> Self
     where
-        F: Fn(&T) -> &R,
+        F: Fn(&T) -> &R + Clone,
     {
         Map {
             access,
@@ -287,18 +270,18 @@ impl<A, T, F> Map<A, T, F> {
     }
 }
 
-impl<A, T, F, R> Access<R> for Map<A, T, F>
+impl<A, F, T, R> Access<R> for Map<A, T, F>
 where
     A: Access<T>,
-    F: Fn(&T) -> &R,
+    F: Fn(&T) -> &R + Clone,
 {
-    type Guard = MapGuard<A::Guard, R>;
+    type Guard = MapGuard<A::Guard, F, T, R>;
     fn load(&self) -> Self::Guard {
         let guard = self.access.load();
-        let value: *const _ = (self.projection)(&guard);
         MapGuard {
-            _guard: guard,
-            value,
+            guard,
+            projection: self.projection.clone(),
+            _t: PhantomData,
         }
     }
 }
