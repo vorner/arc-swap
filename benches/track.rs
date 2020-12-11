@@ -6,6 +6,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use arc_swap::access::{Access, Map};
 use arc_swap::ArcSwap;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use crossbeam_utils::thread;
@@ -73,6 +74,23 @@ fn with_background<F: Fn(&ArcSwap<usize>) + Sync>(
     .unwrap();
 }
 
+fn utilities(c: &mut Criterion) {
+    let mut g = c.benchmark_group("utilities");
+
+    struct Composed {
+        val: i32,
+    }
+
+    g.bench_function("access-map", |b| {
+        let a = Arc::new(ArcSwap::from_pointee(Composed { val: 42 }));
+        let m = Map::new(Arc::clone(&a), |c: &Composed| &c.val);
+        b.iter(|| {
+            let g = black_box(m.load());
+            assert_eq!(42, *g);
+        });
+    });
+}
+
 fn benchmark(c: &mut Criterion) {
     batch(c, "uncontended", &ArcSwap::from_pointee(42));
     with_background(c, "concurrent_loads", 2, |s| {
@@ -81,6 +99,7 @@ fn benchmark(c: &mut Criterion) {
     with_background(c, "concurrent_store", 1, |s| {
         black_box(s.store(Arc::new(42)));
     });
+    utilities(c);
 }
 
 criterion_group!(benches, benchmark);

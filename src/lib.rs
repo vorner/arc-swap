@@ -660,7 +660,7 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
     /// ```
     pub fn map<I, R, F>(&self, f: F) -> Map<&Self, I, F>
     where
-        F: Fn(&I) -> &R,
+        F: Fn(&I) -> &R + Clone,
         Self: Access<I>,
     {
         Map::new(self, f)
