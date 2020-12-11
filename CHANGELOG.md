@@ -1,3 +1,8 @@
+# 1.1.0
+
+* Fix soundness bug around access::Map. Technically a breaking change, but
+  unlikely to bite and breaking seems to be the least bad option. #45.
+
 # 1.0.0
 
 * Remove Clone implementation. People are often confused by it and it is easy to
