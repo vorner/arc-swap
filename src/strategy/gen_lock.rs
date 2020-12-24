@@ -11,6 +11,7 @@ pub struct GenLockStrategy<L>(pub(crate) L);
 impl<T: RefCnt, L: LockStorage> InnerStrategy<T> for GenLockStrategy<L> {
     type Protected = T;
 
+    #[inline]
     unsafe fn load(&self, storage: &AtomicPtr<T::Base>) -> Self::Protected {
         let lock = GenLock::new(&self.0);
 
@@ -23,7 +24,8 @@ impl<T: RefCnt, L: LockStorage> InnerStrategy<T> for GenLockStrategy<L> {
         result
     }
 
-    unsafe fn wait_for_readers(&self, _: *const T::Base) {
+    #[inline]
+    unsafe fn wait_for_readers(&self, _: *const T::Base, _: &AtomicPtr<T::Base>) {
         gen_lock::wait_for_readers(&self.0);
     }
 }

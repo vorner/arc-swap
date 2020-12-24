@@ -127,8 +127,12 @@ where
             }
         })
     }
-    unsafe fn wait_for_readers(&self, old: *const T::Base) {
-        self.fallback.wait_for_readers(old);
+    unsafe fn wait_for_readers(
+        &self,
+        old: *const T::Base,
+        storage: &AtomicPtr<T::Base>,
+    ) {
+        self.fallback.wait_for_readers(old, storage);
         Debt::pay_all::<T>(old);
     }
 }
@@ -185,7 +189,7 @@ impl<T: RefCnt, L: LockStorage> CaS<T> for HybridStrategy<GenLockStrategy<L>> {
             // for all readers to make sure there are no more untracked copies of it.
             //
             // Why is rustc confused about self.wait_for_readers???
-            InnerStrategy::<T>::wait_for_readers(self, previous_ptr);
+            InnerStrategy::<T>::wait_for_readers(self, previous_ptr, storage);
         } else {
             // We didn't swap, so new is black-holed.
             T::dec(new);

@@ -217,6 +217,7 @@ impl Debt {
     /// Pays all the debts on the given pointer.
     pub(crate) fn pay_all<T: RefCnt>(ptr: *const T::Base) {
         let val = unsafe { T::from_ptr(ptr) };
+        // Pre-pay one ref count that can be safely put into a debt slot to pay it.
         T::inc(&val);
         traverse::<(), _>(|node| {
             for slot in &node.slots.0 {
@@ -225,11 +226,13 @@ impl Debt {
                     .compare_exchange(ptr as usize, NO_DEBT, Ordering::AcqRel, Ordering::Relaxed)
                     .is_ok()
                 {
+                    // Pre-pay one more, for another future slot
                     T::inc(&val);
                 }
             }
             None
         });
+        // Implicit dec by dropping val in here, pair for the above
     }
 }
 
