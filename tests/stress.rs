@@ -35,7 +35,10 @@ where
 {
     let _lock = lock();
     let head = ArcSwapAny::<_, S>::from(None::<Arc<LLNode<S>>>);
+    #[cfg(not(miri))]
     let cpus = num_cpus::get();
+    #[cfg(miri)]
+    let cpus = 2;
     // FIXME: If one thread fails, but others don't, it'll deadlock.
     let barr = Barrier::new(cpus);
     thread::scope(|scope| {
@@ -137,7 +140,10 @@ where
 {
     let _lock = lock();
 
+    #[cfg(not(miri))]
     let cpus = num_cpus::get();
+    #[cfg(miri)]
+    let cpus = 2;
     let barr = Barrier::new(cpus);
     let global_cnt = AtomicUsize::new(0);
     // We plan to create this many nodes during the whole test.
@@ -197,7 +203,10 @@ where
     S: Default + Strategy<Arc<usize>> + Send + Sync,
 {
     let _lock = lock();
+    #[cfg(not(miri))]
     let cpus = num_cpus::get();
+    #[cfg(miri)]
+    let cpus = 2;
     let shared = ArcSwapAny::<_, S>::from(Arc::new(0));
     thread::scope(|scope| {
         scope.spawn(|_| {
@@ -221,6 +230,16 @@ where
     assert_eq!(2, Arc::strong_count(&v));
 }
 
+#[cfg(not(miri))]
+const ITER_SMALL: usize = 100;
+#[cfg(not(miri))]
+const ITER_MID: usize = 1000;
+
+#[cfg(miri)]
+const ITER_SMALL: usize = 2;
+#[cfg(miri)]
+const ITER_MID: usize = 5;
+
 macro_rules! t {
     ($name: ident, $strategy: ty) => {
         mod $name {
@@ -228,7 +247,7 @@ macro_rules! t {
 
             #[test]
             fn storm_link_list_small() {
-                storm_link_list::<$strategy>(100, 5);
+                storm_link_list::<$strategy>(ITER_SMALL, 5);
             }
 
             #[test]
@@ -239,7 +258,7 @@ macro_rules! t {
 
             #[test]
             fn storm_unroll_small() {
-                storm_unroll::<$strategy>(100, 5);
+                storm_unroll::<$strategy>(ITER_SMALL, 5);
             }
 
             #[test]
@@ -250,7 +269,7 @@ macro_rules! t {
 
             #[test]
             fn load_parallel_small() {
-                load_parallel::<$strategy>(1000);
+                load_parallel::<$strategy>(ITER_MID);
             }
 
             #[test]

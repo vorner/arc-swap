@@ -49,6 +49,8 @@ mod tests {
 
     // Replace a weak pointer with a NULL one
     #[test]
+    // Miri-bug in std, see https://github.com/rust-lang/rust/issues/80365
+    #[cfg_attr(miri, ignore)]
     fn reset() {
         let data = Arc::new("Hello");
         let shared = ArcSwapWeak::new(Arc::downgrade(&data));
