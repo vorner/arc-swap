@@ -9,12 +9,11 @@ use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::mem::{self, ManuallyDrop};
 use std::ops::Deref;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
+use std::sync::atomic::Ordering::*;
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize};
 
 use super::sealed::{InnerStrategy, Protected};
 use crate::RefCnt;
-
-use Ordering::*;
 
 /// A wrapper around a node pointer, to un-claim the node on thread shutdown.
 struct DebtHead {
@@ -133,7 +132,7 @@ impl Debt {
             //
             // The Release works as kind of Mutex. We make sure nothing from the debt-protected
             // sections leaks below this point.
-            .compare_exchange(ptr as usize, NO_DEBT, Ordering::Release, Ordering::Relaxed)
+            .compare_exchange(ptr as usize, NO_DEBT, Release, Relaxed)
             .is_ok()
     }
 

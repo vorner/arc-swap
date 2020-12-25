@@ -230,7 +230,7 @@ pub(crate) fn wait_for_readers<S: LockStorage>(storage: &S) {
         let next_gen = gen.wrapping_add(1);
         if groups[next_gen % GEN_CNT] == 0 {
             // Replace it only if someone else didn't do it in the meantime
-            gen_idk.compare_and_swap(gen, next_gen, Ordering::Relaxed);
+            let _ = gen_idk.compare_exchange(gen, next_gen, Ordering::Relaxed, Ordering::Relaxed);
         }
         for i in 0..GEN_CNT {
             seen_group[i] = seen_group[i] || (groups[i] == 0);
