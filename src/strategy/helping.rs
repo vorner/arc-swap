@@ -5,6 +5,7 @@
 
 use std::borrow::Borrow;
 use std::cell::Cell;
+use std::fmt::{Debug, Formatter, Result as FmtResult};
 use std::mem::{self, ManuallyDrop};
 use std::ops::Deref;
 use std::ptr;
@@ -24,19 +25,25 @@ struct DebtHead {
 impl Drop for DebtHead {
     fn drop(&mut self) {
         if let Some(node) = self.node.get() {
-            // Nothing synchronized by this atomic.
-            assert!(node.in_use.swap(false, Relaxed));
+            // TODO: Ordering
+            assert!(node.in_use.swap(false, Release));
         }
     }
 }
 
-/// The value of pointer `1` should be pretty safe, for two reasons:
+/// The value of pointer `3` should be pretty safe, for two reasons:
 ///
 /// * It's an odd number, but the pointers we have are likely aligned at least to the word size,
 ///   because the data at the end of the `Arc` has the counters.
 /// * It's in the very first page where NULL lives, so it's not mapped.
-const NO_DEBT: usize = 1;
+///
+/// Note that we don't want to use 0 directly, because NULL is a valid pointer.
+const NO_DEBT: usize = 0b11;
+const REPLACEMENT_TAG: usize = 0b01;
+const GEN_TAG: usize = 0b10;
+const TAG_MASK: usize = 0b11;
 const DEBT_SLOT_CNT: usize = 8;
+
 thread_local! {
     /// A debt node assigned to this thread.
     static THREAD_HEAD: DebtHead = DebtHead {
@@ -52,50 +59,35 @@ thread_local! {
 struct Debt(AtomicUsize);
 
 impl Debt {
-    /// Creates a new debt.
-    ///
-    /// This stores the debt of the given pointer (untyped, casted into an usize) and returns a
-    /// reference to that slot. The second part of the result signifies if this was the last empty
-    /// slot available, therefore it needs to be freed ASAP (eg. before leaving that function).
-    ///
-    /// This is technically lock-free on the first call in a given thread and wait-free on all the
-    /// other accesses.
     #[allow(clippy::new_ret_no_self)]
     #[inline]
-    fn new(ptr: usize) -> (&'static Self, bool) {
-        THREAD_HEAD
-            // FIXME: Can this actually fail sometime? Can people use us during some kind of mutual
-            // thread-local destruction thing?
-            .with(|head| {
-                let node = match head.node.get() {
-                    // Already have my own node (most likely)?
-                    Some(node) => node,
-                    // No node yet, called for the first time in this thread. Set one up.
-                    None => {
-                        let new_node = Node::get();
-                        head.node.set(Some(new_node));
-                        new_node
-                    }
-                };
-                // Check it is in use by *us*
-                debug_assert!(node.in_use.load(Relaxed));
-                let len = node.slots.0.len();
-                for i in 0..len {
-                    // Note: the indexing check is almost certainly optimised out because the len
-                    // is used above. And using .get_unchecked was actually *slower*.
-                    let got_it = node.slots.0[i]
-                        .0
-                        // Try to acquire the slot. Relaxed if it doesn't work is fine, as we don't
-                        // synchronize by it.
-                        .compare_exchange(NO_DEBT, ptr, SeqCst, Relaxed)
-                        .is_ok();
-                    let last = i == len - 1;
-                    if got_it {
-                        return (&node.slots.0[i], last);
-                    }
-                }
-                unreachable!("Run out of slots");
-            })
+    fn new(ptr: usize) -> (&'static Self, bool, usize) {
+        let node = Node::get_thread();
+        // Check it is in use by *us*
+        debug_assert!(node.in_use.load(Relaxed));
+
+        // We are sole users of this node. We could actually use something like UnsafeCell
+        // here directly.
+        let gen = node.generation.load(Relaxed).wrapping_add(1);
+        node.generation.store(gen, Relaxed);
+        let gen = gen << 2 | GEN_TAG;
+        // We will sync by the write to the debt.
+        node.active_addr.store(ptr, Relaxed);
+
+        let len = node.slots.0.len();
+        for (i, slot) in node.slots.0.iter().enumerate() {
+            let got_it = slot
+                .0
+                // Try to acquire the slot. Relaxed if it doesn't work is fine, as we don't
+                // synchronize by it.
+                .compare_exchange(NO_DEBT, gen, SeqCst, Relaxed)
+                .is_ok();
+            let last = i == len - 1;
+            if got_it {
+                return (slot, last, gen);
+            }
+        }
+        unreachable!("Run out of slots in {:#?}", node);
     }
 
     /// Confirms the debt.
@@ -105,12 +97,9 @@ impl Debt {
     ///
     /// If it got changed in the meantime, returns the (already protected) replacement value.
     #[inline]
-    fn confirm(&self, storage_addr: usize, ptr_addr: usize) -> Result<(), usize> {
+    fn confirm(&self, gen: usize, ptr_addr: usize) -> Result<(), usize> {
         // TODO: Lower ordering?
-        match self
-            .0
-            .compare_exchange(storage_addr, ptr_addr, SeqCst, Relaxed)
-        {
+        match self.0.compare_exchange(gen, ptr_addr, SeqCst, Acquire) {
             Ok(_) => Ok(()),
             Err(replacement) => {
                 self.0.store(NO_DEBT, SeqCst);
@@ -164,7 +153,8 @@ impl Debt {
                 loop {
                     match slot
                         .0
-                        .compare_exchange(ptr as usize, NO_DEBT, AcqRel, Relaxed)
+                        // TODO: Ordering
+                        .compare_exchange(ptr as usize, NO_DEBT, AcqRel, Acquire)
                     {
                         Ok(_) => {
                             // We just paid the debt by the pre-paid ref count from before.
@@ -172,41 +162,44 @@ impl Debt {
                             T::inc(&val);
                             break;
                         }
-                        Err(addr) if addr == storage_addr => {
-                            // We are touching the same address someone is currently trying to load
-                            // from. Because we don't want to wait for them, we are going to help
-                            // them out by giving them an already fully-protected replacement
-                            // pointer and move on. They'll pick it up from this slot.
-                            let replace = replacement();
-                            let replace_addr = T::as_ptr(&replace) as usize;
-                            assert_eq!(
-                                replace_addr & Helping::REPLACEMENT_TAG,
-                                0,
-                                "Not enough space for tags"
-                            );
-                            let replace_addr = replace_addr | Helping::REPLACEMENT_TAG;
+                        Err(gen) if gen & TAG_MASK == GEN_TAG => {
+                            // The reader is trying to claim the slot right now. Let's have a look
+                            // at the address where the data should come from and help the reader
+                            // out.
+                            let active_addr = node.active_addr.load(Relaxed);
+                            if active_addr != storage_addr {
+                                // TODO: Are we sure this is fine? Some proofs that this is up to
+                                // date and nothing can slip (eg. that by now it could be
+                                // containing the same address)
+                                break;
+                            }
+                            // Get a replacement value and try to donate it.
+                            let replacement = replacement();
+                            let replace_addr = T::as_ptr(&replacement) as usize;
+                            assert_eq!(replace_addr & TAG_MASK, 0, "Not enough space for tags");
+                            let replace_addr = replace_addr | REPLACEMENT_TAG;
                             if slot
                                 .0
-                                .compare_exchange_weak(addr, replace_addr, SeqCst, Relaxed)
+                                .compare_exchange_weak(gen, replace_addr, SeqCst, Relaxed)
                                 .is_ok()
                             {
                                 // OK, it went it
-                                T::into_ptr(replace);
+                                T::into_ptr(replacement);
                                 break;
                             }
-                            // else -> replace is dropped.
+                            // else -> replacement is dropped.
                             // Also, loop once more because the current slot did *not* get
                             // resolved. Retry and see if the reader already got what it wanted or
                             // try creating a new replacement.
                         }
-                        // Something uninteresting, just continue
+                        // OK, not interested in this slot. Either no debt or different one.
                         Err(_) => break,
                     }
                 }
             }
             None
         });
-        // Implicit dec by dropping val in here, pair for the above
+        // Implicit dec by dropping val in here, pair for the above T::inc
     }
 }
 
@@ -220,12 +213,23 @@ impl Default for Debt {
 #[derive(Default)]
 struct Slots([Debt; DEBT_SLOT_CNT]);
 
+impl Debug for Slots {
+    fn fmt(&self, fmt: &mut Formatter) -> FmtResult {
+        fmt.debug_list()
+            .entries(self.0.iter().map(|s| s.0.load(Relaxed) as *const u8))
+            .finish()
+    }
+}
+
 /// One thread-local node for debts.
 #[repr(C)]
 struct Node {
     slots: Slots,
     next: Option<&'static Node>,
     in_use: AtomicBool,
+    active_addr: AtomicUsize,
+    // TODO: Could this be not atomic, but merely UnsafeCell, locked by in_use?
+    generation: AtomicUsize,
 }
 
 /// The head of the debt chain.
@@ -237,6 +241,8 @@ impl Default for Node {
             next: None,
             in_use: AtomicBool::new(true),
             slots: Default::default(),
+            active_addr: AtomicUsize::new(0),
+            generation: AtomicUsize::new(0),
         }
     }
 }
@@ -262,12 +268,17 @@ impl Node {
         }
         None
     }
+
+    #[inline(never)]
     fn get() -> &'static Self {
         // Try to find an unused one in the chain and reuse it.
         Self::traverse(|node| {
-            // Try to claim this node. Nothing is synchronized through this atomic, we only
-            // track if someone claims ownership of it.
-            if !node.in_use.compare_and_swap(false, true, Relaxed) {
+            // TODO: Ordering
+            if node
+                .in_use
+                .compare_exchange(false, true, SeqCst, Relaxed)
+                .is_ok()
+            {
                 Some(node)
             } else {
                 None
@@ -298,6 +309,40 @@ impl Node {
                 }
             }
         })
+    }
+
+    #[inline]
+    fn get_thread() -> &'static Self {
+        THREAD_HEAD
+            // FIXME: Can this actually fail sometime? Can people use us during some kind of mutual
+            // thread-local destruction thing?
+            .with(|head| {
+                match head.node.get() {
+                    // Already have my own node (most likely)?
+                    Some(node) => node,
+                    // No node yet, called for the first time in this thread. Set one up.
+                    None => {
+                        let new_node = Node::get();
+                        head.node.set(Some(new_node));
+                        new_node
+                    }
+                }
+            })
+    }
+}
+
+impl Debug for Node {
+    fn fmt(&self, fmt: &mut Formatter) -> FmtResult {
+        fmt.debug_struct("Node")
+            .field("in_use", &self.in_use.load(Relaxed))
+            .field("next", &self.next)
+            .field("generation", &self.generation.load(Relaxed))
+            .field(
+                "active_addr",
+                &(self.active_addr.load(Relaxed) as *const u8),
+            )
+            .field("slots", &self.slots)
+            .finish()
     }
 }
 
@@ -395,32 +440,20 @@ impl<T: RefCnt> Borrow<T> for Protection<T> {
 #[derive(Copy, Clone, Debug, Default)]
 pub struct Helping;
 
-impl Helping {
-    const STORAGE_TAG: usize = 0b10;
-    const REPLACEMENT_TAG: usize = 0b01;
-
-    fn storage_addr<T>(storage: &AtomicPtr<T>) -> usize {
-        let addr = storage as *const _ as usize;
-        assert_eq!(addr & Self::STORAGE_TAG, 0, "Not enough space for tags");
-        addr | Self::STORAGE_TAG
-    }
-}
-
 impl<T: RefCnt> InnerStrategy<T> for Helping {
     type Protected = Protection<T>;
 
     #[inline]
     unsafe fn load(&self, storage: &AtomicPtr<T::Base>) -> Self::Protected {
-        let storage_addr = Self::storage_addr(storage);
         // First, we claim a debt slot and store the address of the atomic pointer there, so the
         // writer can optionally help us out with loading and protecting something.
-        let (debt, last) = Debt::new(storage_addr);
+        let (debt, last, gen) = Debt::new(storage as *const _ as usize);
         // Then we load the candidate from the pointer.
         // TODO: The ordering?
         let candidate = storage.load(SeqCst);
         let ptr_addr = candidate as usize;
         // Try to replace the debt with our candidate.
-        match debt.confirm(storage_addr, ptr_addr) {
+        match debt.confirm(gen, ptr_addr) {
             Ok(()) => {
                 // The fast path -> we got the debt confirmed alright.
                 let result = Protection::new(candidate, Some(debt));
@@ -434,34 +467,64 @@ impl<T: RefCnt> InnerStrategy<T> for Helping {
             }
             Err(replacement) => {
                 // We got a (possibly) different pointer out. But that one is already protected and
-                // the slot is paid back.
+                // the slot is paid back. It's not possible someone could have changed our gen to
+                // something but a replacement.
                 debug_assert_eq!(
-                    replacement & Self::REPLACEMENT_TAG,
-                    Self::REPLACEMENT_TAG,
+                    replacement & TAG_MASK,
+                    REPLACEMENT_TAG,
                     "Missing tag on replacement",
                 );
-                let replacement = replacement & !Self::REPLACEMENT_TAG; // Remove the tag
+                debug_assert_eq!(NO_DEBT, debt.0.load(Relaxed));
+                let replacement = replacement & !TAG_MASK; // Remove the tag
                 Protection::new(replacement as *const _, None)
             }
         }
     }
 
-    // FIXME: There's a time-travel problem. It can happen (and the multi_writer test sometimes
-    // exhibit it) that we find an address in the slot, try to provide a replacement. But we are
-    // slow doing so, in the meantime the reader reads its value. Then when we try to put it there,
-    // another round of the reader happened and there's the address again, so we never notice it
-    // already changed in between and store the, now stale, value. It's a bit like the ABA problem.
-    //
-    // Any idea how to solve?
     unsafe fn wait_for_readers(&self, old: *const T::Base, storage: &AtomicPtr<T::Base>) {
-        let storage_addr = Self::storage_addr(storage);
         // The pay_all may need to provide fresh replacement values if someone else is loading from
         // this particular storage. We do so by the exact same way, by `load` ‒ it's OK, a writer
         // does not hold a slot and the reader doesn't recurse back into writer, so we won't run
         // out of slots.
-        let replacement = || {
-            Protection::into_inner(self.load(storage))
-        };
-        Debt::pay_all::<T, _>(old, storage_addr, replacement);
+        let replacement = || Protection::into_inner(self.load(storage));
+        Debt::pay_all::<T, _>(old, storage as *const _ as usize, replacement);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    impl Node {
+        fn is_empty(&self) -> bool {
+            self.slots.0.iter().all(|d| d.0.load(Relaxed) == NO_DEBT)
+        }
+    }
+
+    /// A freshly acquired thread local node is empty.
+    #[test]
+    fn new_empty() {
+        assert!(Node::get_thread().is_empty());
+    }
+
+    /// Just plain load, no contention or whatever.
+    #[test]
+    fn load_bare() {
+        // Check everything after loading stuff
+        type T = Arc<usize>;
+        let a = T::new(42);
+        let s = AtomicPtr::new(T::as_ptr(&a) as *mut usize);
+        let p = unsafe { <Helping as InnerStrategy<T>>::load(&Helping, &s) };
+        let pa: &Arc<usize> = p.borrow();
+        assert_eq!(42, **pa);
+        assert_eq!(T::as_ptr(&a), p.ptr.deref().deref());
+        assert_eq!(s.load(Relaxed) as usize, p.debt.unwrap().0.load(Relaxed));
+        assert!(!Node::get_thread().is_empty());
+        assert_eq!(1, Arc::strong_count(&a));
+        // Now we drop the protection and everything shall clean up.
+        drop(p);
+        assert!(Node::get_thread().is_empty());
     }
 }

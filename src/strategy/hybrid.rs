@@ -127,11 +127,7 @@ where
             }
         })
     }
-    unsafe fn wait_for_readers(
-        &self,
-        old: *const T::Base,
-        storage: &AtomicPtr<T::Base>,
-    ) {
+    unsafe fn wait_for_readers(&self, old: *const T::Base, storage: &AtomicPtr<T::Base>) {
         self.fallback.wait_for_readers(old, storage);
         Debt::pay_all::<T>(old);
     }
