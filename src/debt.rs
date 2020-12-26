@@ -43,7 +43,11 @@ impl Node {
         traverse(|node| {
             // Try to claim this node. Nothing is synchronized through this atomic, we only
             // track if someone claims ownership of it.
-            if !node.in_use.compare_and_swap(false, true, Ordering::Relaxed) {
+            let claimed = node
+                .in_use
+                .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok();
+            if claimed {
                 Some(node)
             } else {
                 None

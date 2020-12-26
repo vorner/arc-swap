@@ -1,4 +1,3 @@
-use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
 use crate::gen_lock::{self, GenLock, LockStorage};
@@ -44,8 +43,12 @@ impl<T: RefCnt, L: LockStorage> CaS<T> for GenLockStrategy<L> {
         // which ones upfront, so we need to implement safety measures for both.
         let lock = GenLock::new(&self.0);
 
-        let previous_ptr = storage.compare_and_swap(cur_ptr, new, Ordering::SeqCst);
-        let swapped = ptr::eq(cur_ptr, previous_ptr);
+        let swap_result =
+            storage.compare_exchange(cur_ptr, new, Ordering::SeqCst, Ordering::SeqCst);
+        let (previous_ptr, swapped) = match swap_result {
+            Ok(previous) => (previous, true),
+            Err(previous) => (previous, false),
+        };
 
         // Drop it here, because:
         // * We can't drop it before the compare_and_swap ‒ in such case, it could get recycled,

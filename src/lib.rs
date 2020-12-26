@@ -777,9 +777,9 @@ macro_rules! t {
             /// Similar to the one in doc tests of the lib, but more times and more intensive (we
             /// want to torture it a bit).
             #[test]
-            #[cfg(not(miri))] // Infinitely slow under miri :-(
+            #[cfg_attr(miri, ignore)] // Takes like 1 or 2 infinities to run under miri
             fn publish() {
-                const READERS: usize = 3;
+                const READERS: usize = 2;
                 for _ in 0..ITERATIONS {
                     let config = AS::<String>::default();
                     let ended = AtomicUsize::new(0);
@@ -842,6 +842,9 @@ macro_rules! t {
                 let shared = AS::from(Arc::clone(&first_value));
                 const WRITER_CNT: usize = 2;
                 const READER_CNT: usize = 3;
+                #[cfg(miri)]
+                const ITERATIONS: usize = 10;
+                #[cfg(not(miri))]
                 const ITERATIONS: usize = 100;
                 const SEQ: usize = 50;
                 let barrier = Barrier::new(PanicMode::Poison);

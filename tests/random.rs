@@ -29,6 +29,10 @@ impl OpsInstruction {
 proptest! {}
 
 const LIMIT: usize = 5;
+#[cfg(not(miri))]
+const SIZE: usize = 100;
+#[cfg(miri)]
+const SIZE: usize = 10;
 static ARCS: Lazy<Vec<Arc<usize>>> = Lazy::new(|| (0..LIMIT).map(Arc::new).collect());
 
 #[derive(Copy, Clone, Debug)]
@@ -52,7 +56,7 @@ macro_rules! t {
         t!(@compose => $name, $strategy,
             #[test]
             fn selection(
-                instructions in proptest::collection::vec(SelInstruction::random(), 1..100),
+                instructions in proptest::collection::vec(SelInstruction::random(), 1..SIZE),
             ) {
                 let mut bare = Arc::clone(&ARCS[0]);
                 let a = ArcSwapAny::<_, $strategy>::from(Arc::clone(&ARCS[0]));
@@ -88,7 +92,7 @@ macro_rules! t {
 
                 #[test]
                 fn ops(
-                    instructions in proptest::collection::vec(OpsInstruction::random(), 1..100),
+                    instructions in proptest::collection::vec(OpsInstruction::random(), 1..SIZE),
                 ) {
                     use crate::OpsInstruction::*;
                     let mut m = 0;
