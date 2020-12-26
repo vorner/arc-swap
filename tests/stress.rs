@@ -4,8 +4,9 @@
 //! discover any possible race condition.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Barrier, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use adaptive_barrier::{Barrier, PanicMode};
 use arc_swap::strategy::{CaS, DefaultStrategy, IndependentStrategy, Strategy};
 use arc_swap::ArcSwapAny;
 use crossbeam_utils::thread;
@@ -36,12 +37,11 @@ where
     let _lock = lock();
     let head = ArcSwapAny::<_, S>::from(None::<Arc<LLNode<S>>>);
     let cpus = num_cpus::get();
-    // FIXME: If one thread fails, but others don't, it'll deadlock.
-    let barr = Barrier::new(cpus);
+    let barr = Barrier::new(PanicMode::Poison);
     thread::scope(|scope| {
         for thread in 0..cpus {
             // We want to borrow these, but that kind-of conflicts with the move closure mode
-            let barr = &barr;
+            let mut barr = barr.clone();
             let head = &head;
             scope.spawn(move |_| {
                 let nodes = (0..node_cnt)
@@ -112,6 +112,8 @@ where
                 }
             });
         }
+
+        drop(barr);
     })
     .unwrap();
 }
@@ -138,7 +140,7 @@ where
     let _lock = lock();
 
     let cpus = num_cpus::get();
-    let barr = Barrier::new(cpus);
+    let barr = Barrier::new(PanicMode::Poison);
     let global_cnt = AtomicUsize::new(0);
     // We plan to create this many nodes during the whole test.
     let live_cnt = AtomicUsize::new(cpus * node_cnt * iters);
@@ -147,7 +149,7 @@ where
         for thread in 0..cpus {
             // Borrow these instead of moving.
             let head = &head;
-            let barr = &barr;
+            let mut barr = barr.clone();
             let global_cnt = &global_cnt;
             let live_cnt = &live_cnt;
             scope.spawn(move |_| {
@@ -186,6 +188,8 @@ where
                 }
             });
         }
+
+        drop(barr);
     })
     .unwrap();
     // Everything got destroyed properly.

@@ -102,7 +102,7 @@ jobs:
         uses: Swatinem/rust-cache@v1
 
       - name: Run clippy linter
-        run: cargo clippy --all --tests -- -D clippy::all -D warnings
+        run: cargo clippy --all --all-features --tests -- -D clippy::all -D warnings
 
   bench:
     name: Verify benchmarks compile

@@ -762,9 +762,9 @@ macro_rules! t {
     ($name: ident, $strategy: ty) => {
         #[cfg(test)]
         mod $name {
-            use std::sync::atomic::{self, AtomicBool, AtomicUsize};
-            use std::sync::Barrier;
+            use std::sync::atomic::{self, AtomicUsize};
 
+            use adaptive_barrier::{Barrier, PanicMode};
             use crossbeam_utils::thread;
 
             use super::*;
@@ -832,27 +832,6 @@ macro_rules! t {
                 }
             }
 
-            /// Coordinate killing on panic
-            ///
-            /// Note: there's still a short race after check and before the barrier. There should
-            /// be a way to poison barriers :-|.
-            #[derive(Clone, Default)]
-            struct PanicKill(Arc<AtomicBool>);
-
-            impl PanicKill {
-                fn check(&self) {
-                    assert!(!self.0.load(Ordering::Relaxed), "Propagating panic");
-                }
-            }
-
-            impl Drop for PanicKill {
-                fn drop(&mut self) {
-                    if std::thread::panicking() {
-                        self.0.store(true, Ordering::Relaxed);
-                    }
-                }
-            }
-
             /// Two different writers publish two series of values. The readers check that it is
             /// always increasing in each serie.
             ///
@@ -865,22 +844,18 @@ macro_rules! t {
                 const READER_CNT: usize = 3;
                 const ITERATIONS: usize = 100;
                 const SEQ: usize = 50;
-                let barrier = Barrier::new(READER_CNT + WRITER_CNT);
-                let panic_kill = PanicKill::default();
+                let barrier = Barrier::new(PanicMode::Poison);
                 thread::scope(|scope| {
                     for w in 0..WRITER_CNT {
                         // We need to move w into the closure. But we want to just reference the
                         // other things.
-                        let barrier = &barrier;
+                        let mut barrier = barrier.clone();
                         let shared = &shared;
                         let first_value = &first_value;
-                        let panic_kill = panic_kill.clone();
                         scope.spawn(move |_| {
                             for _ in 0..ITERATIONS {
-                                panic_kill.check();
                                 barrier.wait();
                                 shared.store(Arc::clone(&first_value));
-                                panic_kill.check();
                                 barrier.wait();
                                 for i in 0..SEQ {
                                     shared.store(Arc::new((w, i + 1)));
@@ -889,15 +864,12 @@ macro_rules! t {
                         });
                     }
                     for _ in 0..READER_CNT {
-                        let barrier = &barrier;
+                        let mut barrier = barrier.clone();
                         let shared = &shared;
                         let first_value = &first_value;
-                        let panic_kill = panic_kill.clone();
                         scope.spawn(move |_| {
                             for _ in 0..ITERATIONS {
-                                panic_kill.check();
                                 barrier.wait();
-                                panic_kill.check();
                                 barrier.wait();
                                 let mut previous = [0; WRITER_CNT];
                                 let mut last = Arc::clone(&first_value);
@@ -918,6 +890,8 @@ macro_rules! t {
                             }
                         });
                     }
+
+                    drop(barrier);
                 })
                 .unwrap();
             }
@@ -1031,21 +1005,26 @@ macro_rules! t {
                     let shared = AS::from_pointee(ReportDrop(cnt.clone()));
                     assert_eq!(cnt.load(Ordering::Relaxed), 0, "Dropped prematurely");
                     // We need the threads to wait for each other at places.
-                    let sync = Barrier::new(2);
+                    let sync = Barrier::new(PanicMode::Poison);
 
                     thread::scope(|scope| {
-                        scope.spawn(|_| {
-                            let guard = shared.load();
-                            sync.wait();
-                            // Thread 2 replaces the shared value. We wait for it to confirm.
-                            sync.wait();
-                            drop(guard);
-                            assert_eq!(cnt.load(Ordering::Relaxed), 1, "Value not dropped");
-                            // Let thread 2 know we already dropped it.
-                            sync.wait();
+                        scope.spawn({
+                            let sync = sync.clone();
+                            |_| {
+                                let mut sync = sync; // Move into the closure
+                                let guard = shared.load();
+                                sync.wait();
+                                // Thread 2 replaces the shared value. We wait for it to confirm.
+                                sync.wait();
+                                drop(guard);
+                                assert_eq!(cnt.load(Ordering::Relaxed), 1, "Value not dropped");
+                                // Let thread 2 know we already dropped it.
+                                sync.wait();
+                            }
                         });
 
                         scope.spawn(|_| {
+                            let mut sync = sync;
                             // Thread 1 loads, we wait for that
                             sync.wait();
                             shared.store(Default::default());
