@@ -1,7 +1,11 @@
 //! A strategy where the writer is helping the reader in case of collision.
 
-// TODO: Figure out how much we can relax the orderings in here. The ones from Debts are copied, so
-// already proven to be OK, but the new ones need some thinking.
+// TODO: A proof about the orderings in here.
+// Basics:
+// * We need the SeqCst to know which sequence (writer vs reader) started first.
+// * After that everything happens on the same slot, so AcqRel or relevant part is enough.
+// * There's additional trick with confirming the slot is up to date when comparing to the active
+//   address.
 
 use std::borrow::Borrow;
 use std::cell::Cell;
@@ -24,7 +28,7 @@ struct DebtHead {
 impl Drop for DebtHead {
     fn drop(&mut self) {
         if let Some(node) = self.node.get() {
-            // TODO: Ordering
+            // Release - syncing writes/ownership of this Node
             assert!(node.in_use.swap(false, Release));
         }
     }
@@ -75,14 +79,15 @@ impl Debt {
 
         let len = node.slots.0.len();
         for (i, slot) in node.slots.0.iter().enumerate() {
-            let got_it = slot
+            // We could do load and store separately as we are the only ones allowed to overwrite a
+            // NO_DEPT, but we actually need the SeqCst to be a read-write operation in here (we
+            // need both the release and acquire part of it).
+            if slot
                 .0
-                // Try to acquire the slot. Relaxed if it doesn't work is fine, as we don't
-                // synchronize by it.
                 .compare_exchange(NO_DEBT, gen, SeqCst, Relaxed)
-                .is_ok();
-            let last = i == len - 1;
-            if got_it {
+                .is_ok()
+            {
+                let last = i == len - 1;
                 return (slot, last, gen);
             }
         }
@@ -97,11 +102,14 @@ impl Debt {
     /// If it got changed in the meantime, returns the (already protected) replacement value.
     #[inline]
     fn confirm(&self, gen: usize, ptr_addr: usize) -> Result<(), usize> {
-        // TODO: Lower ordering?
-        match self.0.compare_exchange(gen, ptr_addr, SeqCst, Acquire) {
+        // AcqRel -> Release to publish everything (do we need to publish anything?)/make sure
+        // sutff stays "inside" the lock.
+        // Acquire -> we read a potentially new address, need to bring the pointee in.
+        match self.0.compare_exchange(gen, ptr_addr, AcqRel, Acquire) {
             Ok(_) => Ok(()),
             Err(replacement) => {
-                self.0.store(NO_DEBT, SeqCst);
+                // Nothing synchronized by this, we just clear the slot for future reuse.
+                self.0.store(NO_DEBT, Release);
                 Err(replacement)
             }
         }
@@ -152,8 +160,12 @@ impl Debt {
                 loop {
                     match slot
                         .0
-                        // TODO: Ordering
-                        .compare_exchange(ptr as usize, NO_DEBT, AcqRel, Acquire)
+                        // We don't need to release anything in here. The writes to the reference
+                        // counts take care of themselves before they drop to 0 (they are all to
+                        // the same atomic, and we are doing the decrements later on). We need to
+                        // acquire any increments done by the other threads though and we need to
+                        // acquire the active_addr
+                        .compare_exchange(ptr as usize, NO_DEBT, Acquire, Acquire)
                     {
                         Ok(_) => {
                             // We just paid the debt by the pre-paid ref count from before.
@@ -165,12 +177,22 @@ impl Debt {
                             // The reader is trying to claim the slot right now. Let's have a look
                             // at the address where the data should come from and help the reader
                             // out.
-                            let active_addr = node.active_addr.load(Relaxed);
+                            let active_addr = node.active_addr.load(Acquire);
                             if active_addr != storage_addr {
-                                // TODO: Are we sure this is fine? Some proofs that this is up to
-                                // date and nothing can slip (eg. that by now it could be
-                                // containing the same address)
-                                break;
+                                // Re-confirm the gen matches. That way with the above active_addr
+                                // load and Acquire we make sure the active_addr is not newer than
+                                // the gen and therefore we are not missing a place where we need
+                                // to help (eg. that Acquire makes sure the gen catches up with
+                                // it).
+                                if slot.0.load(Relaxed) == gen {
+                                    // OK, it is really doing something with some other ArcSwap,
+                                    // not interested in that.
+                                    break;
+                                } else {
+                                    // The value changed and we are not sure how useful the
+                                    // active_addr is for us. So retry.
+                                    continue;
+                                }
                             }
                             // Get a replacement value and try to donate it.
                             let replacement = replacement();
@@ -179,7 +201,7 @@ impl Debt {
                             let replace_addr = replace_addr | REPLACEMENT_TAG;
                             if slot
                                 .0
-                                .compare_exchange_weak(gen, replace_addr, SeqCst, Relaxed)
+                                .compare_exchange_weak(gen, replace_addr, AcqRel, Relaxed)
                                 .is_ok()
                             {
                                 // OK, it went it
@@ -227,7 +249,6 @@ struct Node {
     next: Option<&'static Node>,
     in_use: AtomicBool,
     active_addr: AtomicUsize,
-    // TODO: Could this be not atomic, but merely UnsafeCell, locked by in_use?
     generation: AtomicUsize,
 }
 
@@ -272,10 +293,11 @@ impl Node {
     fn get() -> &'static Self {
         // Try to find an unused one in the chain and reuse it.
         Self::traverse(|node| {
-            // TODO: Ordering
             if node
                 .in_use
-                .compare_exchange(false, true, SeqCst, Relaxed)
+                // We claim a unique control over the generation and the right to write to slots if
+                // they are NO_DEPT
+                .compare_exchange(false, true, Acquire, Relaxed)
                 .is_ok()
             {
                 Some(node)
@@ -447,9 +469,10 @@ impl<T: RefCnt> InnerStrategy<T> for Helping {
         // First, we claim a debt slot and store the address of the atomic pointer there, so the
         // writer can optionally help us out with loading and protecting something.
         let (debt, last, gen) = Debt::new(storage as *const _ as usize);
-        // Then we load the candidate from the pointer.
-        // TODO: The ordering?
-        let candidate = storage.load(SeqCst);
+        // We already synchronized the start of the sequence by SeqCst in the Debt::new vs swap on
+        // the pointer. We just need to make sure to bring the pointee in (this can be newer than
+        // what we got in the Debt)
+        let candidate = storage.load(Acquire);
         let ptr_addr = candidate as usize;
         // Try to replace the debt with our candidate.
         match debt.confirm(gen, ptr_addr) {
