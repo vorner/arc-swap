@@ -762,6 +762,7 @@ macro_rules! t {
     ($name: ident, $strategy: ty) => {
         #[cfg(test)]
         mod $name {
+            use std::panic;
             use std::sync::atomic::{self, AtomicUsize};
 
             use adaptive_barrier::{Barrier, PanicMode};
@@ -1116,6 +1117,120 @@ macro_rules! t {
                 })
                 .unwrap();
             }
+
+            /// We have a callback in RCU. Check what happens if we access the value from within.
+            #[test]
+            fn recursive() {
+                let shared = ArcSwap::from(Arc::new(0));
+
+                shared.rcu(|i| {
+                    if **i < 10 {
+                        shared.rcu(|i| **i + 1);
+                    }
+                    **i
+                });
+                assert_eq!(10, **shared.load());
+                assert_eq!(2, Arc::strong_count(&shared.load_full()));
+            }
+
+            /// A panic from within the rcu callback should not change anything.
+            #[test]
+            fn rcu_panic() {
+                let shared = ArcSwap::from(Arc::new(0));
+                assert!(panic::catch_unwind(|| shared.rcu(|_| -> usize { panic!() })).is_err());
+                assert_eq!(1, Arc::strong_count(&shared.swap(Arc::new(42))));
+            }
+
+            /// Handling null/none values
+            #[test]
+            fn nulls() {
+                let shared = ArcSwapOption::from(Some(Arc::new(0)));
+                let orig = shared.swap(None);
+                assert_eq!(1, Arc::strong_count(&orig.unwrap()));
+                let null = shared.load();
+                assert!(null.is_none());
+                let a = Arc::new(42);
+                let orig = shared.compare_and_swap(ptr::null(), Some(Arc::clone(&a)));
+                assert!(orig.is_none());
+                assert_eq!(2, Arc::strong_count(&a));
+                let orig = Guard::into_inner(shared.compare_and_swap(&None::<Arc<_>>, None));
+                assert_eq!(3, Arc::strong_count(&a));
+                assert!(ptr_eq(&a, &orig));
+            }
+
+            #[test]
+            /// Multiple RCUs interacting.
+            fn rcu() {
+                const ITERATIONS: usize = 50;
+                const THREADS: usize = 10;
+                let shared = ArcSwap::from(Arc::new(0));
+                thread::scope(|scope| {
+                    for _ in 0..THREADS {
+                        scope.spawn(|_| {
+                            for _ in 0..ITERATIONS {
+                                shared.rcu(|old| **old + 1);
+                            }
+                        });
+                    }
+                })
+                .unwrap();
+                assert_eq!(THREADS * ITERATIONS, **shared.load());
+            }
+
+            #[test]
+            /// Make sure the reference count and compare_and_swap works as expected.
+            fn cas_ref_cnt() {
+                const ITERATIONS: usize = 50;
+                let shared = ArcSwap::from(Arc::new(0));
+                for i in 0..ITERATIONS {
+                    let orig = shared.load_full();
+                    assert_eq!(i, *orig);
+                    if i % 2 == 1 {
+                        // One for orig, one for shared
+                        assert_eq!(2, Arc::strong_count(&orig));
+                    }
+                    let n1 = Arc::new(i + 1);
+                    // Fill up the slots sometimes
+                    let fillup = || {
+                        if i % 2 == 0 {
+                            Some((0..50).map(|_| shared.load()).collect::<Vec<_>>())
+                        } else {
+                            None
+                        }
+                    };
+                    let guards = fillup();
+                    // Success
+                    let prev = shared.compare_and_swap(&orig, Arc::clone(&n1));
+                    assert!(ptr_eq(&orig, &prev));
+                    drop(guards);
+                    // One for orig, one for prev
+                    assert_eq!(2, Arc::strong_count(&orig));
+                    // One for n1, one for shared
+                    assert_eq!(2, Arc::strong_count(&n1));
+                    assert_eq!(i + 1, **shared.load());
+                    let n2 = Arc::new(i);
+                    drop(prev);
+                    let guards = fillup();
+                    // Failure
+                    let prev = Guard::into_inner(shared.compare_and_swap(&orig, Arc::clone(&n2)));
+                    drop(guards);
+                    assert!(ptr_eq(&n1, &prev));
+                    // One for orig
+                    assert_eq!(1, Arc::strong_count(&orig));
+                    // One for n1, one for shared, one for prev
+                    assert_eq!(3, Arc::strong_count(&n1));
+                    // n2 didn't get increased
+                    assert_eq!(1, Arc::strong_count(&n2));
+                    assert_eq!(i + 1, **shared.load());
+                }
+
+                let a = shared.load_full();
+                // One inside shared, one for a
+                assert_eq!(2, Arc::strong_count(&a));
+                drop(shared);
+                // Only a now
+                assert_eq!(1, Arc::strong_count(&a));
+            }
         }
     };
 }
@@ -1123,126 +1238,3 @@ macro_rules! t {
 t!(tests_default, DefaultStrategy);
 #[cfg(feature = "experimental-strategies")]
 t!(tests_helping, crate::strategy::experimental::Helping);
-
-#[cfg(test)]
-mod cas_tests {
-    use std::panic;
-
-    use crossbeam_utils::thread;
-
-    use super::*;
-
-    /// We have a callback in RCU. Check what happens if we access the value from within.
-    #[test]
-    fn recursive() {
-        let shared = ArcSwap::from(Arc::new(0));
-
-        shared.rcu(|i| {
-            if **i < 10 {
-                shared.rcu(|i| **i + 1);
-            }
-            **i
-        });
-        assert_eq!(10, **shared.load());
-        assert_eq!(2, Arc::strong_count(&shared.load_full()));
-    }
-
-    /// A panic from within the rcu callback should not change anything.
-    #[test]
-    fn rcu_panic() {
-        let shared = ArcSwap::from(Arc::new(0));
-        assert!(panic::catch_unwind(|| shared.rcu(|_| -> usize { panic!() })).is_err());
-        assert_eq!(1, Arc::strong_count(&shared.swap(Arc::new(42))));
-    }
-
-    /// Handling null/none values
-    #[test]
-    fn nulls() {
-        let shared = ArcSwapOption::from(Some(Arc::new(0)));
-        let orig = shared.swap(None);
-        assert_eq!(1, Arc::strong_count(&orig.unwrap()));
-        let null = shared.load();
-        assert!(null.is_none());
-        let a = Arc::new(42);
-        let orig = shared.compare_and_swap(ptr::null(), Some(Arc::clone(&a)));
-        assert!(orig.is_none());
-        assert_eq!(2, Arc::strong_count(&a));
-        let orig = Guard::into_inner(shared.compare_and_swap(&None::<Arc<_>>, None));
-        assert_eq!(3, Arc::strong_count(&a));
-        assert!(ptr_eq(&a, &orig));
-    }
-
-    #[test]
-    /// Multiple RCUs interacting.
-    fn rcu() {
-        const ITERATIONS: usize = 50;
-        const THREADS: usize = 10;
-        let shared = ArcSwap::from(Arc::new(0));
-        thread::scope(|scope| {
-            for _ in 0..THREADS {
-                scope.spawn(|_| {
-                    for _ in 0..ITERATIONS {
-                        shared.rcu(|old| **old + 1);
-                    }
-                });
-            }
-        })
-        .unwrap();
-        assert_eq!(THREADS * ITERATIONS, **shared.load());
-    }
-
-    #[test]
-    /// Make sure the reference count and compare_and_swap works as expected.
-    fn cas_ref_cnt() {
-        const ITERATIONS: usize = 50;
-        let shared = ArcSwap::from(Arc::new(0));
-        for i in 0..ITERATIONS {
-            let orig = shared.load_full();
-            assert_eq!(i, *orig);
-            if i % 2 == 1 {
-                // One for orig, one for shared
-                assert_eq!(2, Arc::strong_count(&orig));
-            }
-            let n1 = Arc::new(i + 1);
-            // Fill up the slots sometimes
-            let fillup = || {
-                if i % 2 == 0 {
-                    Some((0..50).map(|_| shared.load()).collect::<Vec<_>>())
-                } else {
-                    None
-                }
-            };
-            let guards = fillup();
-            // Success
-            let prev = shared.compare_and_swap(&orig, Arc::clone(&n1));
-            assert!(ptr_eq(&orig, &prev));
-            drop(guards);
-            // One for orig, one for prev
-            assert_eq!(2, Arc::strong_count(&orig));
-            // One for n1, one for shared
-            assert_eq!(2, Arc::strong_count(&n1));
-            assert_eq!(i + 1, **shared.load());
-            let n2 = Arc::new(i);
-            drop(prev);
-            let guards = fillup();
-            // Failure
-            let prev = Guard::into_inner(shared.compare_and_swap(&orig, Arc::clone(&n2)));
-            drop(guards);
-            assert!(ptr_eq(&n1, &prev));
-            // One for orig
-            assert_eq!(1, Arc::strong_count(&orig));
-            // One for n1, one for shared, one for prev
-            assert_eq!(3, Arc::strong_count(&n1));
-            // n2 didn't get increased
-            assert_eq!(1, Arc::strong_count(&n2));
-            assert_eq!(i + 1, **shared.load());
-        }
-
-        let a = shared.load_full();
-        // One inside shared, one for a
-        assert_eq!(2, Arc::strong_count(&a));
-        drop(shared);
-        // Only a now
-        assert_eq!(1, Arc::strong_count(&a));
-    }
-}

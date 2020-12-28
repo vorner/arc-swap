@@ -16,8 +16,8 @@ use std::ptr;
 use std::sync::atomic::Ordering::*;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize};
 
-use super::sealed::{InnerStrategy, Protected};
-use crate::RefCnt;
+use super::sealed::{CaS, InnerStrategy, Protected};
+use crate::{AsRaw, RefCnt};
 
 /// A wrapper around a node pointer, to un-claim the node on thread shutdown.
 struct DebtHead {
@@ -510,6 +510,41 @@ impl<T: RefCnt> InnerStrategy<T> for Helping {
         // out of slots.
         let replacement = || Protection::into_inner(self.load(storage));
         Debt::pay_all::<T, _>(old, storage as *const _ as usize, replacement);
+    }
+}
+
+impl<T: RefCnt> CaS<T> for Helping {
+    unsafe fn compare_and_swap<C: AsRaw<T::Base>>(
+        &self,
+        storage: &AtomicPtr<T::Base>,
+        current: C,
+        new: T,
+    ) -> Self::Protected {
+        loop {
+            let old = <Self as InnerStrategy<T>>::load(self, storage);
+            // Observation of their inequality is enough to make a verdict
+            if old.ptr.deref().as_raw() != current.as_raw() {
+                return old;
+            }
+            // If they are still equal, put the new one in.
+            let new_raw = T::as_ptr(&new);
+            if storage
+                .compare_exchange_weak(current.as_raw(), new_raw, SeqCst, Relaxed)
+                .is_ok()
+            {
+                // We successfully put the new value in. The ref count went in there too.
+                T::into_ptr(new);
+                <Self as InnerStrategy<T>>::wait_for_readers(
+                    self,
+                    old.ptr.deref().as_raw(),
+                    storage,
+                );
+                // We just got one ref count out of the storage and we have one in old. We don't
+                // need two.
+                T::dec(old.ptr.deref().as_raw());
+                return old;
+            }
+        }
     }
 }
 

@@ -127,7 +127,7 @@ t!(
 );
 #[cfg(feature = "experimental-strategies")]
 t!(
-    @nocas =>
+    @full =>
     helping,
     arc_swap::strategy::experimental::Helping
 );

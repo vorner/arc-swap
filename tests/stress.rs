@@ -292,3 +292,5 @@ t!(
     simple_genlock,
     arc_swap::strategy::experimental::SimpleGenLock
 );
+#[cfg(feature = "experimental-strategies")]
+t!(helping, arc_swap::strategy::experimental::Helping);
