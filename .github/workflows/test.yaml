@@ -166,4 +166,4 @@ jobs:
         env:
           PROPTEST_CASES: "10"
           MIRIFLAGS: "-Zmiri-disable-isolation"
-        run: cargo miri test
+        run: cargo miri test --all-features
