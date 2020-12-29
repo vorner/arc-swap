@@ -1,11 +1,106 @@
 //! A strategy where the writer is helping the reader in case of collision.
 
-// TODO: A proof about the orderings in here.
-// Basics:
-// * We need the SeqCst to know which sequence (writer vs reader) started first.
-// * After that everything happens on the same slot, so AcqRel or relevant part is enough.
-// * There's additional trick with confirming the slot is up to date when comparing to the active
-//   address.
+// # How does this work.
+//
+// This is a bit modified version of hazard pointers. The readers put the currently leased pointers
+// into debt slots. That means the reader owes one reference count. But as long as there's one
+// reference inside the storage, everything is fine.
+//
+// When a writer takes the pointer out, it walks all the old debt slots that got created before the
+// change and pays them all by incrementing the reference count as many times, and erases the debts
+// so the readers knows they need to decrement it after the fact.
+//
+// ## Reader, the fast path
+//
+// * Publish an active address ‒ the address we'll be loading stuff from.
+// * Picks a debt slot (note that we always keep at least one free; if we used the last one, we
+//   immediately pay the debt by bumping the reference count and release it and we never
+//   recursively call load). Mark it with a generation (this is to prevent ABA in writers).
+// * Load from the address.
+// * CaS-replace the generation with the address of the destination, reserving the debt. At this
+//   point, we are good to do our stuff.
+//
+// * Later, we pay it back by CaS-replacing it with the NO_DEPT.
+//
+// ## Writer, the non-colliding path
+//
+// * Replaces the pointer in the storage.
+// * The writer walks over all debts. It pays each debt that it is concerned with by bumping the
+//   reference and replacing the dept with NO_DEPT. The relevant reader will fail in the CaS
+//   (either because it finds NO_DEPT or other pointer in there) and knows the reference was
+//   bumped, so it needs to decrement it. Note that it is possible that someone also reuses the
+//   slot for the _same_ pointer. In that case that reader will set it to NO_DEPT and the newer
+//   reader will have a pre-paid debt, which is fine.
+//
+// ## The collision path
+//
+// The reservation of a slot is not atomic, therefore a writer can observe the reservation in
+// progress. But it doesn't want to wait for it to complete (it wants to be lock-free, which means
+// it needs to be able to resolve the situation on its own).
+//
+// The way it knows it is in progress of the reservation is by seeing a generation in there (it has
+// a distinct tag). In that case it'll try to:
+//
+// * First verify that the reservation is being done for the same address it modified, by reading
+//   and re-confirming the active_addr slot corresponding to the currently handled node. If it is
+//   for some other address, the writer doesn't have to be concerned and proceeds to the next slot.
+// * It does a full load. That is fine, because the writer must be on a different thread than the
+//   reader and therefore there is at least one free slot. Full load means paying the debt right
+//   away by incrementing the reference count.
+// * Then it tries to pass the already fully protected/paid pointer to the reader, by CaS-replacing
+//   the previously observed generation with the pointer. If it fails, it decrements the count
+//   again and retries on the same slot, as it might now contain a debt for the same pointer it is
+//   being concerned.
+// * The reader then finds the generation got replaced by a pointer (tagged with the right tag, so
+//   some other writer doesn't try to "pay" a debt that is actually a negative debt). It can then
+//   proceed to using that one instead of what it loaded (and not ever retry anything).
+//
+// ## ABA protection
+//
+// The generation as pre-reserving the slot allows the writer to make sure it is offering the
+// loaded pointer to the same reader and that the read value is new enough (and of the same type).
+//
+// FIXME: Isn't this at least a theoretical UB? It could happen that:
+//
+// * There is a collision on generation G.
+// * The writer loads a pointer, bumps it.
+// * In the meantime, all the 2^30 or 2^62 generations (depending on the usize width) generations
+//   wrap around.
+// * The writer stores the outdated and possibly different-typed pointer in there and the reader
+//   uses it.
+//
+// The chance of that happening is probably pretty low (even the chance of any collisions happening
+// in practice is quite low, it takes some time to run through all the generations and hitting the
+// exact same number with _another_ collision), but it would be better not have it there. Any idea
+// how to get rid of it?
+//
+// # Orderings
+//
+// The debt linked list is the easy part:
+// * The head is used to synchronize the non-atomic content of it through trivial Acquire /
+//   Release. The non-atomic parts are never written to after publishing the node (publish
+//   pattern).
+// * The in_use field is used as a form of lock, to claim exclusive use / write privilege of some
+//   of the fields, also with Acquire / Release (mutex pattern).
+//
+// The actual debt juggling is a bit more interesting. We need to ensure that:
+//
+// * We don't start using anything before the debt is installed.
+// * We don't release the swapped-out pointer to the caller before all debts acquired from
+//   previously loading the old value are paid (and none are somewhere in process).
+//
+// We use SeqCst both on the change of the pointer and on the initial setting of the generation
+// into the debt slot. That way we can be sure both threads agree on what happened first.
+//
+// Then all things (with the small exception about the current address, see the comments inline)
+// happen on the same debt slot, therefore the time line is well established on that. Everything
+// that synchronizes anything is Acquire/Release as needed there.
+//
+// There's a gotcha in the destructor ‒ that one doesn't have the write with SeqCst on it. But at
+// that time other things must have assured that there's an exclusive access to the ArcSwap
+// (because drop takes &mut self) and that also assures nobody is currently loading anything ‒ all
+// the debts that are there must have existed before that exclusive ownership was acquired by
+// whoever drops it.
 
 use std::borrow::Borrow;
 use std::cell::Cell;
@@ -56,7 +151,7 @@ thread_local! {
 
 /// A mostly copy of the Dept from elsewhere
 ///
-/// For now, we keep a separate copy, both for simplicity and because we handle them diffeerntly
+/// For now, we keep a separate copy, both for simplicity and because we handle them differently
 /// based on the strategy used. We may either delete one copy eventually or unify them, but for the
 /// experiment, let's just copy-paste..
 struct Debt(AtomicUsize);
@@ -74,8 +169,11 @@ impl Debt {
         let gen = node.generation.load(Relaxed).wrapping_add(1);
         node.generation.store(gen, Relaxed);
         let gen = gen << 2 | GEN_TAG;
-        // We will sync by the write to the debt.
-        node.active_addr.store(ptr, Relaxed);
+        // We will sync by the write to the debt. But we also sync the value of the previous
+        // generation/released slot. That way we may re-confirm in the writer that the reader is
+        // not in between here and the compare_exchange below with a stale gen (eg. if we are in
+        // here, the re-confirm there will load the NO_DEPT and we are fine).
+        node.active_addr.store(ptr, Release);
 
         let len = node.slots.0.len();
         for (i, slot) in node.slots.0.iter().enumerate() {
@@ -108,7 +206,8 @@ impl Debt {
         match self.0.compare_exchange(gen, ptr_addr, AcqRel, Acquire) {
             Ok(_) => Ok(()),
             Err(replacement) => {
-                // Nothing synchronized by this, we just clear the slot for future reuse.
+                // Nothing synchronized by this, we just clear the slot for future reuse. Release
+                // just to make sure, but should Relaxed be enough?
                 self.0.store(NO_DEBT, Release);
                 Err(replacement)
             }
@@ -136,7 +235,8 @@ impl Debt {
     #[inline]
     fn pay<T: RefCnt>(&self, ptr: *const T::Base) -> bool {
         self.0
-            // If we don't change anything because there's something else, Relaxed is fine.
+            // If we don't change anything because there's something else, Relaxed is fine (it's
+            // been already paid)
             //
             // The Release works as kind of Mutex. We make sure nothing from the debt-protected
             // sections leaks below this point.
@@ -201,6 +301,12 @@ impl Debt {
                             let replace_addr = replace_addr | REPLACEMENT_TAG;
                             if slot
                                 .0
+                                // Release the value we send there. TODO: Do we need the Acquire
+                                // there?
+                                //
+                                // Relaxed on failure: Basically, nothing happened anywhere, all
+                                // data stayed with us and we are going to retry this loop from
+                                // scratch.
                                 .compare_exchange_weak(gen, replace_addr, AcqRel, Relaxed)
                                 .is_ok()
                             {
@@ -451,13 +557,22 @@ impl<T: RefCnt> Borrow<T> for Protection<T> {
 ///
 /// This is inspired (but not an exact copy) of
 /// <https://pvk.ca/Blog/2020/07/07/flatter-wait-free-hazard-pointers/>. The debts are mostly
-/// copies of the ones used by the hybrid strategy, but modified a bit.
+/// copies of the ones used by the hybrid strategy, but modified a bit. Just like in the hybrid
+/// strategy, in case the slots run out or when the writer updates the value, the debts are paid by
+/// incrementing the ref count (which is a little slower, but still wait-free/lock-free and still
+/// in order of nanoseconds).
 ///
 /// The strategy is:
 ///
 /// * Wait-free on readers (merely lock-free on the first use on each new OS thread).
 /// * Lock free on writers.
 /// * Precise (data is dropped as soon as possible).
+///
+/// # Warning
+///
+/// This is experimental (may be eventually removed) and contains a very theoretical case which
+/// could be UB (see the source code's FIXME for details). Before actually stabilizing it, this'll
+/// be fixed.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct Helping;
 
