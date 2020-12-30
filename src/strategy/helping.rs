@@ -60,7 +60,8 @@
 // The generation as pre-reserving the slot allows the writer to make sure it is offering the
 // loaded pointer to the same reader and that the read value is new enough (and of the same type).
 //
-// FIXME: Isn't this at least a theoretical UB? It could happen that:
+// This solves the general case, but there's also much less frequent but theoretical ABA problem
+// that could lead to UB, if left unsolved:
 //
 // * There is a collision on generation G.
 // * The writer loads a pointer, bumps it.
@@ -69,10 +70,13 @@
 // * The writer stores the outdated and possibly different-typed pointer in there and the reader
 //   uses it.
 //
-// The chance of that happening is probably pretty low (even the chance of any collisions happening
-// in practice is quite low, it takes some time to run through all the generations and hitting the
-// exact same number with _another_ collision), but it would be better not have it there. Any idea
-// how to get rid of it?
+// To mitigate that, every time the counter overflows we take the current node and un-assign it
+// from our current thread. We mark it as in "cooldown" and let it in there until there are no
+// writers messing with that node any more (if they are not on the node, they can't experience the
+// ABA problem on it). After that, we are allowed to use it again.
+//
+// This doesn't block the reader, it'll simply find *a* node next time ‒ this one, or possibly a
+// different (or new) one.
 //
 // # Orderings
 //
@@ -109,10 +113,14 @@ use std::mem::{self, ManuallyDrop};
 use std::ops::Deref;
 use std::ptr;
 use std::sync::atomic::Ordering::*;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize};
+use std::sync::atomic::{AtomicPtr, AtomicUsize};
 
 use super::sealed::{CaS, InnerStrategy, Protected};
 use crate::{AsRaw, RefCnt};
+
+const NODE_UNUSED: usize = 0;
+const NODE_USED: usize = 1;
+const NODE_COOLDOWN: usize = 2;
 
 /// A wrapper around a node pointer, to un-claim the node on thread shutdown.
 struct DebtHead {
@@ -124,7 +132,7 @@ impl Drop for DebtHead {
     fn drop(&mut self) {
         if let Some(node) = self.node.get() {
             // Release - syncing writes/ownership of this Node
-            assert!(node.in_use.swap(false, Release));
+            assert_eq!(node.in_use.swap(NODE_UNUSED, Release), NODE_USED);
         }
     }
 }
@@ -159,16 +167,18 @@ struct Debt(AtomicUsize);
 impl Debt {
     #[allow(clippy::new_ret_no_self)]
     #[inline]
-    fn new(ptr: usize) -> (&'static Self, bool, usize) {
+    fn new(ptr: usize) -> (&'static Debt, bool, usize) {
         let node = Node::get_thread();
         // Check it is in use by *us*
-        debug_assert!(node.in_use.load(Relaxed));
+        debug_assert_eq!(node.in_use.load(Relaxed), NODE_USED);
 
         // We are sole users of this node. We could actually use something like UnsafeCell
         // here directly.
         let gen = node.generation.load(Relaxed).wrapping_add(1);
         node.generation.store(gen, Relaxed);
-        let gen = gen << 2 | GEN_TAG;
+        let gen = gen << 2;
+        let discard = gen == 0;
+        let gen = gen | GEN_TAG;
         // We will sync by the write to the debt. But we also sync the value of the previous
         // generation/released slot. That way we may re-confirm in the writer that the reader is
         // not in between here and the compare_exchange below with a stale gen (eg. if we are in
@@ -186,6 +196,13 @@ impl Debt {
                 .is_ok()
             {
                 let last = i == len - 1;
+                if discard {
+                    // Cool, we have modified the gen, claimed the slot, that's all we need to do
+                    // while still holding ownership of the node. This is the right time to put the
+                    // node into cooldown and get rid of it. We'll pick a new one (or this one, if
+                    // the cooldown suceeds in between) next time.
+                    node.start_cooldown();
+                }
                 return (slot, last, gen);
             }
         }
@@ -256,6 +273,7 @@ impl Debt {
         T::inc(&val);
 
         Node::traverse::<(), _>(|node| {
+            let _reservation = node.reserve_writer();
             for slot in &node.slots.0 {
                 loop {
                     match slot
@@ -348,14 +366,27 @@ impl Debug for Slots {
     }
 }
 
+struct NodeReservation<'a>(&'a Node);
+
+impl Drop for NodeReservation<'_> {
+    fn drop(&mut self) {
+        self.0.active_writers.fetch_sub(1, Release);
+    }
+}
+
 /// One thread-local node for debts.
 #[repr(C)]
 struct Node {
     slots: Slots,
     next: Option<&'static Node>,
-    in_use: AtomicBool,
+    // This would be enough with AtomicU8, but that doesn't exist on 1.31 yet.
+    in_use: AtomicUsize,
     active_addr: AtomicUsize,
     generation: AtomicUsize,
+    /// How many writers are currently interested in this one.
+    ///
+    /// See the ABA protection at the top.
+    active_writers: AtomicUsize,
 }
 
 /// The head of the debt chain.
@@ -365,10 +396,11 @@ impl Default for Node {
     fn default() -> Self {
         Node {
             next: None,
-            in_use: AtomicBool::new(true),
+            in_use: AtomicUsize::new(NODE_USED),
             slots: Default::default(),
             active_addr: AtomicUsize::new(0),
             generation: AtomicUsize::new(0),
+            active_writers: AtomicUsize::new(0),
         }
     }
 }
@@ -395,15 +427,48 @@ impl Node {
         None
     }
 
+    /// Put the current thread node into cooldown
+    fn start_cooldown(&self) {
+        assert_eq!(NODE_USED, self.in_use.swap(NODE_COOLDOWN, Release));
+        THREAD_HEAD.with(|head| assert!(ptr::eq(head.node.take().unwrap(), self)));
+    }
+
+    /// Perform a cooldown if the node is ready.
+    ///
+    /// See the ABA protection at the top.
+    fn check_cooldown(&self) {
+        // Cooldown succeeded if it is not being looked at by any writers.
+        // This value may be a little bit outdated. But that is fine, as we get an update at least
+        // every load operation (there's a SeqCst read-write operation on both paths, for readers
+        // this can be only one generation stale which is fine, and for writers, if it doesn't
+        // enter the write, because it is not interested, we don't worry about not seeing that
+        // writer).
+        if self.active_writers.load(Relaxed) == 0 {
+            // Relaxed: we don't synchronize anything by this. It'll get used in real just in a
+            // moment. If it doesn't succeed, then this one wasn't doing a cooldown and that's OK.
+            let _ = self
+                .in_use
+                .compare_exchange(NODE_COOLDOWN, NODE_UNUSED, Relaxed, Relaxed);
+        }
+    }
+
+    /// Mark this node that a writer is currently playing with it.
+    #[inline]
+    fn reserve_writer(&self) -> NodeReservation {
+        self.active_writers.fetch_add(1, Acquire);
+        NodeReservation(self)
+    }
+
     #[inline(never)]
     fn get() -> &'static Self {
         // Try to find an unused one in the chain and reuse it.
         Self::traverse(|node| {
+            node.check_cooldown();
             if node
                 .in_use
                 // We claim a unique control over the generation and the right to write to slots if
                 // they are NO_DEPT
-                .compare_exchange(false, true, Acquire, Relaxed)
+                .compare_exchange(NODE_UNUSED, NODE_USED, Acquire, Relaxed)
                 .is_ok()
             {
                 Some(node)
@@ -415,7 +480,7 @@ impl Node {
         .unwrap_or_else(|| {
             let node = Box::leak(Box::new(Node::default()));
             // Not shared between threads yet, so ordinary write would be fine too.
-            node.in_use.store(true, Relaxed);
+            node.in_use.store(NODE_USED, Relaxed);
             // We don't want to read any data in addition to the head, Relaxed is fine
             // here.
             //
@@ -564,15 +629,9 @@ impl<T: RefCnt> Borrow<T> for Protection<T> {
 ///
 /// The strategy is:
 ///
-/// * Wait-free on readers (merely lock-free on the first use on each new OS thread).
+/// * Wait-free on readers (except every usize::MAX/4 accesses, when it is only lock-free).
 /// * Lock free on writers.
 /// * Precise (data is dropped as soon as possible).
-///
-/// # Warning
-///
-/// This is experimental (may be eventually removed) and contains a very theoretical case which
-/// could be UB (see the source code's FIXME for details). Before actually stabilizing it, this'll
-/// be fixed.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct Helping;
 
@@ -698,5 +757,28 @@ mod tests {
         // Now we drop the protection and everything shall clean up.
         drop(p);
         assert!(Node::get_thread().is_empty());
+    }
+
+    /// A smoke test exercising the generation overflow thing.
+    #[test]
+    fn gen_overflow() {
+        type T = Arc<usize>;
+        let a = T::new(42);
+        let s = AtomicPtr::new(T::as_ptr(&a) as *mut usize);
+        let p = unsafe { <Helping as InnerStrategy<T>>::load(&Helping, &s) };
+        THREAD_HEAD.with(|h| {
+            let n = h.node.get().unwrap();
+            n.generation.store(usize::MAX, Relaxed); // Force it to overflow during the next one.
+        });
+        drop(p);
+        // When it overflows, the node is released back to the pool (no good way to check it got
+        // into cooldown, because some other thread might claim it in between).
+        let p = unsafe { <Helping as InnerStrategy<T>>::load(&Helping, &s) };
+        THREAD_HEAD.with(|h| assert!(h.node.get().is_none()));
+        drop(p);
+        // But next round will pick some node again.
+        let p = unsafe { <Helping as InnerStrategy<T>>::load(&Helping, &s) };
+        THREAD_HEAD.with(|h| assert!(h.node.get().is_some()));
+        drop(p);
     }
 }
