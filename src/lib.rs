@@ -954,6 +954,7 @@ macro_rules! t {
                 // When we delete the first one, it didn't have an Arc in it, so the ref count
                 // doesn't drop
                 guards.swap_remove(0);
+                assert_eq!(count, Arc::strong_count(&a));
                 // But new one reuses now vacant the slot and doesn't create a new Arc
                 let _guard = shared.load();
                 assert_eq!(count, Arc::strong_count(&a));

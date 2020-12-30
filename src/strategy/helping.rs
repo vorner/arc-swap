@@ -126,13 +126,22 @@ const NODE_COOLDOWN: usize = 2;
 struct DebtHead {
     // Node for this thread.
     node: Cell<Option<&'static Node>>,
+
+    // The generation counter.
+    generation: Cell<usize>,
+
+    // Rotate the slots that are tried first.
+    slot_pos: Cell<usize>,
 }
 
 impl Drop for DebtHead {
     fn drop(&mut self) {
         if let Some(node) = self.node.get() {
             // Release - syncing writes/ownership of this Node
-            assert_eq!(node.in_use.swap(NODE_UNUSED, Release), NODE_USED);
+            // We put it to cooldown, because we implicitly reset the generation count by giving it
+            // to another thread. So just to be on the safe side and make sure no writers sees it
+            // across that reset.
+            assert_eq!(node.in_use.swap(NODE_COOLDOWN, Release), NODE_USED);
         }
     }
 }
@@ -154,6 +163,8 @@ thread_local! {
     /// A debt node assigned to this thread.
     static THREAD_HEAD: DebtHead = DebtHead {
         node: Cell::new(None),
+        generation: Cell::new(0),
+        slot_pos: Cell::new(0),
     };
 }
 
@@ -168,45 +179,67 @@ impl Debt {
     #[allow(clippy::new_ret_no_self)]
     #[inline]
     fn new(ptr: usize) -> (&'static Debt, bool, usize) {
-        let node = Node::get_thread();
-        // Check it is in use by *us*
-        debug_assert_eq!(node.in_use.load(Relaxed), NODE_USED);
+        Node::with_thread_head(|head| {
+            let node = head
+                .node
+                .get()
+                .expect("with_thread_head ensures we have one");
+            // Check it is in use by *us*
+            debug_assert_eq!(node.in_use.load(Relaxed), NODE_USED);
 
-        // We are sole users of this node. We could actually use something like UnsafeCell
-        // here directly.
-        let gen = node.generation.load(Relaxed).wrapping_add(1);
-        node.generation.store(gen, Relaxed);
-        let gen = gen << 2;
-        let discard = gen == 0;
-        let gen = gen | GEN_TAG;
-        // We will sync by the write to the debt. But we also sync the value of the previous
-        // generation/released slot. That way we may re-confirm in the writer that the reader is
-        // not in between here and the compare_exchange below with a stale gen (eg. if we are in
-        // here, the re-confirm there will load the NO_DEPT and we are fine).
-        node.active_addr.store(ptr, Release);
+            let gen = head.generation.get().wrapping_add(1);
+            head.generation.set(gen);
+            let gen = gen << 2;
+            let discard = gen == 0;
+            let gen = gen | GEN_TAG;
+            // We will sync by the write to the debt. But we also sync the value of the previous
+            // generation/released slot. That way we may re-confirm in the writer that the reader is
+            // not in between here and the compare_exchange below with a stale gen (eg. if we are in
+            // here, the re-confirm there will load the NO_DEPT and we are fine).
+            node.active_addr.store(ptr, Release);
+            let offset = head.slot_pos.get();
 
-        let len = node.slots.0.len();
-        for (i, slot) in node.slots.0.iter().enumerate() {
-            // We could do load and store separately as we are the only ones allowed to overwrite a
-            // NO_DEPT, but we actually need the SeqCst to be a read-write operation in here (we
-            // need both the release and acquire part of it).
-            if slot
-                .0
-                .compare_exchange(NO_DEBT, gen, SeqCst, Relaxed)
-                .is_ok()
-            {
-                let last = i == len - 1;
-                if discard {
-                    // Cool, we have modified the gen, claimed the slot, that's all we need to do
-                    // while still holding ownership of the node. This is the right time to put the
-                    // node into cooldown and get rid of it. We'll pick a new one (or this one, if
-                    // the cooldown suceeds in between) next time.
-                    node.start_cooldown();
+            let len = node.slots.0.len();
+            for raw_i in 0..len {
+                let i = (raw_i + offset) % len;
+                let slot = &node.slots.0[i];
+
+                // We could do load and store separately as we are the only ones allowed to
+                // overwrite a NO_DEPT, but we actually need the SeqCst to be a read-write
+                // operation in here (we need both the release and acquire part of it).
+                if slot
+                    .0
+                    .compare_exchange(NO_DEBT, gen, SeqCst, Relaxed)
+                    .is_ok()
+                {
+                    let mut last = true;
+                    for raw_j in raw_i + 1..len {
+                        let j = (raw_j + offset) % len;
+                        if node.slots.0[j].0.load(Relaxed) == NO_DEBT {
+                            last = false;
+                            // We already discovered this one will be empty, so store the info for
+                            // next time.
+                            head.slot_pos.set(j);
+                            break;
+                        }
+                    }
+                    if last {
+                        // OK, store _this_ one for next time because we are going to free it up in
+                        // a moment.
+                        head.slot_pos.set(i);
+                    }
+                    if discard {
+                        // Cool, we have modified the gen, claimed the slot, that's all we need to
+                        // do while still holding ownership of the node. This is the right time to
+                        // put the node into cooldown and get rid of it. We'll pick a new one (or
+                        // this one, if the cooldown succeeds in between) next time.
+                        node.start_cooldown();
+                    }
+                    return (slot, last, gen);
                 }
-                return (slot, last, gen);
             }
-        }
-        unreachable!("Run out of slots in {:#?}", node);
+            unreachable!("Run out of slots in {:#?}", node);
+        })
     }
 
     /// Confirms the debt.
@@ -382,7 +415,6 @@ struct Node {
     // This would be enough with AtomicU8, but that doesn't exist on 1.31 yet.
     in_use: AtomicUsize,
     active_addr: AtomicUsize,
-    generation: AtomicUsize,
     /// How many writers are currently interested in this one.
     ///
     /// See the ABA protection at the top.
@@ -399,7 +431,6 @@ impl Default for Node {
             in_use: AtomicUsize::new(NODE_USED),
             slots: Default::default(),
             active_addr: AtomicUsize::new(0),
-            generation: AtomicUsize::new(0),
             active_writers: AtomicUsize::new(0),
         }
     }
@@ -504,21 +535,15 @@ impl Node {
     }
 
     #[inline]
-    fn get_thread() -> &'static Self {
+    fn with_thread_head<R, F: FnOnce(&DebtHead) -> R>(f: F) -> R {
         THREAD_HEAD
             // FIXME: Can this actually fail sometime? Can people use us during some kind of mutual
             // thread-local destruction thing?
             .with(|head| {
-                match head.node.get() {
-                    // Already have my own node (most likely)?
-                    Some(node) => node,
-                    // No node yet, called for the first time in this thread. Set one up.
-                    None => {
-                        let new_node = Node::get();
-                        head.node.set(Some(new_node));
-                        new_node
-                    }
+                if head.node.get().is_none() {
+                    head.node.set(Some(Node::get()));
                 }
+                f(head)
             })
     }
 }
@@ -528,11 +553,11 @@ impl Debug for Node {
         fmt.debug_struct("Node")
             .field("in_use", &self.in_use.load(Relaxed))
             .field("next", &self.next)
-            .field("generation", &self.generation.load(Relaxed))
             .field(
                 "active_addr",
                 &(self.active_addr.load(Relaxed) as *const u8),
             )
+            .field("active_writers", &self.active_writers)
             .field("slots", &self.slots)
             .finish()
     }
@@ -732,6 +757,10 @@ mod tests {
         fn is_empty(&self) -> bool {
             self.slots.0.iter().all(|d| d.0.load(Relaxed) == NO_DEBT)
         }
+
+        fn get_thread() -> &'static Self {
+            Self::with_thread_head(|h| h.node.get().unwrap())
+        }
     }
 
     /// A freshly acquired thread local node is empty.
@@ -766,10 +795,8 @@ mod tests {
         let a = T::new(42);
         let s = AtomicPtr::new(T::as_ptr(&a) as *mut usize);
         let p = unsafe { <Helping as InnerStrategy<T>>::load(&Helping, &s) };
-        THREAD_HEAD.with(|h| {
-            let n = h.node.get().unwrap();
-            n.generation.store(usize::MAX, Relaxed); // Force it to overflow during the next one.
-        });
+        // Force it to overflow during the next one.
+        THREAD_HEAD.with(|h| h.generation.set(usize::MAX));
         drop(p);
         // When it overflows, the node is released back to the pool (no good way to check it got
         // into cooldown, because some other thread might claim it in between).
