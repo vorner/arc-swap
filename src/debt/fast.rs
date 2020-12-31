@@ -38,13 +38,12 @@ impl Slots {
             let i = (i + offset) % len;
             // Note: the indexing check is almost certainly optimised out because the len
             // is used above. And using .get_unchecked was actually *slower*.
-            let got_it = self.0[i]
-                .0
-                // Try to acquire the slot. Relaxed if it doesn't work is fine, as we don't
-                // synchronize by it.
-                .compare_exchange(Debt::NONE, ptr, SeqCst, Relaxed)
-                .is_ok();
-            if got_it {
+            let slot = &self.0[i];
+            if slot.0.load(Relaxed) == Debt::NONE {
+                // We are allowed to split into the check and acquiring the debt. That's because we
+                // are the only ones allowed to change NONE to something else. But we still need a
+                // read-write operation wit SeqCst on it :-(
+                slot.0.swap(ptr, SeqCst);
                 local.offset.set(i + 1);
                 return Some(&self.0[i]);
             }
