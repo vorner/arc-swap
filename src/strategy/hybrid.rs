@@ -4,10 +4,8 @@ use std::ops::Deref;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
-use super::gen_lock::GenLockStrategy;
 use super::sealed::{CaS, InnerStrategy, Protected};
 use crate::debt::Debt;
-use crate::gen_lock::{GenLock, LockStorage};
 use crate::ref_cnt::RefCnt;
 
 pub struct HybridProtection<T: RefCnt> {
@@ -115,7 +113,7 @@ pub struct HybridStrategy<F> {
 impl<T, F> InnerStrategy<T> for HybridStrategy<F>
 where
     T: RefCnt,
-    F: InnerStrategy<T, Protected = T>,
+    F: InnerStrategy<T>,
 {
     type Protected = HybridProtection<T>;
     fn assert_ptr_supported(&self, ptr: *const T::Base) {
@@ -123,7 +121,7 @@ where
     }
     unsafe fn load(&self, storage: &AtomicPtr<T::Base>) -> Self::Protected {
         HybridProtection::attempt(storage).unwrap_or_else(|| {
-            let loaded = self.fallback.load(storage);
+            let loaded = self.fallback.load(storage).into_inner();
             HybridProtection {
                 debt: None,
                 ptr: ManuallyDrop::new(loaded),
@@ -136,6 +134,7 @@ where
     }
 }
 
+/*
 impl<T: RefCnt, L: LockStorage> CaS<T> for HybridStrategy<GenLockStrategy<L>> {
     unsafe fn compare_and_swap<C: crate::as_raw::AsRaw<T::Base>>(
         &self,
@@ -199,5 +198,24 @@ impl<T: RefCnt, L: LockStorage> CaS<T> for HybridStrategy<GenLockStrategy<L>> {
         }
 
         HybridProtection::new(previous_ptr, debt)
+    }
+}
+*/
+
+impl<T: RefCnt, F: CaS<T>> CaS<T> for HybridStrategy<F> {
+    unsafe fn compare_and_swap<C: crate::as_raw::AsRaw<T::Base>>(
+        &self,
+        storage: &AtomicPtr<T::Base>,
+        current: C,
+        new: T,
+    ) -> Self::Protected {
+        HybridProtection {
+            debt: None,
+            ptr: ManuallyDrop::new(
+                self.fallback
+                    .compare_and_swap(storage, current, new)
+                    .into_inner(),
+            ),
+        }
     }
 }

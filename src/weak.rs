@@ -111,5 +111,3 @@ macro_rules! t {
 }
 
 t!(tests_default, crate::DefaultStrategy);
-#[cfg(feature = "experimental-strategies")]
-t!(tests_helping, crate::strategy::experimental::Helping);

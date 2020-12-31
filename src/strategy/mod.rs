@@ -34,30 +34,19 @@
 //!
 //! *This is not meant to be used in production code*.
 //!
-//! # Experimental strategies
-//!
-//! There are some more strategies inside the [`experimental`] module. Note that these **are not**
-//! subject to the API stability guarantees and can be changed, renamed or removed at any time.
-//!
-//! They are available only with the `experimental-strategies` feature.
-//!
 //! [`ArcSwap`]: crate::ArcSwap
 //! [`load`]: crate::ArcSwapAny::load
 
 use std::borrow::Borrow;
 use std::sync::atomic::AtomicPtr;
 
-use crate::gen_lock::{Global, PrivateUnsharded};
 use crate::ref_cnt::RefCnt;
 
-#[cfg(feature = "experimental-strategies")]
-pub mod experimental;
-mod gen_lock;
 mod helping;
 mod hybrid;
 mod rw_lock;
 
-use self::gen_lock::GenLockStrategy;
+use self::helping::Helping;
 use self::hybrid::HybridStrategy;
 
 /// The default strategy.
@@ -86,7 +75,7 @@ use self::hybrid::HybridStrategy;
 /// similar or better properties.
 ///
 /// [`load`]: crate::ArcSwapAny::load
-pub type DefaultStrategy = HybridStrategy<GenLockStrategy<Global>>;
+pub type DefaultStrategy = HybridStrategy<Helping>;
 
 /// Strategy for isolating instances.
 ///
@@ -102,7 +91,8 @@ pub type DefaultStrategy = HybridStrategy<GenLockStrategy<Global>>;
 ///
 /// This too may be changed for something else (but with at least as good guarantees, primarily
 /// that other instances won't get influenced by the "torture").
-pub type IndependentStrategy = HybridStrategy<GenLockStrategy<PrivateUnsharded>>;
+// FIXME: Describe and deprecate?
+pub type IndependentStrategy = DefaultStrategy;
 
 // TODO: When we are ready to un-seal, should these traits become unsafe?
 

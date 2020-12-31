@@ -17,10 +17,6 @@ appveyor = { repository = "vorner/arc-swap" }
 maintenance = { status = "actively-developed" }
 
 [features]
-# Enable some more, experimental strategies.
-# **These are not part of the stability guarantees** and may be changed, renamed
-# or removed at any time.
-experimental-strategies = []
 # ArcSwapWeak (for std::sycn::Weak) support
 weak = []
 

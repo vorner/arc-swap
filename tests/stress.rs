@@ -287,10 +287,3 @@ macro_rules! t {
 
 t!(default, DefaultStrategy);
 t!(independent, IndependentStrategy);
-#[cfg(feature = "experimental-strategies")]
-t!(
-    simple_genlock,
-    arc_swap::strategy::experimental::SimpleGenLock
-);
-#[cfg(feature = "experimental-strategies")]
-t!(helping, arc_swap::strategy::experimental::Helping);

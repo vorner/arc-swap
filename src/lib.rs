@@ -129,7 +129,6 @@ pub mod cache;
 mod compile_fail_tests;
 mod debt;
 pub mod docs;
-mod gen_lock;
 mod ref_cnt;
 pub mod strategy;
 #[cfg(feature = "weak")]
@@ -1240,5 +1239,3 @@ macro_rules! t {
 }
 
 t!(tests_default, DefaultStrategy);
-#[cfg(feature = "experimental-strategies")]
-t!(tests_helping, crate::strategy::experimental::Helping);
