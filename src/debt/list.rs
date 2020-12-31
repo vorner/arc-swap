@@ -23,6 +23,7 @@ use std::sync::atomic::Ordering::*;
 use std::sync::atomic::{AtomicPtr, AtomicUsize};
 
 use super::fast::{Local as FastLocal, Slots as FastSlots};
+use super::helping::{Local as HelpingLocal, Slots as HelpingSlots};
 use super::Debt;
 
 const NODE_UNUSED: usize = 0;
@@ -32,10 +33,20 @@ const NODE_COOLDOWN: usize = 2;
 /// The head of the debt linked list.
 static LIST_HEAD: AtomicPtr<Node> = AtomicPtr::new(ptr::null_mut());
 
+pub(crate) struct NodeReservation<'a>(&'a Node);
+
+impl Drop for NodeReservation<'_> {
+    #[inline]
+    fn drop(&mut self) {
+        self.0.active_writers.fetch_sub(1, Release);
+    }
+}
+
 /// One thread-local node for debts.
 #[repr(C, align(64))]
 pub(crate) struct Node {
     fast: FastSlots,
+    helping: HelpingSlots,
     in_use: AtomicUsize,
     next: Option<&'static Node>,
     active_writers: AtomicUsize,
@@ -44,7 +55,8 @@ pub(crate) struct Node {
 impl Default for Node {
     fn default() -> Self {
         Node {
-            fast: Default::default(),
+            fast: FastSlots::default(),
+            helping: HelpingSlots::default(),
             in_use: AtomicUsize::new(NODE_USED),
             next: None,
             active_writers: AtomicUsize::new(0),
@@ -74,6 +86,17 @@ impl Node {
         None
     }
 
+    // FIXME: Abstraction at the wrong place
+    pub(crate) fn active_addr(&self) -> &AtomicUsize {
+        &self.helping.active_addr
+    }
+
+    /// Put the current thread node into cooldown
+    fn start_cooldown(&self) {
+        // FIXME: Do wee need some more than Release?
+        assert_eq!(NODE_USED, self.in_use.swap(NODE_COOLDOWN, Release));
+    }
+
     /// Perform a cooldown if the node is ready.
     ///
     /// See the ABA protection at the top.
@@ -93,6 +116,13 @@ impl Node {
         }
     }
 
+    /// Mark this node that a writer is currently playing with it.
+    #[inline]
+    pub(super) fn reserve_writer(&self) -> NodeReservation {
+        self.active_writers.fetch_add(1, Acquire);
+        NodeReservation(self)
+    }
+
     /// "Allocate" a node.
     ///
     /// Either a new one is created, or previous one is reused. The node is claimed to become
@@ -106,6 +136,7 @@ impl Node {
                 .in_use
                 // We claim a unique control over the generation and the right to write to slots if
                 // they are NO_DEPT
+                // FIXME: Do we need more than Acquire?
                 .compare_exchange(NODE_UNUSED, NODE_USED, Acquire, Relaxed)
                 .is_ok()
             {
@@ -146,6 +177,12 @@ impl Node {
     pub(crate) fn fast_slots(&self) -> Iter<Debt> {
         self.fast.into_iter()
     }
+
+    /// Iterate over the helping slots.
+    #[inline]
+    pub(crate) fn helping_slots(&self) -> Iter<Debt> {
+        self.helping.into_iter()
+    }
 }
 
 /// A wrapper around a node pointer, to un-claim the node on thread shutdown.
@@ -157,6 +194,9 @@ pub(crate) struct LocalNode {
 
     /// Thread-local data for the fast slots.
     fast: FastLocal,
+
+    /// Thread local data for the helping strategy.
+    helping: HelpingLocal,
 }
 
 impl LocalNode {
@@ -181,6 +221,7 @@ impl LocalNode {
                 let tmp_node = LocalNode {
                     node: Cell::new(Some(Node::get())),
                     fast: FastLocal::default(),
+                    helping: HelpingLocal::default(),
                 };
                 let f = f.take().unwrap();
                 f(&tmp_node)
@@ -194,6 +235,20 @@ impl LocalNode {
         assert_eq!(node.in_use.load(Relaxed), NODE_USED);
         node.fast.get_debt(ptr, &self.fast)
     }
+
+    #[inline]
+    pub(crate) fn new_helping(&self, ptr: usize) -> (&'static Debt, bool, usize) {
+        let node = &self.node.get().expect("LocalNode::with ensures it is set");
+        assert_eq!(node.in_use.load(Relaxed), NODE_USED);
+        let (debt, last, gen, discard) = node.helping.get_debt(ptr, &self.helping);
+        if discard {
+            // Too many generations happened, make sure the writers give the poor node a break for
+            // a while so they don't observe the generation wrapping around.
+            node.start_cooldown();
+            self.node.take();
+        }
+        (debt, last, gen)
+    }
 }
 
 impl Drop for LocalNode {
@@ -205,7 +260,7 @@ impl Drop for LocalNode {
             // across that reset.
             // FIXME: Is this enough when we do the shutdown of TLS fallback above, when try_with
             // fails?
-            assert_eq!(node.in_use.swap(NODE_COOLDOWN, Release), NODE_USED);
+            node.start_cooldown();
         }
     }
 }
@@ -215,5 +270,29 @@ thread_local! {
     static THREAD_HEAD: LocalNode = LocalNode {
         node: Cell::new(None),
         fast: FastLocal::default(),
+        helping: HelpingLocal::default(),
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    impl Node {
+        fn is_empty(&self) -> bool {
+            self.fast_slots()
+                .chain(self.helping_slots())
+                .all(|d| d.0.load(Relaxed) == Debt::NONE)
+        }
+
+        fn get_thread() -> &'static Self {
+            LocalNode::with(|h| h.node.get().unwrap())
+        }
+    }
+
+    /// A freshly acquired thread local node is empty.
+    #[test]
+    fn new_empty() {
+        assert!(Node::get_thread().is_empty());
+    }
 }

@@ -28,7 +28,7 @@ impl<T: RefCnt> HybridProtection<T> {
         // Relaxed is good enough here, see the Acquire below
         let ptr = storage.load(Ordering::Relaxed);
         // Try to get a debt slot. If not possible, fail.
-        let debt = Debt::new(ptr as usize)?;
+        let debt = Debt::new_fast(ptr as usize)?;
 
         let confirm = storage.load(Ordering::Acquire);
         if ptr == confirm {
@@ -132,7 +132,7 @@ where
     }
     unsafe fn wait_for_readers(&self, old: *const T::Base, storage: &AtomicPtr<T::Base>) {
         self.fallback.wait_for_readers(old, storage);
-        Debt::pay_all::<T>(old);
+        Debt::pay_all_fast::<T>(old);
     }
 }
 
@@ -176,7 +176,7 @@ impl<T: RefCnt, L: LockStorage> CaS<T> for HybridStrategy<GenLockStrategy<L>> {
             //
             // We try to do that by registering a debt and only if that fails by actually bumping
             // the ref.
-            let debt = Debt::new(previous_ptr as usize);
+            let debt = Debt::new_fast(previous_ptr as usize);
             if debt.is_none() {
                 let previous = T::from_ptr(previous_ptr);
                 T::inc(&previous);
