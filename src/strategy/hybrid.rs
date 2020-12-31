@@ -118,6 +118,9 @@ where
     F: InnerStrategy<T, Protected = T>,
 {
     type Protected = HybridProtection<T>;
+    fn assert_ptr_supported(&self, ptr: *const T::Base) {
+        self.fallback.assert_ptr_supported(ptr)
+    }
     unsafe fn load(&self, storage: &AtomicPtr<T::Base>) -> Self::Protected {
         HybridProtection::attempt(storage).unwrap_or_else(|| {
             let loaded = self.fallback.load(storage);

@@ -32,6 +32,10 @@ impl<T: RefCnt> InnerStrategy<T> for RwLock<()> {
         // By acquiring the write lock, we make sure there are no read locks present across it.
         drop(self.write().expect("We don't panic in here"));
     }
+
+    fn assert_ptr_supported(&self, _: *const T::Base) {
+        // No assumption about the pointer
+    }
 }
 
 impl<T: RefCnt> CaS<T> for RwLock<()> {

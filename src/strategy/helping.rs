@@ -349,7 +349,6 @@ impl Debt {
                             // Get a replacement value and try to donate it.
                             let replacement = replacement();
                             let replace_addr = T::as_ptr(&replacement) as usize;
-                            assert_eq!(replace_addr & TAG_MASK, 0, "Not enough space for tags");
                             let replace_addr = replace_addr | REPLACEMENT_TAG;
                             if slot
                                 .0
@@ -664,6 +663,18 @@ pub struct Helping;
 impl<T: RefCnt> InnerStrategy<T> for Helping {
     type Protected = Protection<T>;
 
+    /// Check that the pointer conforms to our idea how it should be aligned.
+    ///
+    /// Even if the alignment of T::Base is smaller, we assume this holds because it comes from
+    /// some kind of Arc and that one has usize-sized fields before it.
+    ///
+    /// But as that is an internal implementation and users might provide their own implementation
+    /// of RefCnt (is it unsealed?), we must protect from the ones that don't satisfy it.
+    #[inline]
+    fn assert_ptr_supported(&self, ptr: *const T::Base) {
+        assert_eq!(ptr as usize & TAG_MASK, 0);
+    }
+
     #[inline]
     unsafe fn load(&self, storage: &AtomicPtr<T::Base>) -> Self::Protected {
         // First, we claim a debt slot and store the address of the atomic pointer there, so the
@@ -673,12 +684,6 @@ impl<T: RefCnt> InnerStrategy<T> for Helping {
         // the pointer. We just need to make sure to bring the pointee in (this can be newer than
         // what we got in the Debt)
         let candidate = storage.load(Acquire);
-        // TODO: We should check this much sooner, possibly when the pointer gets into the storage.
-        assert_eq!(
-            candidate as usize & TAG_MASK,
-            0,
-            "Not enough space for tags"
-        );
 
         let ptr_addr = candidate as usize;
         // Try to replace the debt with our candidate.

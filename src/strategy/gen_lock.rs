@@ -27,6 +27,10 @@ impl<T: RefCnt, L: LockStorage> InnerStrategy<T> for GenLockStrategy<L> {
     unsafe fn wait_for_readers(&self, _: *const T::Base, _: &AtomicPtr<T::Base>) {
         gen_lock::wait_for_readers(&self.0);
     }
+
+    fn assert_ptr_supported(&self, _: *const T::Base) {
+        // No assumptions about the pointer
+    }
 }
 
 impl<T: RefCnt, L: LockStorage> CaS<T> for GenLockStrategy<L> {
