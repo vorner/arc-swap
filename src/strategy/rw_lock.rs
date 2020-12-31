@@ -28,7 +28,7 @@ impl<T: RefCnt> InnerStrategy<T> for RwLock<()> {
         ptr
     }
 
-    unsafe fn wait_for_readers(&self, _: *const T::Base) {
+    unsafe fn wait_for_readers(&self, _: *const T::Base, _: &AtomicPtr<T::Base>) {
         // By acquiring the write lock, we make sure there are no read locks present across it.
         drop(self.write().expect("We don't panic in here"));
     }

@@ -15,6 +15,7 @@
 use crate::gen_lock::PrivateUnsharded;
 pub use crate::gen_lock::Shard;
 use crate::strategy::gen_lock::GenLockStrategy;
+pub use crate::strategy::helping::Helping;
 
 /// A generation lock.
 ///

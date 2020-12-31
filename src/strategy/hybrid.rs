@@ -127,8 +127,8 @@ where
             }
         })
     }
-    unsafe fn wait_for_readers(&self, old: *const T::Base) {
-        self.fallback.wait_for_readers(old);
+    unsafe fn wait_for_readers(&self, old: *const T::Base, storage: &AtomicPtr<T::Base>) {
+        self.fallback.wait_for_readers(old, storage);
         Debt::pay_all::<T>(old);
     }
 }
@@ -147,8 +147,12 @@ impl<T: RefCnt, L: LockStorage> CaS<T> for HybridStrategy<GenLockStrategy<L>> {
         // which ones upfront, so we need to implement safety measures for both.
         let gen = GenLock::new(&self.fallback.0);
 
-        let previous_ptr = storage.compare_and_swap(cur_ptr, new, Ordering::SeqCst);
-        let swapped = ptr::eq(cur_ptr, previous_ptr);
+        let swap_result =
+            storage.compare_exchange(cur_ptr, new, Ordering::SeqCst, Ordering::SeqCst);
+        let (previous_ptr, swapped) = match swap_result {
+            Ok(previous) => (previous, true),
+            Err(previous) => (previous, false),
+        };
 
         // Drop it here, because:
         // * We can't drop it before the compare_and_swap ‒ in such case, it could get recycled,
@@ -185,7 +189,7 @@ impl<T: RefCnt, L: LockStorage> CaS<T> for HybridStrategy<GenLockStrategy<L>> {
             // for all readers to make sure there are no more untracked copies of it.
             //
             // Why is rustc confused about self.wait_for_readers???
-            InnerStrategy::<T>::wait_for_readers(self, previous_ptr);
+            InnerStrategy::<T>::wait_for_readers(self, previous_ptr, storage);
         } else {
             // We didn't swap, so new is black-holed.
             T::dec(new);

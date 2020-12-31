@@ -29,6 +29,10 @@ impl OpsInstruction {
 proptest! {}
 
 const LIMIT: usize = 5;
+#[cfg(not(miri))]
+const SIZE: usize = 100;
+#[cfg(miri)]
+const SIZE: usize = 10;
 static ARCS: Lazy<Vec<Arc<usize>>> = Lazy::new(|| (0..LIMIT).map(Arc::new).collect());
 
 #[derive(Copy, Clone, Debug)]
@@ -48,39 +52,47 @@ impl SelInstruction {
 
 // Generate the same tests for bunch of strategies (one module for one strategy)
 macro_rules! t {
-    ($name: ident, $strategy: ty) => {
+    (@full => $name: ident, $strategy: ty) => {
+        t!(@compose => $name, $strategy,
+            #[test]
+            fn selection(
+                instructions in proptest::collection::vec(SelInstruction::random(), 1..SIZE),
+            ) {
+                let mut bare = Arc::clone(&ARCS[0]);
+                let a = ArcSwapAny::<_, $strategy>::from(Arc::clone(&ARCS[0]));
+                for ins in instructions {
+                    match ins {
+                        SelInstruction::Swap(idx) => {
+                            let expected = mem::replace(&mut bare, Arc::clone(&ARCS[idx]));
+                            let actual = a.swap(Arc::clone(&ARCS[idx]));
+                            assert!(Arc::ptr_eq(&expected, &actual));
+                        }
+                        SelInstruction::Cas(cur, new) => {
+                            let expected = Arc::clone(&bare);
+                            if bare == ARCS[cur] {
+                                bare = Arc::clone(&ARCS[new]);
+                            }
+                            let actual = a.compare_and_swap(&ARCS[cur], Arc::clone(&ARCS[new]));
+                            assert!(Arc::ptr_eq(&expected, &actual));
+                        }
+                    }
+                }
+            }
+        );
+    };
+    (@nocas => $name: ident, $strategy: ty) => {
+        t!(@compose => $name, $strategy, );
+    };
+    (@compose => $name: ident, $strategy: ty, $($extra: tt)*) => {
         mod $name {
             use super::*;
 
             proptest! {
-                #[test]
-                fn selection(
-                    instructions in proptest::collection::vec(SelInstruction::random(), 1..100),
-                ) {
-                    let mut bare = Arc::clone(&ARCS[0]);
-                    let a = ArcSwapAny::<_, $strategy>::from(Arc::clone(&ARCS[0]));
-                    for ins in instructions {
-                        match ins {
-                            SelInstruction::Swap(idx) => {
-                                let expected = mem::replace(&mut bare, Arc::clone(&ARCS[idx]));
-                                let actual = a.swap(Arc::clone(&ARCS[idx]));
-                                assert!(Arc::ptr_eq(&expected, &actual));
-                            }
-                            SelInstruction::Cas(cur, new) => {
-                                let expected = Arc::clone(&bare);
-                                if bare == ARCS[cur] {
-                                    bare = Arc::clone(&ARCS[new]);
-                                }
-                                let actual = a.compare_and_swap(&ARCS[cur], Arc::clone(&ARCS[new]));
-                                assert!(Arc::ptr_eq(&expected, &actual));
-                            }
-                        }
-                    }
-                }
+                $($extra)*
 
                 #[test]
                 fn ops(
-                    instructions in proptest::collection::vec(OpsInstruction::random(), 1..100),
+                    instructions in proptest::collection::vec(OpsInstruction::random(), 1..SIZE),
                 ) {
                     use crate::OpsInstruction::*;
                     let mut m = 0;
@@ -105,10 +117,17 @@ macro_rules! t {
     };
 }
 
-t!(default, DefaultStrategy);
-t!(independent, IndependentStrategy);
+t!(@full => default, DefaultStrategy);
+t!(@full => independent, IndependentStrategy);
 #[cfg(feature = "experimental-strategies")]
 t!(
+    @full =>
     simple_genlock,
     arc_swap::strategy::experimental::SimpleGenLock
+);
+#[cfg(feature = "experimental-strategies")]
+t!(
+    @full =>
+    helping,
+    arc_swap::strategy::experimental::Helping
 );

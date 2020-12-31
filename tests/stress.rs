@@ -4,8 +4,9 @@
 //! discover any possible race condition.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Barrier, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use adaptive_barrier::{Barrier, PanicMode};
 use arc_swap::strategy::{CaS, DefaultStrategy, IndependentStrategy, Strategy};
 use arc_swap::ArcSwapAny;
 use crossbeam_utils::thread;
@@ -35,13 +36,15 @@ where
 {
     let _lock = lock();
     let head = ArcSwapAny::<_, S>::from(None::<Arc<LLNode<S>>>);
+    #[cfg(not(miri))]
     let cpus = num_cpus::get();
-    // FIXME: If one thread fails, but others don't, it'll deadlock.
-    let barr = Barrier::new(cpus);
+    #[cfg(miri)]
+    let cpus = 2;
+    let barr = Barrier::new(PanicMode::Poison);
     thread::scope(|scope| {
         for thread in 0..cpus {
             // We want to borrow these, but that kind-of conflicts with the move closure mode
-            let barr = &barr;
+            let mut barr = barr.clone();
             let head = &head;
             scope.spawn(move |_| {
                 let nodes = (0..node_cnt)
@@ -112,6 +115,8 @@ where
                 }
             });
         }
+
+        drop(barr);
     })
     .unwrap();
 }
@@ -137,8 +142,11 @@ where
 {
     let _lock = lock();
 
+    #[cfg(not(miri))]
     let cpus = num_cpus::get();
-    let barr = Barrier::new(cpus);
+    #[cfg(miri)]
+    let cpus = 2;
+    let barr = Barrier::new(PanicMode::Poison);
     let global_cnt = AtomicUsize::new(0);
     // We plan to create this many nodes during the whole test.
     let live_cnt = AtomicUsize::new(cpus * node_cnt * iters);
@@ -147,7 +155,7 @@ where
         for thread in 0..cpus {
             // Borrow these instead of moving.
             let head = &head;
-            let barr = &barr;
+            let mut barr = barr.clone();
             let global_cnt = &global_cnt;
             let live_cnt = &live_cnt;
             scope.spawn(move |_| {
@@ -186,6 +194,8 @@ where
                 }
             });
         }
+
+        drop(barr);
     })
     .unwrap();
     // Everything got destroyed properly.
@@ -197,7 +207,10 @@ where
     S: Default + Strategy<Arc<usize>> + Send + Sync,
 {
     let _lock = lock();
+    #[cfg(not(miri))]
     let cpus = num_cpus::get();
+    #[cfg(miri)]
+    let cpus = 2;
     let shared = ArcSwapAny::<_, S>::from(Arc::new(0));
     thread::scope(|scope| {
         scope.spawn(|_| {
@@ -221,6 +234,16 @@ where
     assert_eq!(2, Arc::strong_count(&v));
 }
 
+#[cfg(not(miri))]
+const ITER_SMALL: usize = 100;
+#[cfg(not(miri))]
+const ITER_MID: usize = 1000;
+
+#[cfg(miri)]
+const ITER_SMALL: usize = 2;
+#[cfg(miri)]
+const ITER_MID: usize = 5;
+
 macro_rules! t {
     ($name: ident, $strategy: ty) => {
         mod $name {
@@ -228,7 +251,7 @@ macro_rules! t {
 
             #[test]
             fn storm_link_list_small() {
-                storm_link_list::<$strategy>(100, 5);
+                storm_link_list::<$strategy>(ITER_SMALL, 5);
             }
 
             #[test]
@@ -239,7 +262,7 @@ macro_rules! t {
 
             #[test]
             fn storm_unroll_small() {
-                storm_unroll::<$strategy>(100, 5);
+                storm_unroll::<$strategy>(ITER_SMALL, 5);
             }
 
             #[test]
@@ -250,7 +273,7 @@ macro_rules! t {
 
             #[test]
             fn load_parallel_small() {
-                load_parallel::<$strategy>(1000);
+                load_parallel::<$strategy>(ITER_MID);
             }
 
             #[test]
@@ -269,3 +292,5 @@ t!(
     simple_genlock,
     arc_swap::strategy::experimental::SimpleGenLock
 );
+#[cfg(feature = "experimental-strategies")]
+t!(helping, arc_swap::strategy::experimental::Helping);

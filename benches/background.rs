@@ -69,50 +69,61 @@ macro_rules! noise {
     };
 }
 
-mod arc_swap_b {
-    use super::{black_box, ArcSwap, Criterion, Lazy};
+macro_rules! strategy {
+    ($name: ident, $type: ty) => {
+        mod $name {
+            use super::*;
 
-    static A: Lazy<ArcSwap<usize>> = Lazy::new(|| ArcSwap::from_pointee(0));
-    const NAME: &str = "arc_swap";
+            static A: Lazy<$type> = Lazy::new(|| <$type>::from_pointee(0));
+            const NAME: &str = stringify!($name);
 
-    fn lease() {
-        for _ in 0..ITERS {
-            black_box(**A.load());
+            fn lease() {
+                for _ in 0..ITERS {
+                    black_box(**A.load());
+                }
+            }
+
+            // Leases kind of degrade in performance if there are multiple on the same thread.
+            fn four_leases() {
+                for _ in 0..ITERS {
+                    let l1 = A.load();
+                    let l2 = A.load();
+                    let l3 = A.load();
+                    let l4 = A.load();
+                    black_box((**l1, **l2, **l3, **l4));
+                }
+            }
+
+            fn read() {
+                for _ in 0..ITERS {
+                    black_box(A.load_full());
+                }
+            }
+
+            fn write() {
+                for _ in 0..ITERS {
+                    black_box(A.store(Arc::new(0)));
+                }
+            }
+
+            noise!();
+
+            pub fn run_all(c: &mut Criterion) {
+                method!(c, read);
+                method!(c, write);
+                method!(c, lease);
+                method!(c, four_leases);
+            }
         }
-    }
-
-    // Leases kind of degrade in performance if there are multiple on the same thread.
-    fn four_leases() {
-        for _ in 0..ITERS {
-            let l1 = A.load();
-            let l2 = A.load();
-            let l3 = A.load();
-            let l4 = A.load();
-            black_box((**l1, **l2, **l3, **l4));
-        }
-    }
-
-    fn read() {
-        for _ in 0..ITERS {
-            black_box(A.load_full());
-        }
-    }
-
-    fn write() {
-        for _ in 0..ITERS {
-            black_box(A.store(Arc::new(0)));
-        }
-    }
-
-    noise!();
-
-    pub fn run_all(c: &mut Criterion) {
-        method!(c, read);
-        method!(c, write);
-        method!(c, lease);
-        method!(c, four_leases);
-    }
+    };
 }
+
+strategy!(arc_swap_b, ArcSwap::<usize>);
+#[cfg(feature = "experimental-strategies")]
+strategy!(
+    arc_swap_helping,
+    arc_swap::ArcSwapAny::<Arc<usize>, arc_swap::strategy::experimental::Helping>
+);
 
 mod arc_swap_option {
     use super::{black_box, ArcSwapOption, Criterion, Lazy};
@@ -314,6 +325,19 @@ mod parking_rwlock {
     }
 }
 
+#[cfg(feature = "experimental-strategies")]
+criterion_group!(
+    benches,
+    arc_swap_b::run_all,
+    arc_swap_helping::run_all,
+    arc_swap_option::run_all,
+    arc_swap_cached::run_all,
+    mutex::run_all,
+    parking_mutex::run_all,
+    rwlock::run_all,
+    parking_rwlock::run_all,
+);
+#[cfg(not(feature = "experimental-strategies"))]
 criterion_group!(
     benches,
     arc_swap_b::run_all,

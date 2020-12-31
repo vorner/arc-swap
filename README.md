@@ -4,9 +4,6 @@
 [![codecov](https://codecov.io/gh/vorner/arc-swap/branch/master/graph/badge.svg?token=3KA3R2D9fV)](https://codecov.io/gh/vorner/arc-swap)
 [![docs](https://docs.rs/arc-swap/badge.svg)](https://docs.rs/arc-swap)
 
-[![Travis Build Status](https://api.travis-ci.org/vorner/arc-swap.png?branch=master)](https://travis-ci.org/vorner/arc-swap)
-[![AppVeyor Build status](https://ci.appveyor.com/api/projects/status/d9p4equeuhymfny6/branch/master?svg=true)](https://ci.appveyor.com/project/vorner/arc-swap/branch/master)
-
 This provides something similar to what `RwLock<Arc<T>>` is or what
 `Atomic<Arc<T>>` would be if it existed, optimized for read-mostly write-seldom
 scenarios, with consistent performance characteristics.

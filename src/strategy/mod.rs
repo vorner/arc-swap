@@ -53,6 +53,7 @@ use crate::ref_cnt::RefCnt;
 #[cfg(feature = "experimental-strategies")]
 pub mod experimental;
 mod gen_lock;
+mod helping;
 mod hybrid;
 mod rw_lock;
 
@@ -118,7 +119,7 @@ pub(crate) mod sealed {
         // Drop „unlocks“
         type Protected: Protected<T>;
         unsafe fn load(&self, storage: &AtomicPtr<T::Base>) -> Self::Protected;
-        unsafe fn wait_for_readers(&self, old: *const T::Base);
+        unsafe fn wait_for_readers(&self, old: *const T::Base, storage: &AtomicPtr<T::Base>);
     }
 
     pub trait CaS<T: RefCnt>: InnerStrategy<T> {

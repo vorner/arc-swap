@@ -43,7 +43,11 @@ impl Node {
         traverse(|node| {
             // Try to claim this node. Nothing is synchronized through this atomic, we only
             // track if someone claims ownership of it.
-            if !node.in_use.compare_and_swap(false, true, Ordering::Relaxed) {
+            let claimed = node
+                .in_use
+                .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok();
+            if claimed {
                 Some(node)
             } else {
                 None
@@ -217,6 +221,7 @@ impl Debt {
     /// Pays all the debts on the given pointer.
     pub(crate) fn pay_all<T: RefCnt>(ptr: *const T::Base) {
         let val = unsafe { T::from_ptr(ptr) };
+        // Pre-pay one ref count that can be safely put into a debt slot to pay it.
         T::inc(&val);
         traverse::<(), _>(|node| {
             for slot in &node.slots.0 {
@@ -225,11 +230,13 @@ impl Debt {
                     .compare_exchange(ptr as usize, NO_DEBT, Ordering::AcqRel, Ordering::Relaxed)
                     .is_ok()
                 {
+                    // Pre-pay one more, for another future slot
                     T::inc(&val);
                 }
             }
             None
         });
+        // Implicit dec by dropping val in here, pair for the above
     }
 }
 
