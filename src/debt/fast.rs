@@ -28,7 +28,6 @@ impl Slots {
     /// Try to allocate one slot and get the pointer in it.
     ///
     /// Fails if there are no free slots.
-    #[inline]
     pub(super) fn get_debt(&self, ptr: usize, local: &Local) -> Option<&Debt> {
         // Trick with offsets: we rotate through the slots (save the value from last time)
         // so successive leases are likely to succeed on the first attempt (or soon after)

@@ -15,14 +15,13 @@ pub struct HybridProtection<T: RefCnt> {
 }
 
 impl<T: RefCnt> HybridProtection<T> {
-    #[inline]
     pub(super) unsafe fn new(ptr: *const T::Base, debt: Option<&'static Debt>) -> Self {
         Self {
             debt,
             ptr: ManuallyDrop::new(T::from_ptr(ptr)),
         }
     }
-    #[inline]
+
     fn attempt(node: &LocalNode, storage: &AtomicPtr<T::Base>) -> Option<Self> {
         // Relaxed is good enough here, see the Acquire below
         let ptr = storage.load(Relaxed);
@@ -44,7 +43,6 @@ impl<T: RefCnt> HybridProtection<T> {
         }
     }
 
-    #[inline]
     fn fallback(node: &LocalNode, storage: &AtomicPtr<T::Base>) -> Self {
         // First, we claim a debt slot and store the address of the atomic pointer there, so the
         // writer can optionally help us out with loading and protecting something.
@@ -77,14 +75,12 @@ impl<T: RefCnt> HybridProtection<T> {
         }
     }
 
-    #[inline]
     fn as_ptr(&self) -> *const T::Base {
         T::as_ptr(self.ptr.deref())
     }
 }
 
 impl<T: RefCnt> Drop for HybridProtection<T> {
-    #[inline]
     fn drop(&mut self) {
         match self.debt.take() {
             // We have our own copy of Arc, so we don't need a protection. Do nothing (but release
@@ -107,7 +103,6 @@ impl<T: RefCnt> Drop for HybridProtection<T> {
 }
 
 impl<T: RefCnt> Protected<T> for HybridProtection<T> {
-    #[inline]
     fn from_inner(ptr: T) -> Self {
         Self {
             debt: None,
@@ -115,7 +110,6 @@ impl<T: RefCnt> Protected<T> for HybridProtection<T> {
         }
     }
 
-    #[inline]
     fn into_inner(mut self) -> T {
         // Drop any debt and release any lock held by the given guard and return a
         // full-featured value that even can outlive the ArcSwap it originated from.
@@ -138,7 +132,6 @@ impl<T: RefCnt> Protected<T> for HybridProtection<T> {
 }
 
 impl<T: RefCnt> Borrow<T> for HybridProtection<T> {
-    #[inline]
     fn borrow(&self) -> &T {
         &self.ptr
     }
@@ -152,7 +145,6 @@ where
     T: RefCnt,
 {
     type Protected = HybridProtection<T>;
-    #[inline]
     fn assert_ptr_supported(&self, ptr: *const T::Base) {
         // FIXME: Get rid of this assumption
         assert_eq!(ptr as usize & TAG_MASK, 0);

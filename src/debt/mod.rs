@@ -41,7 +41,6 @@ impl Debt {
     /// If it got changed in the meantime, returns the (already protected) replacement value.
     ///
     /// This is for the helping strategy (allocated with new_helping).
-    #[inline]
     pub(crate) fn confirm(&self, gen: usize, ptr_addr: usize) -> Result<(), usize> {
         // AcqRel -> Release to publish everything (do we need to publish anything?)/make sure
         // sutff stays "inside" the lock.
@@ -72,7 +71,6 @@ impl Debt {
     /// * It also relies on the fact the same thing is not stuffed both inside an `Arc` and `Rc` or
     ///   something like that, but that sounds like a reasonable assumption. Someone storing it
     ///   through `ArcSwap<T>` and someone else with `ArcSwapOption<T>` will work.
-    #[inline]
     pub(crate) fn pay<T: RefCnt>(&self, ptr: *const T::Base) -> bool {
         self.0
             // If we don't change anything because there's something else, Relaxed is fine.
@@ -141,7 +139,6 @@ impl Debt {
     }
 
     /// Checks if the debt is empty, eg Debt::NONE
-    #[inline]
     pub(crate) fn is_empty(&self) -> bool {
         self.0.load(Relaxed) == Self::NONE
     }

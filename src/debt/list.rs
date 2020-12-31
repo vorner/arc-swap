@@ -37,7 +37,6 @@ static LIST_HEAD: AtomicPtr<Node> = AtomicPtr::new(ptr::null_mut());
 pub(crate) struct NodeReservation<'a>(&'a Node);
 
 impl Drop for NodeReservation<'_> {
-    #[inline]
     fn drop(&mut self) {
         self.0.active_writers.fetch_sub(1, Release);
     }
@@ -113,7 +112,6 @@ impl Node {
     }
 
     /// Mark this node that a writer is currently playing with it.
-    #[inline]
     pub(super) fn reserve_writer(&self) -> NodeReservation {
         self.active_writers.fetch_add(1, Acquire);
         NodeReservation(self)
@@ -123,7 +121,6 @@ impl Node {
     ///
     /// Either a new one is created, or previous one is reused. The node is claimed to become
     /// in_use.
-    #[inline(never)]
     fn get() -> &'static Self {
         // Try to find an unused one in the chain and reuse it.
         Self::traverse(|node| {
@@ -169,18 +166,15 @@ impl Node {
     }
 
     /// Iterate over the fast slots.
-    #[inline]
     pub(crate) fn fast_slots(&self) -> Iter<Debt> {
         self.fast.into_iter()
     }
 
     /// Access the helping slot.
-    #[inline]
     pub(crate) fn helping_slot(&self) -> &Debt {
         self.helping.slot()
     }
 
-    #[inline]
     pub(super) fn help<R, T>(&self, gen: usize, storage_addr: usize, replacement: &R) -> bool
     where
         T: RefCnt,
@@ -205,7 +199,6 @@ pub(crate) struct LocalNode {
 }
 
 impl LocalNode {
-    #[inline]
     pub(crate) fn with<R, F: FnOnce(&LocalNode) -> R>(f: F) -> R {
         let f = Cell::new(Some(f));
         THREAD_HEAD
@@ -241,14 +234,12 @@ impl LocalNode {
     ///
     /// This is technically lock-free on the first call in a given thread and wait-free on all the
     /// other accesses.
-    #[inline]
     pub(crate) fn new_fast(&self, ptr: usize) -> Option<&'static Debt> {
         let node = &self.node.get().expect("LocalNode::with ensures it is set");
         assert_eq!(node.in_use.load(Relaxed), NODE_USED);
         node.fast.get_debt(ptr, &self.fast)
     }
 
-    #[inline]
     pub(crate) fn new_helping(&self, ptr: usize) -> (&'static Debt, usize) {
         let node = &self.node.get().expect("LocalNode::with ensures it is set");
         assert_eq!(node.in_use.load(Relaxed), NODE_USED);

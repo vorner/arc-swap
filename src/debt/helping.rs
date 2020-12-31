@@ -26,12 +26,10 @@ pub(super) struct Slots {
 }
 
 impl Slots {
-    #[inline]
     pub(super) fn slot(&self) -> &Debt {
         &self.slot
     }
 
-    #[inline]
     pub(super) fn get_debt(&self, ptr: usize, local: &Local) -> (usize, bool) {
         // Incrementing by 4 ensures we always have enough space for 2 bit of tags.
         let gen = local.generation.get().wrapping_add(4);
@@ -57,7 +55,6 @@ impl Slots {
         (gen, discard)
     }
 
-    #[inline]
     pub(super) fn help<R, T>(&self, gen: usize, storage_addr: usize, replacement: &R) -> bool
     where
         T: RefCnt,
