@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use arc_swap::access::{Access, Map};
+use arc_swap::cache::Cache;
 use arc_swap::ArcSwap;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use crossbeam_utils::thread;
@@ -27,20 +28,26 @@ fn batch(c: &mut Criterion, name: &str, shared_number: &ArcSwap<usize>) {
             black_box(shared_number.load_full());
         })
     });
-    // Here we simulate running out of the debt slots scenario
-    const MANY: usize = 32;
-    let mut guards = Vec::with_capacity(MANY);
     g.bench_function("load_many", |b| {
+        // Here we simulate running out of the debt slots scenario
+        const MANY: usize = 32;
+        let mut guards = Vec::with_capacity(MANY);
         b.iter(|| {
-            for _ in 0..MANY {
-                guards.push(black_box(shared_number.load()));
+            guards.push(black_box(shared_number.load()));
+            if guards.len() == MANY {
+                guards.clear();
             }
-            guards.clear();
         })
     });
     g.bench_function("store", |b| {
         b.iter(|| {
             black_box(shared_number.store(Arc::new(42)));
+        })
+    });
+    g.bench_function("cache", |b| {
+        let mut cache = Cache::new(shared_number);
+        b.iter(|| {
+            black_box(cache.load());
         })
     });
 
