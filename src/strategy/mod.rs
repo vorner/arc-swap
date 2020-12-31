@@ -46,7 +46,6 @@ mod helping;
 mod hybrid;
 mod rw_lock;
 
-use self::helping::Helping;
 use self::hybrid::HybridStrategy;
 
 /// The default strategy.
@@ -75,7 +74,7 @@ use self::hybrid::HybridStrategy;
 /// similar or better properties.
 ///
 /// [`load`]: crate::ArcSwapAny::load
-pub type DefaultStrategy = HybridStrategy<Helping>;
+pub type DefaultStrategy = HybridStrategy;
 
 /// Strategy for isolating instances.
 ///

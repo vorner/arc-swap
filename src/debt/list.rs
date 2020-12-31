@@ -25,6 +25,7 @@ use std::sync::atomic::{AtomicPtr, AtomicUsize};
 use super::fast::{Local as FastLocal, Slots as FastSlots};
 use super::helping::{Local as HelpingLocal, Slots as HelpingSlots};
 use super::Debt;
+use crate::RefCnt;
 
 const NODE_UNUSED: usize = 0;
 const NODE_USED: usize = 1;
@@ -84,11 +85,6 @@ impl Node {
             current = node.next;
         }
         None
-    }
-
-    // FIXME: Abstraction at the wrong place
-    pub(crate) fn active_addr(&self) -> &AtomicUsize {
-        &self.helping.active_addr
     }
 
     /// Put the current thread node into cooldown
@@ -178,10 +174,19 @@ impl Node {
         self.fast.into_iter()
     }
 
-    /// Iterate over the helping slots.
+    /// Access the helping slot.
     #[inline]
-    pub(crate) fn helping_slots(&self) -> Iter<Debt> {
-        self.helping.into_iter()
+    pub(crate) fn helping_slot(&self) -> &Debt {
+        self.helping.slot()
+    }
+
+    #[inline]
+    pub(super) fn help<R, T>(&self, gen: usize, storage_addr: usize, replacement: &R) -> bool
+    where
+        T: RefCnt,
+        R: Fn() -> T,
+    {
+        self.helping.help(gen, storage_addr, replacement)
     }
 }
 
@@ -229,6 +234,13 @@ impl LocalNode {
             })
     }
 
+    /// Creates a new debt.
+    ///
+    /// This stores the debt of the given pointer (untyped, casted into an usize) and returns a
+    /// reference to that slot, or gives up with `None` if all the slots are currently full.
+    ///
+    /// This is technically lock-free on the first call in a given thread and wait-free on all the
+    /// other accesses.
     #[inline]
     pub(crate) fn new_fast(&self, ptr: usize) -> Option<&'static Debt> {
         let node = &self.node.get().expect("LocalNode::with ensures it is set");
@@ -237,17 +249,17 @@ impl LocalNode {
     }
 
     #[inline]
-    pub(crate) fn new_helping(&self, ptr: usize) -> (&'static Debt, bool, usize) {
+    pub(crate) fn new_helping(&self, ptr: usize) -> (&'static Debt, usize) {
         let node = &self.node.get().expect("LocalNode::with ensures it is set");
         assert_eq!(node.in_use.load(Relaxed), NODE_USED);
-        let (debt, last, gen, discard) = node.helping.get_debt(ptr, &self.helping);
+        let (gen, discard) = node.helping.get_debt(ptr, &self.helping);
         if discard {
             // Too many generations happened, make sure the writers give the poor node a break for
             // a while so they don't observe the generation wrapping around.
             node.start_cooldown();
             self.node.take();
         }
-        (debt, last, gen)
+        (node.helping_slot(), gen)
     }
 }
 
@@ -281,7 +293,7 @@ mod tests {
     impl Node {
         fn is_empty(&self) -> bool {
             self.fast_slots()
-                .chain(self.helping_slots())
+                .chain(std::iter::once(self.helping_slot()))
                 .all(|d| d.0.load(Relaxed) == Debt::NONE)
         }
 

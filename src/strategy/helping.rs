@@ -107,94 +107,15 @@
 // the debts that are there must have existed before that exclusive ownership was acquired by
 // whoever drops it.
 
-use std::borrow::Borrow;
-use std::mem::{self, ManuallyDrop};
-use std::ops::Deref;
-use std::ptr;
+/*
 use std::sync::atomic::AtomicPtr;
 use std::sync::atomic::Ordering::*;
 
-use super::sealed::{CaS, InnerStrategy, Protected};
+use super::sealed::{InnerStrategy, Protected};
 use crate::debt::{Debt, REPLACEMENT_TAG, TAG_MASK};
-use crate::{AsRaw, RefCnt};
-
-pub struct Protection<T: RefCnt> {
-    debt: Option<&'static Debt>,
-    ptr: ManuallyDrop<T>,
-}
-
-impl<T: RefCnt> Protection<T> {
-    #[inline]
-    unsafe fn new(ptr: *const T::Base, debt: Option<&'static Debt>) -> Self {
-        Self {
-            debt,
-            ptr: ManuallyDrop::new(T::from_ptr(ptr)),
-        }
-    }
-}
-
-impl<T: RefCnt> Drop for Protection<T> {
-    #[inline]
-    fn drop(&mut self) {
-        match self.debt.take() {
-            // We have our own copy of Arc, so we don't need a protection. Do nothing (but release
-            // the Arc below).
-            None => (),
-            // If we owed something, just return the debt. We don't have a pointer owned, so
-            // nothing to release.
-            Some(debt) => {
-                let ptr = T::as_ptr(&self.ptr);
-                if debt.pay::<T>(ptr) {
-                    return;
-                }
-                // But if the debt was already paid for us, we need to release the pointer, as we
-                // were effectively already in the Unprotected mode.
-            }
-        }
-        // Equivalent to T::dec(ptr)
-        unsafe { ManuallyDrop::drop(&mut self.ptr) };
-    }
-}
-
-impl<T: RefCnt> Protected<T> for Protection<T> {
-    #[inline]
-    fn from_inner(ptr: T) -> Self {
-        Self {
-            debt: None,
-            ptr: ManuallyDrop::new(ptr),
-        }
-    }
-
-    #[inline]
-    fn into_inner(mut self) -> T {
-        // Drop any debt and release any lock held by the given guard and return a
-        // full-featured value that even can outlive the ArcSwap it originated from.
-        match self.debt.take() {
-            None => (), // We have a fully loaded ref-counted pointer.
-            Some(debt) => {
-                let ptr = T::inc(&self.ptr);
-                if !debt.pay::<T>(ptr) {
-                    unsafe { T::dec(ptr) };
-                }
-            }
-        }
-
-        // The ptr::read & forget is something like a cheating move. We can't move it out, because
-        // we have a destructor and Rust doesn't allow us to do that.
-        // (it's basically ManuallyDrop::take, but that one is only since 1.42.0 and that's too new
-        // for us).
-        let inner = unsafe { ptr::read(self.ptr.deref()) };
-        mem::forget(self);
-        inner
-    }
-}
-
-impl<T: RefCnt> Borrow<T> for Protection<T> {
-    #[inline]
-    fn borrow(&self) -> &T {
-        &self.ptr
-    }
-}
+use crate::RefCnt;
+// It happens to be the same one, so we just borrow it.
+use super::hybrid::HybridProtection as Protection;
 
 /// A strategy where a writer helps the reader in case there's a collision.
 /// Which makes it possible for the writer to move forward. We don't use the generation lock here,
@@ -216,7 +137,7 @@ impl<T: RefCnt> Borrow<T> for Protection<T> {
 pub struct Helping;
 
 impl<T: RefCnt> InnerStrategy<T> for Helping {
-    type Protected = Protection<T>;
+    type Protected = T;
 
     /// Check that the pointer conforms to our idea how it should be aligned.
     ///
@@ -231,10 +152,10 @@ impl<T: RefCnt> InnerStrategy<T> for Helping {
     }
 
     #[inline]
-    unsafe fn load(&self, storage: &AtomicPtr<T::Base>) -> Self::Protected {
+    unsafe fn load(&self, storage: &AtomicPtr<T::Base>) -> T {
         // First, we claim a debt slot and store the address of the atomic pointer there, so the
         // writer can optionally help us out with loading and protecting something.
-        let (debt, last, gen) = Debt::new_helping(storage as *const _ as usize);
+        let (debt, gen) = Debt::new_helping(storage as *const _ as usize);
         // We already synchronized the start of the sequence by SeqCst in the Debt::new vs swap on
         // the pointer. We just need to make sure to bring the pointee in (this can be newer than
         // what we got in the Debt)
@@ -245,14 +166,7 @@ impl<T: RefCnt> InnerStrategy<T> for Helping {
         match debt.confirm(gen, ptr_addr) {
             Ok(()) => {
                 // The fast path -> we got the debt confirmed alright.
-                let result = Protection::new(candidate, Some(debt));
-                if last {
-                    // If we got the last debt slot, we must pay it back before proceeding, so
-                    // others can get a slot too.
-                    Protection::from_inner(Protection::into_inner(result))
-                } else {
-                    result
-                }
+                Protection::new(candidate, Some(debt)).into_inner()
             }
             Err(replacement) => {
                 // We got a (possibly) different pointer out. But that one is already protected and
@@ -266,55 +180,16 @@ impl<T: RefCnt> InnerStrategy<T> for Helping {
                 // TODO
                 //debug_assert_eq!(NO_DEBT, debt.0.load(Relaxed));
                 let replacement = replacement & !TAG_MASK; // Remove the tag
-                Protection::new(replacement as *const _, None)
+                Protection::new(replacement as *const _, None).into_inner()
             }
         }
     }
 
-    unsafe fn wait_for_readers(&self, old: *const T::Base, storage: &AtomicPtr<T::Base>) {
-        // The pay_all may need to provide fresh replacement values if someone else is loading from
-        // this particular storage. We do so by the exact same way, by `load` ‒ it's OK, a writer
-        // does not hold a slot and the reader doesn't recurse back into writer, so we won't run
-        // out of slots.
-        let replacement = || Protection::into_inner(self.load(storage));
-        Debt::pay_all_helping::<T, _>(old, storage as *const _ as usize, replacement);
+    unsafe fn wait_for_readers(&self, _: *const T::Base, _: &AtomicPtr<T::Base>) {
+        unimplemented!()
     }
 }
-
-impl<T: RefCnt> CaS<T> for Helping {
-    unsafe fn compare_and_swap<C: AsRaw<T::Base>>(
-        &self,
-        storage: &AtomicPtr<T::Base>,
-        current: C,
-        new: T,
-    ) -> Self::Protected {
-        loop {
-            let old = <Self as InnerStrategy<T>>::load(self, storage);
-            // Observation of their inequality is enough to make a verdict
-            if old.ptr.deref().as_raw() != current.as_raw() {
-                return old;
-            }
-            // If they are still equal, put the new one in.
-            let new_raw = T::as_ptr(&new);
-            if storage
-                .compare_exchange_weak(current.as_raw(), new_raw, SeqCst, Relaxed)
-                .is_ok()
-            {
-                // We successfully put the new value in. The ref count went in there too.
-                T::into_ptr(new);
-                <Self as InnerStrategy<T>>::wait_for_readers(
-                    self,
-                    old.ptr.deref().as_raw(),
-                    storage,
-                );
-                // We just got one ref count out of the storage and we have one in old. We don't
-                // need two.
-                T::dec(old.ptr.deref().as_raw());
-                return old;
-            }
-        }
-    }
-}
+*/
 
 #[cfg(test)]
 mod tests {

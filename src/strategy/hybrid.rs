@@ -2,10 +2,11 @@ use std::borrow::Borrow;
 use std::mem::{self, ManuallyDrop};
 use std::ops::Deref;
 use std::ptr;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::AtomicPtr;
+use std::sync::atomic::Ordering::*;
 
 use super::sealed::{CaS, InnerStrategy, Protected};
-use crate::debt::Debt;
+use crate::debt::{Debt, LocalNode, REPLACEMENT_TAG, TAG_MASK};
 use crate::ref_cnt::RefCnt;
 
 pub struct HybridProtection<T: RefCnt> {
@@ -15,20 +16,20 @@ pub struct HybridProtection<T: RefCnt> {
 
 impl<T: RefCnt> HybridProtection<T> {
     #[inline]
-    unsafe fn new(ptr: *const T::Base, debt: Option<&'static Debt>) -> Self {
+    pub(super) unsafe fn new(ptr: *const T::Base, debt: Option<&'static Debt>) -> Self {
         Self {
             debt,
             ptr: ManuallyDrop::new(T::from_ptr(ptr)),
         }
     }
     #[inline]
-    fn attempt(storage: &AtomicPtr<T::Base>) -> Option<Self> {
+    fn attempt(node: &LocalNode, storage: &AtomicPtr<T::Base>) -> Option<Self> {
         // Relaxed is good enough here, see the Acquire below
-        let ptr = storage.load(Ordering::Relaxed);
+        let ptr = storage.load(Relaxed);
         // Try to get a debt slot. If not possible, fail.
-        let debt = Debt::new_fast(ptr as usize)?;
+        let debt = node.new_fast(ptr as usize)?;
 
-        let confirm = storage.load(Ordering::Acquire);
+        let confirm = storage.load(Acquire);
         if ptr == confirm {
             // Successfully got a debt
             Some(unsafe { Self::new(ptr, Some(debt)) })
@@ -41,6 +42,44 @@ impl<T: RefCnt> HybridProtection<T> {
             // for by someone else, so we are fine using it.
             Some(unsafe { Self::new(ptr, None) })
         }
+    }
+
+    #[inline]
+    fn fallback(node: &LocalNode, storage: &AtomicPtr<T::Base>) -> Self {
+        // First, we claim a debt slot and store the address of the atomic pointer there, so the
+        // writer can optionally help us out with loading and protecting something.
+        let (debt, gen) = node.new_helping(storage as *const _ as usize);
+        // We already synchronized the start of the sequence by SeqCst in the new_helping vs swap on
+        // the pointer. We just need to make sure to bring the pointee in (this can be newer than
+        // what we got in the Debt)
+        let candidate = storage.load(Acquire);
+
+        let ptr_addr = candidate as usize;
+        // Try to replace the debt with our candidate.
+        match debt.confirm(gen, ptr_addr) {
+            Ok(()) => {
+                // The fast path -> we got the debt confirmed alright.
+                Self::from_inner(unsafe { Self::new(candidate, Some(debt)).into_inner() })
+            }
+            Err(replacement) => {
+                // We got a (possibly) different pointer out. But that one is already protected and
+                // the slot is paid back. It's not possible someone could have changed our gen to
+                // something but a replacement.
+                debug_assert_eq!(
+                    replacement & TAG_MASK,
+                    REPLACEMENT_TAG,
+                    "Missing tag on replacement",
+                );
+                debug_assert!(debt.is_empty());
+                let replacement = replacement & !TAG_MASK; // Remove the tag
+                unsafe { Self::new(replacement as *const _, None) }
+            }
+        }
+    }
+
+    #[inline]
+    fn as_ptr(&self) -> *const T::Base {
+        T::as_ptr(self.ptr.deref())
     }
 }
 
@@ -106,116 +145,61 @@ impl<T: RefCnt> Borrow<T> for HybridProtection<T> {
 }
 
 #[derive(Clone, Default)]
-pub struct HybridStrategy<F> {
-    fallback: F,
-}
+pub struct HybridStrategy;
 
-impl<T, F> InnerStrategy<T> for HybridStrategy<F>
+impl<T> InnerStrategy<T> for HybridStrategy
 where
     T: RefCnt,
-    F: InnerStrategy<T>,
 {
     type Protected = HybridProtection<T>;
+    #[inline]
     fn assert_ptr_supported(&self, ptr: *const T::Base) {
-        self.fallback.assert_ptr_supported(ptr)
+        // FIXME: Get rid of this assumption
+        assert_eq!(ptr as usize & TAG_MASK, 0);
     }
     unsafe fn load(&self, storage: &AtomicPtr<T::Base>) -> Self::Protected {
-        HybridProtection::attempt(storage).unwrap_or_else(|| {
-            let loaded = self.fallback.load(storage).into_inner();
-            HybridProtection {
-                debt: None,
-                ptr: ManuallyDrop::new(loaded),
-            }
+        LocalNode::with(|node| {
+            HybridProtection::attempt(node, storage)
+                .unwrap_or_else(|| HybridProtection::fallback(node, storage))
         })
     }
     unsafe fn wait_for_readers(&self, old: *const T::Base, storage: &AtomicPtr<T::Base>) {
-        self.fallback.wait_for_readers(old, storage);
-        Debt::pay_all_fast::<T>(old);
+        // The pay_all may need to provide fresh replacement values if someone else is loading from
+        // this particular storage. We do so by the exact same way, by `load` ‒ it's OK, a writer
+        // does not hold a slot and the reader doesn't recurse back into writer, so we won't run
+        // out of slots.
+        let replacement = || self.load(storage).into_inner();
+        Debt::pay_all::<T, _>(old, storage as *const _ as usize, replacement);
     }
 }
 
-/*
-impl<T: RefCnt, L: LockStorage> CaS<T> for HybridStrategy<GenLockStrategy<L>> {
+impl<T: RefCnt> CaS<T> for HybridStrategy {
     unsafe fn compare_and_swap<C: crate::as_raw::AsRaw<T::Base>>(
         &self,
         storage: &AtomicPtr<T::Base>,
         current: C,
         new: T,
     ) -> Self::Protected {
-        let cur_ptr = current.as_raw();
-        let new = T::into_ptr(new);
-
-        // As noted above, this method has either semantics of load or of store. We don't know
-        // which ones upfront, so we need to implement safety measures for both.
-        let gen = GenLock::new(&self.fallback.0);
-
-        let swap_result =
-            storage.compare_exchange(cur_ptr, new, Ordering::SeqCst, Ordering::SeqCst);
-        let (previous_ptr, swapped) = match swap_result {
-            Ok(previous) => (previous, true),
-            Err(previous) => (previous, false),
-        };
-
-        // Drop it here, because:
-        // * We can't drop it before the compare_and_swap ‒ in such case, it could get recycled,
-        //   put into the pointer by another thread with a different value and create a fake
-        //   success (ABA).
-        // * We drop it before waiting for readers, because it could have been a Guard with a
-        //   generation lock. In such case, the caller doesn't have it any more and can't check if
-        //   it succeeded, but that's OK.
-        drop(current);
-
-        let debt = if swapped {
-            // New went in, previous out, but their ref counts are correct. So nothing to do here.
-            None
-        } else {
-            // Previous is a new copy of what is inside (and it stays there as well), so bump its
-            // ref count. New is thrown away so dec its ref count (but do it outside of the
-            // gen-lock).
-            //
-            // We try to do that by registering a debt and only if that fails by actually bumping
-            // the ref.
-            let debt = Debt::new_fast(previous_ptr as usize);
-            if debt.is_none() {
-                let previous = T::from_ptr(previous_ptr);
-                T::inc(&previous);
-                T::into_ptr(previous);
+        loop {
+            let old = <Self as InnerStrategy<T>>::load(self, storage);
+            // Observation of their inequality is enough to make a verdict
+            if old.as_ptr() != current.as_raw() {
+                return old;
             }
-            debt
-        };
-
-        drop(gen);
-
-        if swapped {
-            // We swapped. Before releasing the (possibly only) ref count of previous to user, wait
-            // for all readers to make sure there are no more untracked copies of it.
-            //
-            // Why is rustc confused about self.wait_for_readers???
-            InnerStrategy::<T>::wait_for_readers(self, previous_ptr, storage);
-        } else {
-            // We didn't swap, so new is black-holed.
-            T::dec(new);
-        }
-
-        HybridProtection::new(previous_ptr, debt)
-    }
-}
-*/
-
-impl<T: RefCnt, F: CaS<T>> CaS<T> for HybridStrategy<F> {
-    unsafe fn compare_and_swap<C: crate::as_raw::AsRaw<T::Base>>(
-        &self,
-        storage: &AtomicPtr<T::Base>,
-        current: C,
-        new: T,
-    ) -> Self::Protected {
-        HybridProtection {
-            debt: None,
-            ptr: ManuallyDrop::new(
-                self.fallback
-                    .compare_and_swap(storage, current, new)
-                    .into_inner(),
-            ),
+            // If they are still equal, put the new one in.
+            let new_raw = T::as_ptr(&new);
+            if storage
+                .compare_exchange_weak(current.as_raw(), new_raw, SeqCst, Relaxed)
+                .is_ok()
+            {
+                // We successfully put the new value in. The ref count went in there too.
+                T::into_ptr(new);
+                <Self as InnerStrategy<T>>::wait_for_readers(self, old.as_ptr(), storage);
+                // We just got one ref count out of the storage and we have one in old. We don't
+                // need two.
+                T::dec(old.as_ptr());
+                return old;
+            }
         }
     }
 }
