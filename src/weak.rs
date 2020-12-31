@@ -1,3 +1,4 @@
+use std::ptr;
 use std::rc::Weak as RcWeak;
 use std::sync::Weak;
 
@@ -6,26 +7,50 @@ use crate::RefCnt;
 unsafe impl<T> RefCnt for Weak<T> {
     type Base = T;
     fn as_ptr(me: &Self) -> *mut T {
-        Weak::as_ptr(me) as *mut T
+        if Weak::ptr_eq(&Weak::new(), me) {
+            ptr::null_mut()
+        } else {
+            Weak::as_ptr(me) as *mut T
+        }
     }
     fn into_ptr(me: Self) -> *mut T {
-        Weak::into_raw(me) as *mut T
+        if Weak::ptr_eq(&Weak::new(), &me) {
+            ptr::null_mut()
+        } else {
+            Weak::into_raw(me) as *mut T
+        }
     }
     unsafe fn from_ptr(ptr: *const T) -> Self {
-        Weak::from_raw(ptr)
+        if ptr.is_null() {
+            Weak::new()
+        } else {
+            Weak::from_raw(ptr)
+        }
     }
 }
 
 unsafe impl<T> RefCnt for RcWeak<T> {
     type Base = T;
     fn as_ptr(me: &Self) -> *mut T {
-        RcWeak::as_ptr(me) as *mut T
+        if RcWeak::ptr_eq(&RcWeak::new(), me) {
+            ptr::null_mut()
+        } else {
+            RcWeak::as_ptr(me) as *mut T
+        }
     }
     fn into_ptr(me: Self) -> *mut T {
-        RcWeak::into_raw(me) as *mut T
+        if RcWeak::ptr_eq(&RcWeak::new(), &me) {
+            ptr::null_mut()
+        } else {
+            RcWeak::into_raw(me) as *mut T
+        }
     }
     unsafe fn from_ptr(ptr: *const T) -> Self {
-        RcWeak::from_raw(ptr)
+        if ptr.is_null() {
+            RcWeak::new()
+        } else {
+            RcWeak::from_raw(ptr)
+        }
     }
 }
 
