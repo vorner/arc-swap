@@ -187,9 +187,10 @@ impl Debt {
             // Check it is in use by *us*
             debug_assert_eq!(node.in_use.load(Relaxed), NODE_USED);
 
-            let gen = head.generation.get().wrapping_add(1);
+            // Incrementing by 4 ensures we always have enough space for 2 bit of tags.
+            let gen = head.generation.get().wrapping_add(4);
+            debug_assert_eq!(gen & GEN_TAG, 0);
             head.generation.set(gen);
-            let gen = gen << 2;
             let discard = gen == 0;
             let gen = gen | GEN_TAG;
             // We will sync by the write to the debt. But we also sync the value of the previous
@@ -672,6 +673,13 @@ impl<T: RefCnt> InnerStrategy<T> for Helping {
         // the pointer. We just need to make sure to bring the pointee in (this can be newer than
         // what we got in the Debt)
         let candidate = storage.load(Acquire);
+        // TODO: We should check this much sooner, possibly when the pointer gets into the storage.
+        assert_eq!(
+            candidate as usize & TAG_MASK,
+            0,
+            "Not enough space for tags"
+        );
+
         let ptr_addr = candidate as usize;
         // Try to replace the debt with our candidate.
         match debt.confirm(gen, ptr_addr) {
@@ -796,7 +804,7 @@ mod tests {
         let s = AtomicPtr::new(T::as_ptr(&a) as *mut usize);
         let p = unsafe { <Helping as InnerStrategy<T>>::load(&Helping, &s) };
         // Force it to overflow during the next one.
-        THREAD_HEAD.with(|h| h.generation.set(usize::MAX));
+        THREAD_HEAD.with(|h| h.generation.set(usize::MAX / 4 * 4));
         drop(p);
         // When it overflows, the node is released back to the pool (no good way to check it got
         // into cooldown, because some other thread might claim it in between).
@@ -807,5 +815,17 @@ mod tests {
         let p = unsafe { <Helping as InnerStrategy<T>>::load(&Helping, &s) };
         THREAD_HEAD.with(|h| assert!(h.node.get().is_some()));
         drop(p);
+    }
+
+    /// Check some alignment assumptions.
+    ///
+    /// Note that we also check them at runtime, in case someone doesn't run the tests.
+    #[test]
+    fn alignments() {
+        // We don't need _exactly_ this, but that will ensure that the pointer to data is also
+        // aligned to that. Or at least always unaligned to that.
+        assert!(mem::align_of::<Arc<u8>>() >= 4);
+        assert_eq!(Arc::as_ptr(&Arc::new(0u8)) as usize % 4, 0);
+        assert!(mem::align_of::<AtomicUsize>() >= 4);
     }
 }
