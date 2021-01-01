@@ -3,7 +3,7 @@
 use std::mem;
 use std::sync::Arc;
 
-use arc_swap::{ArcSwap, ArcSwapAny, DefaultStrategy, IndependentStrategy};
+use arc_swap::{ArcSwapAny, DefaultStrategy, IndependentStrategy};
 use once_cell::sync::Lazy;
 use proptest::prelude::*;
 
@@ -59,6 +59,7 @@ macro_rules! t {
                 instructions in proptest::collection::vec(SelInstruction::random(), 1..SIZE),
             ) {
                 let mut bare = Arc::clone(&ARCS[0]);
+                #[allow(deprecated)] // We use "deprecated" testing strategies in here.
                 let a = ArcSwapAny::<_, $strategy>::from(Arc::clone(&ARCS[0]));
                 for ins in instructions {
                     match ins {
@@ -96,7 +97,8 @@ macro_rules! t {
                 ) {
                     use crate::OpsInstruction::*;
                     let mut m = 0;
-                    let a = ArcSwap::from_pointee(0usize);
+                    #[allow(deprecated)] // We use "deprecated" testing strategies in here.
+                    let a = ArcSwapAny::<_, $strategy>::new(Arc::new(0usize));
                     for ins in instructions {
                         match ins {
                             Store(v) => {
@@ -119,3 +121,5 @@ macro_rules! t {
 
 t!(@full => default, DefaultStrategy);
 t!(@full => independent, IndependentStrategy);
+#[cfg(feature = "internal-test-strategies")]
+t!(@full => full_slots, arc_swap::strategy::test_strategies::FillFastSlots);

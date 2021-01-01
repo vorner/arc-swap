@@ -19,6 +19,8 @@ maintenance = { status = "actively-developed" }
 [features]
 # ArcSwapWeak (for std::sycn::Weak) support
 weak = []
+# Some strategies used for testing few internal cornercases. *DO NOT USE* (no stability guarantees and their performance is likely very bad).
+internal-test-strategies = []
 
 [dependencies]
 

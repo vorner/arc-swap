@@ -3,8 +3,7 @@
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::*;
 
-pub(crate) use self::list::LocalNode;
-use self::list::Node;
+pub(crate) use self::list::{LocalNode, Node};
 use super::RefCnt;
 
 mod fast;
@@ -14,7 +13,8 @@ mod list;
 /// One debt slot.
 ///
 /// It may contain an „owed“ reference count.
-pub(crate) struct Debt(AtomicUsize);
+#[derive(Debug)]
+pub(crate) struct Debt(pub(crate) AtomicUsize);
 
 impl Debt {
     /// The value of pointer `3` should be pretty safe, for two reasons:
@@ -22,7 +22,7 @@ impl Debt {
     /// * It's an odd number, but the pointers we have are likely aligned at least to the word size,
     ///   because the data at the end of the `Arc` has the counters.
     /// * It's in the very first page where NULL lives, so it's not mapped.
-    const NONE: usize = 0b11;
+    pub(crate) const NONE: usize = 0b11;
 }
 
 impl Default for Debt {

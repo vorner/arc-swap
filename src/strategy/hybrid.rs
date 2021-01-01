@@ -61,7 +61,9 @@ impl<T: RefCnt> HybridProtection<T> {
             Err((unused_debt, replacement)) => {
                 // The debt is on the candidate we provided and it is unused, we so we just pay it
                 // back right away.
-                unused_debt.pay::<T>(candidate);
+                if !unused_debt.pay::<T>(candidate) {
+                    unsafe { T::dec(candidate) };
+                }
                 // We got a (possibly) different pointer out. But that one is already protected and
                 // the slot is paid back.
                 unsafe { Self::new(replacement as *mut _, None) }
@@ -131,18 +133,36 @@ impl<T: RefCnt> Borrow<T> for HybridProtection<T> {
     }
 }
 
-#[derive(Clone, Default)]
-pub struct HybridStrategy;
+pub trait Config {
+    const USE_FAST: bool;
+}
 
-impl<T> InnerStrategy<T> for HybridStrategy
+#[derive(Clone, Default)]
+pub struct DefaultConfig;
+
+impl Config for DefaultConfig {
+    const USE_FAST: bool = true;
+}
+
+#[derive(Clone, Default)]
+pub struct HybridStrategy<Cfg> {
+    _config: Cfg,
+}
+
+impl<T, Cfg> InnerStrategy<T> for HybridStrategy<Cfg>
 where
     T: RefCnt,
+    Cfg: Config,
 {
     type Protected = HybridProtection<T>;
     unsafe fn load(&self, storage: &AtomicPtr<T::Base>) -> Self::Protected {
         LocalNode::with(|node| {
-            HybridProtection::attempt(node, storage)
-                .unwrap_or_else(|| HybridProtection::fallback(node, storage))
+            let fast = if Cfg::USE_FAST {
+                HybridProtection::attempt(node, storage)
+            } else {
+                None
+            };
+            fast.unwrap_or_else(|| HybridProtection::fallback(node, storage))
         })
     }
     unsafe fn wait_for_readers(&self, old: *const T::Base, storage: &AtomicPtr<T::Base>) {
@@ -155,7 +175,7 @@ where
     }
 }
 
-impl<T: RefCnt> CaS<T> for HybridStrategy {
+impl<T: RefCnt, Cfg: Config> CaS<T> for HybridStrategy<Cfg> {
     unsafe fn compare_and_swap<C: crate::as_raw::AsRaw<T::Base>>(
         &self,
         storage: &AtomicPtr<T::Base>,

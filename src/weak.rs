@@ -62,6 +62,7 @@ macro_rules! t {
 
             use crate::ArcSwapAny;
 
+            #[allow(deprecated)] // We use "deprecated" testing strategies in here.
             type ArcSwapWeak<T> = ArcSwapAny<Weak<T>, $strategy>;
 
             // Convert to weak, push it through the shared and pull it out again.
@@ -78,8 +79,6 @@ macro_rules! t {
 
             // Replace a weak pointer with a NULL one
             #[test]
-            // Miri-bug in std, see https://github.com/rust-lang/rust/issues/80365
-            //#[cfg_attr(miri, ignore)]
             fn reset() {
                 let data = Arc::new("Hello");
                 let shared = ArcSwapWeak::new(Arc::downgrade(&data));
@@ -111,3 +110,8 @@ macro_rules! t {
 }
 
 t!(tests_default, crate::DefaultStrategy);
+#[cfg(feature = "internal-test-strategies")]
+t!(
+    tests_full_slots,
+    crate::strategy::test_strategies::FillFastSlots
+);

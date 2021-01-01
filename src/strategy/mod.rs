@@ -45,8 +45,12 @@ use crate::ref_cnt::RefCnt;
 mod helping;
 mod hybrid;
 mod rw_lock;
+// Do not use from outside of the crate.
+#[cfg(feature = "internal-test-strategies")]
+#[doc(hidden)]
+pub mod test_strategies;
 
-use self::hybrid::HybridStrategy;
+use self::hybrid::{DefaultConfig, HybridStrategy};
 
 /// The default strategy.
 ///
@@ -74,7 +78,7 @@ use self::hybrid::HybridStrategy;
 /// similar or better properties.
 ///
 /// [`load`]: crate::ArcSwapAny::load
-pub type DefaultStrategy = HybridStrategy;
+pub type DefaultStrategy = HybridStrategy<DefaultConfig>;
 
 /// Strategy for isolating instances.
 ///
