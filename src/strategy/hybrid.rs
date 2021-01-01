@@ -6,7 +6,7 @@ use std::sync::atomic::AtomicPtr;
 use std::sync::atomic::Ordering::*;
 
 use super::sealed::{CaS, InnerStrategy, Protected};
-use crate::debt::{Debt, LocalNode, REPLACEMENT_TAG, TAG_MASK};
+use crate::debt::{Debt, LocalNode};
 use crate::ref_cnt::RefCnt;
 
 pub struct HybridProtection<T: RefCnt> {
@@ -46,31 +46,25 @@ impl<T: RefCnt> HybridProtection<T> {
     fn fallback(node: &LocalNode, storage: &AtomicPtr<T::Base>) -> Self {
         // First, we claim a debt slot and store the address of the atomic pointer there, so the
         // writer can optionally help us out with loading and protecting something.
-        let (debt, gen) = node.new_helping(storage as *const _ as usize);
+        let gen = node.new_helping(storage as *const _ as usize);
         // We already synchronized the start of the sequence by SeqCst in the new_helping vs swap on
         // the pointer. We just need to make sure to bring the pointee in (this can be newer than
         // what we got in the Debt)
         let candidate = storage.load(Acquire);
 
-        let ptr_addr = candidate as usize;
         // Try to replace the debt with our candidate.
-        match debt.confirm(gen, ptr_addr) {
-            Ok(()) => {
+        match node.confirm_helping(gen, candidate as usize) {
+            Ok(debt) => {
                 // The fast path -> we got the debt confirmed alright.
                 Self::from_inner(unsafe { Self::new(candidate, Some(debt)).into_inner() })
             }
-            Err(replacement) => {
+            Err((unused_debt, replacement)) => {
+                // The debt is on the candidate we provided and it is unused, we so we just pay it
+                // back right away.
+                unused_debt.pay::<T>(candidate);
                 // We got a (possibly) different pointer out. But that one is already protected and
-                // the slot is paid back. It's not possible someone could have changed our gen to
-                // something but a replacement.
-                debug_assert_eq!(
-                    replacement & TAG_MASK,
-                    REPLACEMENT_TAG,
-                    "Missing tag on replacement",
-                );
-                debug_assert!(debt.is_empty());
-                let replacement = replacement & !TAG_MASK; // Remove the tag
-                unsafe { Self::new(replacement as *const _, None) }
+                // the slot is paid back.
+                unsafe { Self::new(replacement as *mut _, None) }
             }
         }
     }
@@ -145,10 +139,6 @@ where
     T: RefCnt,
 {
     type Protected = HybridProtection<T>;
-    fn assert_ptr_supported(&self, ptr: *const T::Base) {
-        // FIXME: Get rid of this assumption
-        assert_eq!(ptr as usize & TAG_MASK, 0);
-    }
     unsafe fn load(&self, storage: &AtomicPtr<T::Base>) -> Self::Protected {
         LocalNode::with(|node| {
             HybridProtection::attempt(node, storage)

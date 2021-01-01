@@ -3,7 +3,6 @@
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::*;
 
-pub(crate) use self::helping::{GEN_TAG, REPLACEMENT_TAG, TAG_MASK};
 pub(crate) use self::list::LocalNode;
 use self::list::Node;
 use super::RefCnt;
@@ -33,29 +32,6 @@ impl Default for Debt {
 }
 
 impl Debt {
-    /// Confirms the debt.
-    ///
-    /// Replaces the pre-debt mark (the address we are reading from) with the actual debt and
-    /// confirm it that way.
-    ///
-    /// If it got changed in the meantime, returns the (already protected) replacement value.
-    ///
-    /// This is for the helping strategy (allocated with new_helping).
-    pub(crate) fn confirm(&self, gen: usize, ptr_addr: usize) -> Result<(), usize> {
-        // AcqRel -> Release to publish everything (do we need to publish anything?)/make sure
-        // sutff stays "inside" the lock.
-        // Acquire -> we read a potentially new address, need to bring the pointee in.
-        match self.0.compare_exchange(gen, ptr_addr, AcqRel, Acquire) {
-            Ok(_) => Ok(()),
-            Err(replacement) => {
-                // Nothing synchronized by this, we just clear the slot for future reuse. Release
-                // just to make sure, but should Relaxed be enough?
-                self.0.store(Self::NONE, Release);
-                Err(replacement)
-            }
-        }
-    }
-
     /// Tries to pay the given debt.
     ///
     /// If the debt is still there, for the given pointer, it is paid and `true` is returned. If it
@@ -87,60 +63,37 @@ impl Debt {
         T: RefCnt,
         R: Fn() -> T,
     {
-        let val = unsafe { T::from_ptr(ptr) };
-        // Pre-pay one ref count that can be safely put into a debt slot to pay it.
-        T::inc(&val);
+        LocalNode::with(|local| {
+            let val = unsafe { T::from_ptr(ptr) };
+            // Pre-pay one ref count that can be safely put into a debt slot to pay it.
+            T::inc(&val);
 
-        Node::traverse::<(), _>(|node| {
-            let _reservation = node.reserve_writer();
+            Node::traverse::<(), _>(|node| {
+                // Make the cooldown trick know we are poking into this node.
+                let _reservation = node.reserve_writer();
 
-            for slot in node.fast_slots() {
-                if slot
-                    .0
-                    // TODO: Do we actually need that AcqRel, or is Release enough? Then we could
-                    // call into the above pay.
-                    .compare_exchange(ptr as usize, Self::NONE, AcqRel, Relaxed)
-                    .is_ok()
-                {
-                    // Pre-pay one more, for another future slot
-                    T::inc(&val);
-                }
-            }
-
-            let slot = node.helping_slot();
-            loop {
-                match slot
-                    .0
-                    // We don't need to release anything in here. The writes to the reference
-                    // counts take care of themselves before they drop to 0 (they are all to
-                    // the same atomic, and we are doing the decrements later on). We need to
-                    // acquire any increments done by the other threads though and we need to
-                    // acquire the active_addr
-                    .compare_exchange(ptr as usize, Self::NONE, Acquire, Acquire)
-                {
-                    Ok(_) => {
-                        // We just paid the debt by the pre-paid ref count from before.
+                let all_slots = node
+                    .fast_slots()
+                    .chain(std::iter::once(node.helping_slot()));
+                for slot in all_slots {
+                    if slot
+                        .0
+                        // TODO: Do we actually need that AcqRel, or is Release enough? Then we
+                        // could call into the above pay.
+                        .compare_exchange(ptr as usize, Self::NONE, AcqRel, Relaxed)
+                        .is_ok()
+                    {
                         // Pre-pay one more, for another future slot
                         T::inc(&val);
-                        break;
                     }
-                    Err(gen) if gen & TAG_MASK == GEN_TAG => {
-                        if node.help(gen, storage_addr, &replacement) {
-                            break;
-                        }
-                    }
-                    // OK, not interested in this slot. Either no debt or different one.
-                    Err(_) => break,
                 }
-            }
-            None
-        });
-        // Implicit dec by dropping val in here, pair for the above
-    }
 
-    /// Checks if the debt is empty, eg Debt::NONE
-    pub(crate) fn is_empty(&self) -> bool {
-        self.0.load(Relaxed) == Self::NONE
+                local.help(node, storage_addr, &replacement);
+
+                None
+            });
+            // Implicit dec by dropping val in here, pair for the above
+        })
     }
 }
 

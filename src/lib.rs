@@ -362,7 +362,6 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
         // However, we always go back to *const right away when we get the pointer on the other
         // side, so it should be fine.
         let ptr = T::into_ptr(val);
-        strategy.assert_ptr_supported(ptr);
         Self {
             ptr: AtomicPtr::new(ptr),
             _phantom_arc: PhantomData,
@@ -453,7 +452,6 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
     /// Note that this method is *not* lock-free with the [`DefaultStrategy`].
     pub fn swap(&self, new: T) -> T {
         let new = T::into_ptr(new);
-        self.strategy.assert_ptr_supported(new);
         // AcqRel needed to publish the target of the new pointer and get the target of the old
         // one.
         //
@@ -485,7 +483,6 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
         C: AsRaw<T::Base>,
         S: CaS<T>,
     {
-        self.strategy.assert_ptr_supported(T::as_ptr(&new));
         let protected = unsafe { self.strategy.compare_and_swap(&self.ptr, current, new) };
         Guard { inner: protected }
     }

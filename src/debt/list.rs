@@ -141,8 +141,7 @@ impl Node {
         // If that didn't work, create a new one and prepend to the list.
         .unwrap_or_else(|| {
             let node = Box::leak(Box::new(Node::default()));
-            // Not shared between threads yet, so ordinary write would be fine too.
-            node.in_use.store(NODE_USED, Relaxed);
+            node.helping.init();
             // We don't want to read any data in addition to the head, Relaxed is fine
             // here.
             //
@@ -173,14 +172,6 @@ impl Node {
     /// Access the helping slot.
     pub(crate) fn helping_slot(&self) -> &Debt {
         self.helping.slot()
-    }
-
-    pub(super) fn help<R, T>(&self, gen: usize, storage_addr: usize, replacement: &R) -> bool
-    where
-        T: RefCnt,
-        R: Fn() -> T,
-    {
-        self.helping.help(gen, storage_addr, replacement)
     }
 }
 
@@ -240,7 +231,7 @@ impl LocalNode {
         node.fast.get_debt(ptr, &self.fast)
     }
 
-    pub(crate) fn new_helping(&self, ptr: usize) -> (&'static Debt, usize) {
+    pub(crate) fn new_helping(&self, ptr: usize) -> usize {
         let node = &self.node.get().expect("LocalNode::with ensures it is set");
         assert_eq!(node.in_use.load(Relaxed), NODE_USED);
         let (gen, discard) = node.helping.get_debt(ptr, &self.helping);
@@ -250,7 +241,31 @@ impl LocalNode {
             node.start_cooldown();
             self.node.take();
         }
-        (node.helping_slot(), gen)
+        gen
+    }
+
+    pub(crate) fn confirm_helping(
+        &self,
+        gen: usize,
+        ptr: usize,
+    ) -> Result<&'static Debt, (&'static Debt, usize)> {
+        let node = &self.node.get().expect("LocalNode::with ensures it is set");
+        let slot = node.helping_slot();
+        node.helping
+            .confirm(gen, ptr)
+            .map(|()| slot)
+            .map_err(|repl| (slot, repl))
+    }
+
+    // FIXME: Do we need replacement be passed to us? We do pass T and the address... And we could
+    // pass storage_addr as an actual pointer or ref?
+    pub(super) fn help<R, T>(&self, who: &Node, storage_addr: usize, replacement: &R)
+    where
+        T: RefCnt,
+        R: Fn() -> T,
+    {
+        let node = &self.node.get().expect("LocalNode::with ensures it is set");
+        node.helping.help(&who.helping, storage_addr, replacement)
     }
 }
 

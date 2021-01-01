@@ -107,14 +107,6 @@ pub(crate) mod sealed {
     pub trait InnerStrategy<T: RefCnt> {
         // Drop „unlocks“
         type Protected: Protected<T>;
-
-        /// Check that platform assumptions hold.
-        ///
-        /// Eg. that the pointer is aligned to what we expect (which might be more than T::Base
-        /// alignment, because it is supposed to be _inside_ T, etc). Assert if it is not.
-        ///
-        /// Used to check things before putting them inside an arc swap.
-        fn assert_ptr_supported(&self, ptr: *const T::Base);
         unsafe fn load(&self, storage: &AtomicPtr<T::Base>) -> Self::Protected;
         unsafe fn wait_for_readers(&self, old: *const T::Base, storage: &AtomicPtr<T::Base>);
     }
