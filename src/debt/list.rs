@@ -225,6 +225,7 @@ impl LocalNode {
     ///
     /// This is technically lock-free on the first call in a given thread and wait-free on all the
     /// other accesses.
+    #[inline]
     pub(crate) fn new_fast(&self, ptr: usize) -> Option<&'static Debt> {
         let node = &self.node.get().expect("LocalNode::with ensures it is set");
         assert_eq!(node.in_use.load(Relaxed), NODE_USED);

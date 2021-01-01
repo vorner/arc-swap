@@ -47,6 +47,7 @@ impl Debt {
     /// * It also relies on the fact the same thing is not stuffed both inside an `Arc` and `Rc` or
     ///   something like that, but that sounds like a reasonable assumption. Someone storing it
     ///   through `ArcSwap<T>` and someone else with `ArcSwapOption<T>` will work.
+    #[inline]
     pub(crate) fn pay<T: RefCnt>(&self, ptr: *const T::Base) -> bool {
         self.0
             // If we don't change anything because there's something else, Relaxed is fine.
