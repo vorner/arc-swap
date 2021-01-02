@@ -42,7 +42,6 @@ use std::sync::atomic::AtomicPtr;
 
 use crate::ref_cnt::RefCnt;
 
-mod helping;
 mod hybrid;
 mod rw_lock;
 // Do not use from outside of the crate.

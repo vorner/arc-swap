@@ -1,3 +1,18 @@
+//! A hybrid strategy.
+//!
+//! This is based on debts ‒ an Arc may owe a reference, but it is marked in the debt. It is either
+//! put back (by stopping using it), or if the pointer is replaced, the writer bumps the reference
+//! count and removes the debt.
+//!
+//! The strategy uses two different slots for the debts. The first ones are faster, but fallible.
+//! If they fail (either because there's interference from a writer at the same time, or because
+//! they are full), the secondary one that is slower, but always succeeds, is used. In the latter
+//! case, the reference is bumped and this secondary debt slot is released, so it is available for
+//! further loads.
+//!
+//! See the [crate::debt] module for the actual slot manipulation. Here we just wrap them into the
+//! strategy.
+
 use std::borrow::Borrow;
 use std::mem::{self, ManuallyDrop};
 use std::ops::Deref;
@@ -22,6 +37,7 @@ impl<T: RefCnt> HybridProtection<T> {
         }
     }
 
+    /// Try getting a dept into a fast slot.
     #[inline]
     fn attempt(node: &LocalNode, storage: &AtomicPtr<T::Base>) -> Option<Self> {
         // Relaxed is good enough here, see the Acquire below
@@ -44,6 +60,7 @@ impl<T: RefCnt> HybridProtection<T> {
         }
     }
 
+    /// Get a debt slot using the slower but always successful mechanism.
     fn fallback(node: &LocalNode, storage: &AtomicPtr<T::Base>) -> Self {
         // First, we claim a debt slot and store the address of the atomic pointer there, so the
         // writer can optionally help us out with loading and protecting something.
@@ -53,7 +70,8 @@ impl<T: RefCnt> HybridProtection<T> {
         // what we got in the Debt)
         let candidate = storage.load(Acquire);
 
-        // Try to replace the debt with our candidate.
+        // Try to replace the debt with our candidate. If it works, we get the debt slot to use. If
+        // not, we get a replacement value, already protected and a debt to take care of.
         match node.confirm_helping(gen, candidate as usize) {
             Ok(debt) => {
                 // The fast path -> we got the debt confirmed alright.
@@ -140,6 +158,7 @@ impl<T: RefCnt> Borrow<T> for HybridProtection<T> {
 }
 
 pub trait Config {
+    // Mostly for testing, way to disable the fast slo
     const USE_FAST: bool;
 }
 

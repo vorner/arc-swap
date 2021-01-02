@@ -1,4 +1,110 @@
 //! Slots and global/thread local data for the Helping strategy.
+//!
+//! This is inspired (but not an exact copy) of
+//! <https://pvk.ca/Blog/2020/07/07/flatter-wait-free-hazard-pointers/>. The debts are mostly
+//! copies of the ones used by the hybrid strategy, but modified a bit. Just like in the hybrid
+//! strategy, in case the slots run out or when the writer updates the value, the debts are paid by
+//! incrementing the ref count (which is a little slower, but still wait-free/lock-free and still
+//! in order of nanoseconds).
+//!
+//! ## Reader, the fast path
+//!
+//! * Publish an active address ‒ the address we'll be loading stuff from.
+//! * Puts a generation into the control.
+//! * Loads the pointer and puts it to the debt slot.
+//! * Confirms by CaS-replacing the generation back to idle state.
+//!
+//! * Later, we pay it back by CaS-replacing it with the NO_DEPT (like any other slot).
+//!
+//! ## Writer, the non-colliding path
+//!
+//! * Replaces the pointer in the storage.
+//! * The writer walks over all debts. It pays each debt that it is concerned with by bumping the
+//!   reference and replacing the dept with NO_DEPT. The relevant reader will fail in the CaS
+//!   (either because it finds NO_DEPT or other pointer in there) and knows the reference was
+//!   bumped, so it needs to decrement it. Note that it is possible that someone also reuses the
+//!   slot for the _same_ pointer. In that case that reader will set it to NO_DEPT and the newer
+//!   reader will have a pre-paid debt, which is fine.
+//!
+//! ## The collision path
+//!
+//! The reservation of a slot is not atomic, therefore a writer can observe the reservation in
+//! progress. But it doesn't want to wait for it to complete (it wants to be lock-free, which means
+//! it needs to be able to resolve the situation on its own).
+//!
+//! The way it knows it is in progress of the reservation is by seeing a generation in there (it has
+//! a distinct tag). In that case it'll try to:
+//!
+//! * First verify that the reservation is being done for the same address it modified, by reading
+//!   and re-confirming the active_addr slot corresponding to the currently handled node. If it is
+//!   for some other address, the writer doesn't have to be concerned and proceeds to the next slot.
+//! * It does a full load. That is fine, because the writer must be on a different thread than the
+//!   reader and therefore there is at least one free slot. Full load means paying the debt right
+//!   away by incrementing the reference count.
+//! * Then it tries to pass the already fully protected/paid pointer to the reader. It writes it to
+//!   an envelope and CaS-replaces it into the control, instead of the generation (if it fails,
+//!   someone has been faster and it rolls back). We need the envelope because the pointer itself
+//!   doesn't have to be aligned to 4 bytes and we need the space for tags to distinguish the types
+//!   of info in control; we can ensure the envelope is).
+//! * The reader then finds the generation got replaced by a pointer to the envelope and uses that
+//!   pointer inside the envelope. It aborts its own debt. This effectively exchanges the envelopes
+//!   between the threads so each one has an envelope ready for future.
+//!
+//! ## ABA protection
+//!
+//! The generation as pre-reserving the slot allows the writer to make sure it is offering the
+//! loaded pointer to the same reader and that the read value is new enough (and of the same type).
+//!
+//! This solves the general case, but there's also much less frequent but theoretical ABA problem
+//! that could lead to UB, if left unsolved:
+//!
+//! * There is a collision on generation G.
+//! * The writer loads a pointer, bumps it.
+//! * In the meantime, all the 2^30 or 2^62 generations (depending on the usize width) generations
+//!   wrap around.
+//! * The writer stores the outdated and possibly different-typed pointer in there and the reader
+//!   uses it.
+//!
+//! To mitigate that, every time the counter overflows we take the current node and un-assign it
+//! from our current thread. We mark it as in "cooldown" and let it in there until there are no
+//! writers messing with that node any more (if they are not on the node, they can't experience the
+//! ABA problem on it). After that, we are allowed to use it again.
+//!
+//! This doesn't block the reader, it'll simply find *a* node next time ‒ this one, or possibly a
+//! different (or new) one.
+//!
+//! # Orderings
+//!
+//! The linked lists/nodes are already provided for us. So we just need to make sure the debt
+//! juggling is done right. We assume that the local node is ours to write to (others have only
+//! limited right to write to certain fields under certain conditions) and that we are counted into
+//! active writers while we dig through it on the writer end.
+//!
+//! We use SeqCst on a read-write operation both here at the very start of the sequence (storing
+//! the generation into the control) and in the writer on the actual pointer. That establishes a
+//! relation of what has happened first.
+//!
+//! After that we split the time into segments by read-write operations with AcqRel read-write
+//! operations on the control. There's just one control in play for both threads so we don't need
+//! SeqCst and the segments are understood by both the same way. The writer can sometimes use only
+//! load-Acquire on that, because it needs to only read from data written by the reader. It'll
+//! always see data from at least the segment before the observed control value and uses CaS to
+//! send the results back, so it can't go into the past.
+//!
+//! There are two little gotchas:
+//!
+//! * When we read the address we should be loading from, we need to give up if the address does
+//!   not match (we can't simply load from there, because it can be dangling by that point and we
+//!   don't know its type, so we need to use our address for all loading ‒ and we just check they
+//!   match). If we give up, we don't do that CaS into control, therefore we could have given up on
+//!   newer address than the control we have read. For that reason, the address is also stored by
+//!   reader with Release and we read it with Acquire, which'll bring an up to date version of
+//!   control into our thread ‒ and we re-read that one to confirm the address is indeed between
+//!   two same values holding the generation, therefore corresponding to it.
+//! * The destructor doesn't have a SeqCst in the writer, because there was no write in there.
+//!   That's OK. We need to ensure there are no new readers after the "change" we confirm in the
+//!   writer and that change is the destruction ‒ by that time, the destroying thread has exclusive
+//!   ownership and therefore there can be no new readers.
 
 use std::cell::Cell;
 use std::ptr;
@@ -61,6 +167,7 @@ impl Slots {
         let gen = local.generation.get().wrapping_add(4);
         debug_assert_eq!(gen & GEN_TAG, 0);
         local.generation.set(gen);
+        // Signal the caller that the node should be sent to a cooldown.
         let discard = gen == 0;
         let gen = gen | GEN_TAG;
         // We will sync by the write to the control. But we also sync the value of the previous
@@ -71,7 +178,8 @@ impl Slots {
 
         // We are the only ones allowed to do the IDLE -> * transition and we never leave it in
         // anything else after an transaction, so this is OK. But we still need a load-store SeqCst
-        // operation here :-(.
+        // operation here to form a relation between this and the store of the actual pointer in
+        // the writer thread :-(.
         let prev = self.control.swap(gen, SeqCst);
         debug_assert_eq!(IDLE, prev, "Left control in wrong state");
 
@@ -84,6 +192,7 @@ impl Slots {
         R: Fn() -> T,
     {
         debug_assert_eq!(IDLE, self.control.load(Relaxed));
+        // Also acquires the auxiliary data in other variables.
         let mut control = who.control.load(Acquire);
         loop {
             match control & TAG_MASK {
@@ -103,10 +212,11 @@ impl Slots {
                     // date to it.
                     let active_addr = who.active_addr.load(Acquire);
                     if active_addr != storage_addr {
+                        // Acquire for the same reason as on the top.
                         let new_control = who.control.load(Acquire);
                         if new_control == control {
                             // The other thread is doing something, but to some other ArcSwap, so
-                            // we don't care.
+                            // we don't care. Cool, done.
                             break;
                         } else {
                             // The control just changed under our hands, we don't know what to
@@ -118,9 +228,12 @@ impl Slots {
 
                     // Now we know this work is for us. Try to create a replacement and offer it.
                     // This actually does a full-featured load under the hood, but we are currently
-                    // idle and the load doesn't re-enter write.
+                    // idle and the load doesn't re-enter write, so that's all fine.
                     let replacement = replacement();
                     let replace_addr = T::as_ptr(&replacement) as usize;
+                    // If we succeed in helping the other thread, we take their empty space in
+                    // return for us that we pass to them. It's already there, the value is synced
+                    // to us by Acquire on control.
                     let their_space = who.space_offer.load(Acquire);
                     // Relaxed is fine, our own thread and nobody but us writes in here.
                     let my_space = self.space_offer.load(Relaxed);
@@ -129,7 +242,13 @@ impl Slots {
                     unsafe {
                         (*my_space).0.store(replace_addr, Relaxed);
                     }
+                    // Ensured by the align annotation at the type.
+                    assert_eq!(my_space as usize & TAG_MASK, 0);
                     let space_addr = (my_space as usize) | REPLACEMENT_TAG;
+                    // Acquire on failure -> same reason as at the top, reading the value.
+                    // Release on success -> we send data to that thread through here. Must be
+                    // AcqRel, because success must be superset of failure. Also, load to get their
+                    // space (it won't have changed, it does when the control is set to IDLE).
                     match who
                         .control
                         .compare_exchange(control, space_addr, AcqRel, Acquire)
@@ -162,7 +281,8 @@ impl Slots {
 
     pub(super) fn confirm(&self, gen: usize, ptr: usize) -> Result<(), usize> {
         // Put the slot there and consider it acquire of a „lock“. For that we need swap, not store
-        // only.
+        // only (we need Acquire and Acquire works only on loads). Release is to make sure control
+        // is observable by the other thread (but that's probably not necessary anyway?)
         let prev = self.slot.0.swap(ptr as usize, AcqRel);
         debug_assert_eq!(Debt::NONE, prev);
 
@@ -177,6 +297,7 @@ impl Slots {
             debug_assert_eq!(control & TAG_MASK, REPLACEMENT_TAG);
             let handover = (control & !TAG_MASK) as *mut Handover;
             let replacement = unsafe { &*handover }.0.load(Acquire);
+            // Make sure we advertise the right envelope when we set it to generation next time.
             self.space_offer.store(handover, Release);
             // Note we've left the debt in place. The caller should pay it back (without ever
             // taking advantage of it) to make sure any extra is actually dropped (it is possible

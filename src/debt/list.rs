@@ -11,10 +11,20 @@
 //!
 //! # Synchronization
 //!
-//! We assume everything inside with some kind of interior mutability takes care of itself.
-//! Therefore, we need to synchronize just the addition of new node. We do so by a Release when
-//! adding (we need Acquire for the whole chain before too) and Acquire whenever we try to walk it.
-//! Note that the next pointers are not atomic, as they never change later on.
+//! We synchronize several things here.
+//!
+//! The addition of nodes is synchronized through the head (Load on each read, AcqReal on each
+//! attempt to add another node). Note that certain parts never change after that (they aren't even
+//! atomic) and other things that do change take care of themselves (the debt slots have their own
+//! synchronization, etc).
+//!
+//! The ownership is acquire-release lock pattern.
+//!
+//! Similar, the counting of active writers is an acquire-release lock pattern.
+//!
+//! We also do release-acquire "send" from the start-cooldown to check-cooldown to make sure we see
+//! at least as up to date value of the writers as when the cooldown started. That we if we see 0,
+//! we know it must have happened since then.
 
 use std::cell::Cell;
 use std::ptr;
@@ -88,26 +98,30 @@ impl Node {
 
     /// Put the current thread node into cooldown
     fn start_cooldown(&self) {
-        // FIXME: Do wee need some more than Release?
+        // Trick: Make sure we have an up to date value of the active_writers in this thread, so we
+        // can properly release it below.
+        let _reservation = self.reserve_writer();
         assert_eq!(NODE_USED, self.in_use.swap(NODE_COOLDOWN, Release));
     }
 
     /// Perform a cooldown if the node is ready.
     ///
-    /// See the ABA protection at the top.
+    /// See the ABA protection at the [helping].
     fn check_cooldown(&self) {
-        // Cooldown succeeded if it is not being looked at by any writers.
-        // This value may be a little bit outdated. But that is fine, as we get an update at least
-        // every load operation (there's a SeqCst read-write operation on both paths, for readers
-        // this can be only one generation stale which is fine, and for writers, if it doesn't
-        // enter the write, because it is not interested, we don't worry about not seeing that
-        // writer).
-        if self.active_writers.load(Relaxed) == 0 {
-            // Relaxed: we don't synchronize anything by this. It'll get used in real just in a
-            // moment. If it doesn't succeed, then this one wasn't doing a cooldown and that's OK.
-            let _ = self
-                .in_use
-                .compare_exchange(NODE_COOLDOWN, NODE_UNUSED, Relaxed, Relaxed);
+        // Check if the node is in cooldown, for two reasons:
+        // * Skip most of nodes fast, without dealing with them.
+        // * More importantly, sync the value of active_writers to be at least the value when the
+        //   cooldown started. That way we know the 0 we observe happened some time after
+        //   start_cooldown.
+        if self.in_use.load(Acquire) == NODE_COOLDOWN {
+            // The rest can be nicely relaxed ‒ no memory is being synchronized by these
+            // operations. We just see an up to date 0 and allow someone (possibly us) to claim the
+            // node later on.
+            if self.active_writers.load(Relaxed) == 0 {
+                let _ = self
+                    .in_use
+                    .compare_exchange(NODE_COOLDOWN, NODE_UNUSED, Relaxed, Relaxed);
+            }
         }
     }
 
@@ -129,7 +143,6 @@ impl Node {
                 .in_use
                 // We claim a unique control over the generation and the right to write to slots if
                 // they are NO_DEPT
-                // FIXME: Do we need more than Acquire?
                 .compare_exchange(NODE_UNUSED, NODE_USED, Acquire, Relaxed)
                 .is_ok()
             {
@@ -228,13 +241,13 @@ impl LocalNode {
     #[inline]
     pub(crate) fn new_fast(&self, ptr: usize) -> Option<&'static Debt> {
         let node = &self.node.get().expect("LocalNode::with ensures it is set");
-        assert_eq!(node.in_use.load(Relaxed), NODE_USED);
+        debug_assert_eq!(node.in_use.load(Relaxed), NODE_USED);
         node.fast.get_debt(ptr, &self.fast)
     }
 
     pub(crate) fn new_helping(&self, ptr: usize) -> usize {
         let node = &self.node.get().expect("LocalNode::with ensures it is set");
-        assert_eq!(node.in_use.load(Relaxed), NODE_USED);
+        debug_assert_eq!(node.in_use.load(Relaxed), NODE_USED);
         let (gen, discard) = node.helping.get_debt(ptr, &self.helping);
         if discard {
             // Too many generations happened, make sure the writers give the poor node a break for
@@ -251,6 +264,7 @@ impl LocalNode {
         ptr: usize,
     ) -> Result<&'static Debt, (&'static Debt, usize)> {
         let node = &self.node.get().expect("LocalNode::with ensures it is set");
+        debug_assert_eq!(node.in_use.load(Relaxed), NODE_USED);
         let slot = node.helping_slot();
         node.helping
             .confirm(gen, ptr)
@@ -258,14 +272,13 @@ impl LocalNode {
             .map_err(|repl| (slot, repl))
     }
 
-    // FIXME: Do we need replacement be passed to us? We do pass T and the address... And we could
-    // pass storage_addr as an actual pointer or ref?
     pub(super) fn help<R, T>(&self, who: &Node, storage_addr: usize, replacement: &R)
     where
         T: RefCnt,
         R: Fn() -> T,
     {
         let node = &self.node.get().expect("LocalNode::with ensures it is set");
+        debug_assert_eq!(node.in_use.load(Relaxed), NODE_USED);
         node.helping.help(&who.helping, storage_addr, replacement)
     }
 }
@@ -274,11 +287,6 @@ impl Drop for LocalNode {
     fn drop(&mut self) {
         if let Some(node) = self.node.get() {
             // Release - syncing writes/ownership of this Node
-            // We put it to cooldown, because we implicitly reset the generation count by giving it
-            // to another thread. So just to be on the safe side and make sure no writers sees it
-            // across that reset.
-            // FIXME: Is this enough when we do the shutdown of TLS fallback above, when try_with
-            // fails?
             node.start_cooldown();
         }
     }

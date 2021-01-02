@@ -2,6 +2,17 @@
 //!
 //! They are faster, but fallible (in case the slots run out or if there's a collision with a
 //! writer thread, this gives up and falls back to secondary strategy).
+//!
+//! They are based on hazard pointer ideas. To acquire one, the pointer is loaded, stored in the
+//! slot and the debt is confirmed by loading it again and checking it is the same.
+//!
+//! # Orderings
+//!
+//! We ensure just one thing here. Since we do both the acquisition of the slot and the exchange of
+//! the pointer in the writer with SeqCst, we are guaranteed to either see the change in case it
+//! hits somewhere in between the two reads of the pointer, or to have successfully acquired it
+//! before the change and before any cleanup of the old pointer happened (in which case we know the
+//! writer will see our debt).
 
 use std::cell::Cell;
 use std::slice::Iter;

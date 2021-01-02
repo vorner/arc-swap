@@ -1,4 +1,18 @@
 //! Debt handling.
+//!
+//! A debt is a reference count of a smart pointer that is owed. This module provides a lock-free
+//! storage for debts.
+//!
+//! Each thread has its own node with bunch of slots. Only that thread can allocate debts in there,
+//! but others are allowed to inspect and pay them. The nodes form a linked list for the reason of
+//! inspection. The nodes are never removed (even after the thread terminates), but if the thread
+//! gives it up, another (new) thread can claim it.
+//!
+//! The writers walk the whole chain and pay the debts (by bumping the ref counts) of the just
+//! removed pointer.
+//!
+//! Each node has some fast (but fallible) nodes and a fallback node, with different algorithms to
+//! claim them (see the relevant submodules).
 
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::*;
@@ -54,11 +68,16 @@ impl Debt {
             //
             // The Release works as kind of Mutex. We make sure nothing from the debt-protected
             // sections leaks below this point.
+            //
+            // Note that if it got paid already, it is inside the reference count. We don't
+            // necessarily observe that increment, but whoever destroys the pointer *must* see the
+            // up to date value, with all increments already counted in (the Arc takes care of that
+            // part).
             .compare_exchange(ptr as usize, Self::NONE, Release, Relaxed)
             .is_ok()
     }
 
-    /// Pays all the debts on the given pointer.
+    /// Pays all the debts on the given pointer and the storage.
     pub(crate) fn pay_all<T, R>(ptr: *const T::Base, storage_addr: usize, replacement: R)
     where
         T: RefCnt,
@@ -73,23 +92,20 @@ impl Debt {
                 // Make the cooldown trick know we are poking into this node.
                 let _reservation = node.reserve_writer();
 
+                local.help(node, storage_addr, &replacement);
+
                 let all_slots = node
                     .fast_slots()
                     .chain(std::iter::once(node.helping_slot()));
                 for slot in all_slots {
-                    if slot
-                        .0
-                        // TODO: Do we actually need that AcqRel, or is Release enough? Then we
-                        // could call into the above pay.
-                        .compare_exchange(ptr as usize, Self::NONE, AcqRel, Relaxed)
-                        .is_ok()
-                    {
+                    // Note: Release is enough even here. That makes sure the increment is
+                    // visible to whoever might acquire on this slot and can't leak below this.
+                    // And we are the ones doing decrements anyway.
+                    if slot.pay::<T>(ptr) {
                         // Pre-pay one more, for another future slot
                         T::inc(&val);
                     }
                 }
-
-                local.help(node, storage_addr, &replacement);
 
                 None
             });
