@@ -6,7 +6,9 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use crossbeam_utils::thread;
 use once_cell::sync::Lazy;
 
-const ITERS: usize = 100;
+// Mostly a leftover from earlier times, but it still allows one to tweak the number of ops per one
+// iteration of the benchmark easily, so it's left in here.
+const ITERS: usize = 1;
 
 macro_rules! method {
     ($c: expr, $name:ident) => {{
