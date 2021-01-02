@@ -119,11 +119,6 @@ macro_rules! strategy {
 }
 
 strategy!(arc_swap_b, ArcSwap::<usize>);
-#[cfg(feature = "experimental-strategies")]
-strategy!(
-    arc_swap_helping,
-    arc_swap::ArcSwapAny::<Arc<usize>, arc_swap::strategy::experimental::Helping>
-);
 
 mod arc_swap_option {
     use super::{black_box, ArcSwapOption, Criterion, Lazy};
@@ -325,19 +320,6 @@ mod parking_rwlock {
     }
 }
 
-#[cfg(feature = "experimental-strategies")]
-criterion_group!(
-    benches,
-    arc_swap_b::run_all,
-    arc_swap_helping::run_all,
-    arc_swap_option::run_all,
-    arc_swap_cached::run_all,
-    mutex::run_all,
-    parking_mutex::run_all,
-    rwlock::run_all,
-    parking_rwlock::run_all,
-);
-#[cfg(not(feature = "experimental-strategies"))]
 criterion_group!(
     benches,
     arc_swap_b::run_all,

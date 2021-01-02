@@ -21,6 +21,8 @@ maintenance = { status = "actively-developed" }
 weak = []
 # Some strategies used for testing few internal cornercases. *DO NOT USE* (no stability guarantees and their performance is likely very bad).
 internal-test-strategies = []
+# Possibly some strategies we are experimenting with. Currently empty. No stability guarantees are included about them.
+experimental-strategies = []
 
 [dependencies]
 

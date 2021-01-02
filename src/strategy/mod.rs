@@ -17,7 +17,6 @@
 //! Currently, we have these strategies:
 //!
 //! * [`DefaultStrategy`] (this one is used implicitly)
-//! * [`IndependentStrategy`]
 //! * [`RwLock<()>`][std::sync::RwLock]
 //!
 //! # Testing
@@ -56,27 +55,41 @@ use self::hybrid::{DefaultConfig, HybridStrategy};
 /// It is used by the type aliases [`ArcSwap`][crate::ArcSwap] and
 /// [`ArcSwapOption`][crate::ArcSwapOption]. Only the other strategies need to be used explicitly.
 ///
-/// It is optimized for read heavy situations. The readers are wait-free (with the exception of the
-/// first [`load`] in each thread, which is merely lock-free), writers are not lock-free. The
-/// reclamation is tight ‒ the resource is released as soon as possible.
+/// # Performance characteristics
 ///
-/// Each thread has a limited number of "fast" slots. If a thread holds less than this number,
-/// loading is fast and does not suffer from contention (unlike using [`RwLock`][std::sync::RwLock]
-/// or even updating reference counts on the [`Arc`][std::sync::Arc]). In other words, no matter
-/// how many threads concurrently read, they should not be affecting performance of each other in
-/// any way.
+/// * It is optimized for read-heavy situations, with possibly many concurrent read accesses from
+///   multiple threads. Readers don't contend each other at all.
+/// * Readers are wait-free (with the exception of at most once in `usize::MAX / 4` accesses, which
+///   is only lock-free).
+/// * Writers are lock-free.
+/// * Reclamation is exact ‒ the resource is released as soon as possible (works like RAII, not
+///   like a traditional garbage collector; can contain non-`'static` data).
 ///
-/// If the slots run out (the thread holds too many [`Guard`][crate::Guard], the loading becomes
-/// slower (because the reference counts need to be updated).
+/// Each thread has a limited number of fast slots (currently 8, but the exact number is not
+/// guaranteed). If it holds at most that many [`Guard`]s at once, acquiring them is fast. Once
+/// these slots are used up (by holding to these many [`Guard`]s), acquiring more of them will be
+/// slightly slower, but still wait-free.
 ///
-/// Currently, the implementation is a hybrid between stripped-down hazard pointers and one-sided
-/// spin lock. The hazard pointers are the primary fast path. The spin locks are shared between all
-/// instances, therefore the fallbacks may influence other instances.
+/// If you expect to hold a lot of "handles" to the data around, or hold onto it for a long time,
+/// you may want to prefer the [`load_full`][crate::ArcSwapAny::load_full] method.
 ///
-/// However, the actual implementation can change in future versions for something else with
-/// similar or better properties.
+/// The speed of the fast slots is in the ballpark of locking an *uncontented* mutex. The advantage
+/// over the mutex is the stability of speed in the face of contention from other threads ‒ while
+/// the performance of mutex goes rapidly down, the slowdown of running out of held slots or heavy
+/// concurrent writer thread in the area of single-digit multiples.
+///
+/// The ballpark benchmark figures (my older computer) are around these, but you're welcome to run
+/// the benchmarks in the git repository or write your own.
+///
+/// * Load (both uncontented and contented by other loads): ~30ns
+/// * `load_full`: ~50ns uncontented, goes up a bit with other `load_full` in other threads on the
+///   same `Arc` value (~80-100ns).
+/// * Loads after running out of the slots ‒ about 10-20ns slower than `load_full`.
+/// * Stores: Dependent on number of threads, but generally low microseconds.
+/// * Loads with heavy concurrent writer (to the same `ArcSwap`): ~250ns.
 ///
 /// [`load`]: crate::ArcSwapAny::load
+/// [`Guard`]: crate::Guard
 pub type DefaultStrategy = HybridStrategy<DefaultConfig>;
 
 /// Strategy for isolating instances.
@@ -93,7 +106,8 @@ pub type DefaultStrategy = HybridStrategy<DefaultConfig>;
 ///
 /// This too may be changed for something else (but with at least as good guarantees, primarily
 /// that other instances won't get influenced by the "torture").
-// FIXME: Describe and deprecate?
+// Testing if the DefaultStrategy is good enough to replace it fully and then deprecate.
+#[doc(hidden)]
 pub type IndependentStrategy = DefaultStrategy;
 
 // TODO: When we are ready to un-seal, should these traits become unsafe?

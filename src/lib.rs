@@ -448,8 +448,6 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
     }
 
     /// Exchanges the value inside this instance.
-    ///
-    /// Note that this method is *not* lock-free with the [`DefaultStrategy`].
     pub fn swap(&self, new: T) -> T {
         let new = T::into_ptr(new);
         // AcqRel needed to publish the target of the new pointer and get the target of the old
@@ -743,6 +741,8 @@ impl<T, S: Strategy<Option<Arc<T>>>> ArcSwapAny<Option<Arc<T>>, S> {
 /// threads at once. On the other hand, it can't block writes in other instances.
 ///
 /// See the [`IndependentStrategy`] for further details.
+// Being phased out. Will deprecate once we verify in production that the new strategy works fine.
+#[doc(hidden)]
 pub type IndependentArcSwap<T> = ArcSwapAny<Arc<T>, IndependentStrategy>;
 
 /// Arc swap for the [Weak] pointer.
@@ -752,6 +752,8 @@ pub type IndependentArcSwap<T> = ArcSwapAny<Arc<T>, IndependentStrategy>;
 ///
 /// This is a type alias only. Most of the methods are described on the
 /// [`ArcSwapAny`](struct.ArcSwapAny.html).
+///
+/// Needs the `weak` feature turned on.
 ///
 /// [Weak]: std::sync::Weak
 #[cfg(feature = "weak")]
