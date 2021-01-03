@@ -5,18 +5,16 @@
 //! ## Lock-free readers
 //!
 //! All the read operations are always [lock-free]. Most of the time, they are actually
-//! [wait-free], the notable exception is the first [`load`] access in each thread (across all the
-//! instances of [`ArcSwap`]), as it sets up some thread-local data structures.
+//! [wait-free]. They are [lock-free] from time to time, with at least `usize::MAX / 4` accesses
+//! that are [wait-free] in between.
+//!
+//! Writers are [lock-free].
 //!
 //! Whenever the documentation talks about *contention* in the context of [`ArcSwap`], it talks
 //! about contention on the CPU level ‒ multiple cores having to deal with accessing the same cache
 //! line. This slows things down (compared to each one accessing its own cache line), but an
 //! eventual progress is still guaranteed and the cost is significantly lower than parking threads
 //! as with mutex-style contention.
-//!
-//! Unfortunately writers are *not* [lock-free]. A reader stuck (suspended/killed) in a critical
-//! section (few instructions long in case of [`load`]) may block a writer from completion.
-//! Nevertheless, a steady inflow of new readers nor other writers will not block the writer.
 //!
 //! ## Speeds
 //!
@@ -32,7 +30,8 @@
 //! an *uncontended* [`Mutex`] and on some architectures even slower than uncontended
 //! [`RwLock`]. However, it is faster than either under contention.
 //!
-//! There are some (very unscientific) [benchmarks] within the source code of the library.
+//! There are some (very unscientific) [benchmarks] within the source code of the library, and the
+//! [`DefaultStrategy`][crate::DefaultStrategy] has some numbers measured on my computer.
 //!
 //! The exact numbers are highly dependant on the machine used (both absolute numbers and relative
 //! between different data structures). Not only architectures have a huge impact (eg. x86 vs ARM),
@@ -61,7 +60,7 @@
 //! they no longer use it, contending on the count.
 //!
 //! The other situation derives from internal implementation. The number of borrows each thread can
-//! have at each time (across all [`Guard`]s) is limited. If this limit is exceeded, an onwed
+//! have at each time (across all [`Guard`]s) is limited. If this limit is exceeded, an owned
 //! instance is created instead.
 //!
 //! Therefore, if you intend to hold onto the loaded value for extended time span, you may prefer

@@ -45,7 +45,52 @@ jobs:
           RUST_VERSION: ${{ matrix.rust }}
           OS: ${{ matrix.os }}
           RUSTFLAGS: -D warnings
-        run: cargo test --release --all-features
+        run: cargo test --all-features
+
+  big-tests:
+    name: Run the big ignored tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          default: true
+          profile: minimal
+
+      - name: Restore cache
+        uses: Swatinem/rust-cache@v1
+
+      - name: Build & test
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo test --all-features --release -- --ignored
+
+  bits32:
+    name: 32bit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          default: true
+          profile: minimal
+          target: x86_64-unknown-linux-musl
+
+      - name: Restore cache
+        uses: Swatinem/rust-cache@v1
+
+      - name: Build & test
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo test --all-features --target x86_64-unknown-linux-musl
 
   rustfmt:
     name: Check formatting

@@ -1,3 +1,4 @@
+use std::ptr;
 use std::rc::Weak as RcWeak;
 use std::sync::Weak;
 
@@ -6,75 +7,111 @@ use crate::RefCnt;
 unsafe impl<T> RefCnt for Weak<T> {
     type Base = T;
     fn as_ptr(me: &Self) -> *mut T {
-        Weak::as_ptr(me) as *mut T
+        if Weak::ptr_eq(&Weak::new(), me) {
+            ptr::null_mut()
+        } else {
+            Weak::as_ptr(me) as *mut T
+        }
     }
     fn into_ptr(me: Self) -> *mut T {
-        Weak::into_raw(me) as *mut T
+        if Weak::ptr_eq(&Weak::new(), &me) {
+            ptr::null_mut()
+        } else {
+            Weak::into_raw(me) as *mut T
+        }
     }
     unsafe fn from_ptr(ptr: *const T) -> Self {
-        Weak::from_raw(ptr)
+        if ptr.is_null() {
+            Weak::new()
+        } else {
+            Weak::from_raw(ptr)
+        }
     }
 }
 
 unsafe impl<T> RefCnt for RcWeak<T> {
     type Base = T;
     fn as_ptr(me: &Self) -> *mut T {
-        RcWeak::as_ptr(me) as *mut T
+        if RcWeak::ptr_eq(&RcWeak::new(), me) {
+            ptr::null_mut()
+        } else {
+            RcWeak::as_ptr(me) as *mut T
+        }
     }
     fn into_ptr(me: Self) -> *mut T {
-        RcWeak::into_raw(me) as *mut T
+        if RcWeak::ptr_eq(&RcWeak::new(), &me) {
+            ptr::null_mut()
+        } else {
+            RcWeak::into_raw(me) as *mut T
+        }
     }
     unsafe fn from_ptr(ptr: *const T) -> Self {
-        RcWeak::from_raw(ptr)
+        if ptr.is_null() {
+            RcWeak::new()
+        } else {
+            RcWeak::from_raw(ptr)
+        }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::sync::{Arc, Weak};
+macro_rules! t {
+    ($name: ident, $strategy: ty) => {
+        #[cfg(test)]
+        mod $name {
+            use std::sync::{Arc, Weak};
 
-    use crate::ArcSwapWeak;
+            use crate::ArcSwapAny;
 
-    // Convert to weak, push it through the shared and pull it out again.
-    #[test]
-    fn there_and_back() {
-        let data = Arc::new("Hello");
-        let shared = ArcSwapWeak::new(Arc::downgrade(&data));
-        assert_eq!(1, Arc::strong_count(&data));
-        assert_eq!(1, Arc::weak_count(&data));
-        let weak = shared.load();
-        assert_eq!("Hello", *weak.upgrade().unwrap());
-        assert!(Arc::ptr_eq(&data, &weak.upgrade().unwrap()));
-    }
+            #[allow(deprecated)] // We use "deprecated" testing strategies in here.
+            type ArcSwapWeak<T> = ArcSwapAny<Weak<T>, $strategy>;
 
-    // Replace a weak pointer with a NULL one
-    #[test]
-    // Miri-bug in std, see https://github.com/rust-lang/rust/issues/80365
-    #[cfg_attr(miri, ignore)]
-    fn reset() {
-        let data = Arc::new("Hello");
-        let shared = ArcSwapWeak::new(Arc::downgrade(&data));
-        assert_eq!(1, Arc::strong_count(&data));
-        assert_eq!(1, Arc::weak_count(&data));
+            // Convert to weak, push it through the shared and pull it out again.
+            #[test]
+            fn there_and_back() {
+                let data = Arc::new("Hello");
+                let shared = ArcSwapWeak::new(Arc::downgrade(&data));
+                assert_eq!(1, Arc::strong_count(&data));
+                assert_eq!(1, Arc::weak_count(&data));
+                let weak = shared.load();
+                assert_eq!("Hello", *weak.upgrade().unwrap());
+                assert!(Arc::ptr_eq(&data, &weak.upgrade().unwrap()));
+            }
 
-        // An empty weak (eg. NULL)
-        shared.store(Weak::new());
-        assert_eq!(1, Arc::strong_count(&data));
-        assert_eq!(0, Arc::weak_count(&data));
+            // Replace a weak pointer with a NULL one
+            #[test]
+            fn reset() {
+                let data = Arc::new("Hello");
+                let shared = ArcSwapWeak::new(Arc::downgrade(&data));
+                assert_eq!(1, Arc::strong_count(&data));
+                assert_eq!(1, Arc::weak_count(&data));
 
-        let weak = shared.load();
-        assert!(weak.upgrade().is_none());
-    }
+                // An empty weak (eg. NULL)
+                shared.store(Weak::new());
+                assert_eq!(1, Arc::strong_count(&data));
+                assert_eq!(0, Arc::weak_count(&data));
 
-    // Destroy the underlying data while the weak is still stored inside. Should make it go
-    // NULL-ish
-    #[test]
-    fn destroy() {
-        let data = Arc::new("Hello");
-        let shared = ArcSwapWeak::new(Arc::downgrade(&data));
+                let weak = shared.load();
+                assert!(weak.upgrade().is_none());
+            }
 
-        drop(data);
-        let weak = shared.load();
-        assert!(weak.upgrade().is_none());
-    }
+            // Destroy the underlying data while the weak is still stored inside. Should make it go
+            // NULL-ish
+            #[test]
+            fn destroy() {
+                let data = Arc::new("Hello");
+                let shared = ArcSwapWeak::new(Arc::downgrade(&data));
+
+                drop(data);
+                let weak = shared.load();
+                assert!(weak.upgrade().is_none());
+            }
+        }
+    };
 }
+
+t!(tests_default, crate::DefaultStrategy);
+#[cfg(feature = "internal-test-strategies")]
+t!(
+    tests_full_slots,
+    crate::strategy::test_strategies::FillFastSlots
+);

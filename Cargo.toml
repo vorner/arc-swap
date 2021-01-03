@@ -1,6 +1,6 @@
 [package]
 name = "arc-swap"
-version = "1.1.0"
+version = "1.2.0"
 authors = ["Michal 'vorner' Vaner <vorner@vorner.cz>"]
 description = "Atomically swappable Arc"
 documentation = "https://docs.rs/arc-swap"
@@ -17,12 +17,12 @@ appveyor = { repository = "vorner/arc-swap" }
 maintenance = { status = "actively-developed" }
 
 [features]
-# Enable some more, experimental strategies.
-# **These are not part of the stability guarantees** and may be changed, renamed
-# or removed at any time.
-experimental-strategies = []
 # ArcSwapWeak (for std::sycn::Weak) support
 weak = []
+# Some strategies used for testing few internal cornercases. *DO NOT USE* (no stability guarantees and their performance is likely very bad).
+internal-test-strategies = []
+# Possibly some strategies we are experimenting with. Currently empty. No stability guarantees are included about them.
+experimental-strategies = []
 
 [dependencies]
 

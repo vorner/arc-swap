@@ -159,7 +159,7 @@ where
             let global_cnt = &global_cnt;
             let live_cnt = &live_cnt;
             scope.spawn(move |_| {
-                for _ in 0..iters {
+                for iter in 0..iters {
                     barr.wait();
                     // Create bunch of nodes and put them into the list.
                     for i in 0..node_cnt {
@@ -174,6 +174,15 @@ where
                             Arc::get_mut(&mut node).unwrap().next = head.clone();
                             Arc::clone(&node)
                         });
+                    }
+                    if barr.wait().is_leader() {
+                        let mut cnt = 0;
+                        let mut node = head.load_full();
+                        while let Some(n) = node.as_ref() {
+                            cnt += 1;
+                            node = n.next.clone();
+                        }
+                        assert_eq!(cnt, node_cnt * cpus);
                     }
                     barr.wait();
                     // Keep removing items, count how many there are and that they increase in each
@@ -191,6 +200,10 @@ where
                     if barr.wait().is_leader() {
                         assert_eq!(node_cnt * cpus, global_cnt.swap(0, Ordering::Relaxed));
                     }
+                    assert_eq!(
+                        (iters - iter - 1) * node_cnt * cpus,
+                        live_cnt.load(Ordering::Relaxed),
+                    );
                 }
             });
         }
@@ -249,37 +262,40 @@ macro_rules! t {
         mod $name {
             use super::*;
 
+            #[allow(deprecated)] // We use some "deprecated" testing strategies
+            type Strategy = $strategy;
+
             #[test]
             fn storm_link_list_small() {
-                storm_link_list::<$strategy>(ITER_SMALL, 5);
+                storm_link_list::<Strategy>(ITER_SMALL, 5);
             }
 
             #[test]
             #[ignore]
             fn storm_link_list_large() {
-                storm_link_list::<$strategy>(10_000, 50);
+                storm_link_list::<Strategy>(10_000, 50);
             }
 
             #[test]
             fn storm_unroll_small() {
-                storm_unroll::<$strategy>(ITER_SMALL, 5);
+                storm_unroll::<Strategy>(ITER_SMALL, 5);
             }
 
             #[test]
             #[ignore]
             fn storm_unroll_large() {
-                storm_unroll::<$strategy>(10_000, 50);
+                storm_unroll::<Strategy>(10_000, 50);
             }
 
             #[test]
             fn load_parallel_small() {
-                load_parallel::<$strategy>(ITER_MID);
+                load_parallel::<Strategy>(ITER_MID);
             }
 
             #[test]
             #[ignore]
             fn load_parallel_large() {
-                load_parallel::<$strategy>(100_000);
+                load_parallel::<Strategy>(100_000);
             }
         }
     };
@@ -287,10 +303,8 @@ macro_rules! t {
 
 t!(default, DefaultStrategy);
 t!(independent, IndependentStrategy);
-#[cfg(feature = "experimental-strategies")]
+#[cfg(feature = "internal-test-strategies")]
 t!(
-    simple_genlock,
-    arc_swap::strategy::experimental::SimpleGenLock
+    full_slots,
+    arc_swap::strategy::test_strategies::FillFastSlots
 );
-#[cfg(feature = "experimental-strategies")]
-t!(helping, arc_swap::strategy::experimental::Helping);

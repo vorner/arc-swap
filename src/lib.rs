@@ -129,7 +129,6 @@ pub mod cache;
 mod compile_fail_tests;
 mod debt;
 pub mod docs;
-mod gen_lock;
 mod ref_cnt;
 pub mod strategy;
 #[cfg(feature = "weak")]
@@ -449,8 +448,6 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
     }
 
     /// Exchanges the value inside this instance.
-    ///
-    /// Note that this method is *not* lock-free with the [`DefaultStrategy`].
     pub fn swap(&self, new: T) -> T {
         let new = T::into_ptr(new);
         // AcqRel needed to publish the target of the new pointer and get the target of the old
@@ -744,6 +741,8 @@ impl<T, S: Strategy<Option<Arc<T>>>> ArcSwapAny<Option<Arc<T>>, S> {
 /// threads at once. On the other hand, it can't block writes in other instances.
 ///
 /// See the [`IndependentStrategy`] for further details.
+// Being phased out. Will deprecate once we verify in production that the new strategy works fine.
+#[doc(hidden)]
 pub type IndependentArcSwap<T> = ArcSwapAny<Arc<T>, IndependentStrategy>;
 
 /// Arc swap for the [Weak] pointer.
@@ -753,6 +752,8 @@ pub type IndependentArcSwap<T> = ArcSwapAny<Arc<T>, IndependentStrategy>;
 ///
 /// This is a type alias only. Most of the methods are described on the
 /// [`ArcSwapAny`](struct.ArcSwapAny.html).
+///
+/// Needs the `weak` feature turned on.
 ///
 /// [Weak]: std::sync::Weak
 #[cfg(feature = "weak")]
@@ -772,7 +773,9 @@ macro_rules! t {
 
             const ITERATIONS: usize = 10;
 
+            #[allow(deprecated)] // We use "deprecated" testing strategies in here.
             type AS<T> = ArcSwapAny<Arc<T>, $strategy>;
+            #[allow(deprecated)] // We use "deprecated" testing strategies in here.
             type ASO<T> = ArcSwapAny<Option<Arc<T>>, $strategy>;
 
             /// Similar to the one in doc tests of the lib, but more times and more intensive (we
@@ -898,66 +901,6 @@ macro_rules! t {
                     drop(barrier);
                 })
                 .unwrap();
-            }
-
-            /// Accessing the value inside ArcSwap with Guards (and checks for the reference
-            /// counts).
-            #[test]
-            fn load_cnt() {
-                let a = Arc::new(0);
-                let shared = AS::from(Arc::clone(&a));
-                // One in shared, one in a
-                assert_eq!(2, Arc::strong_count(&a));
-                let guard = shared.load();
-                assert_eq!(0, **guard);
-                // The guard doesn't have its own ref count now
-                assert_eq!(2, Arc::strong_count(&a));
-                let guard_2 = shared.load();
-                // Unlike with guard, this does not deadlock
-                shared.store(Arc::new(1));
-                // But now, each guard got a full Arc inside it
-                assert_eq!(3, Arc::strong_count(&a));
-                // And when we get rid of them, they disappear
-                drop(guard_2);
-                assert_eq!(2, Arc::strong_count(&a));
-                let _b = Arc::clone(&guard);
-                assert_eq!(3, Arc::strong_count(&a));
-                // We can drop the guard it came from
-                drop(guard);
-                assert_eq!(2, Arc::strong_count(&a));
-                let guard = shared.load();
-                assert_eq!(1, **guard);
-                drop(shared);
-                // We can still use the guard after the shared disappears
-                assert_eq!(1, **guard);
-                let ptr = Arc::clone(&guard);
-                // One in shared, one in guard
-                assert_eq!(2, Arc::strong_count(&ptr));
-                drop(guard);
-                assert_eq!(1, Arc::strong_count(&ptr));
-            }
-
-            /// There can be only limited amount of leases on one thread. Following ones are
-            /// created, but contain full Arcs.
-            #[test]
-            fn lease_overflow() {
-                let a = Arc::new(0);
-                let shared = AS::from(Arc::clone(&a));
-                assert_eq!(2, Arc::strong_count(&a));
-                let mut guards = (0..1000).map(|_| shared.load()).collect::<Vec<_>>();
-                let count = Arc::strong_count(&a);
-                assert!(count > 2);
-                let guard = shared.load();
-                assert_eq!(count + 1, Arc::strong_count(&a));
-                drop(guard);
-                assert_eq!(count, Arc::strong_count(&a));
-                // When we delete the first one, it didn't have an Arc in it, so the ref count
-                // doesn't drop
-                guards.swap_remove(0);
-                assert_eq!(count, Arc::strong_count(&a));
-                // But new one reuses now vacant the slot and doesn't create a new Arc
-                let _guard = shared.load();
-                assert_eq!(count, Arc::strong_count(&a));
             }
 
             #[test]
@@ -1237,5 +1180,75 @@ macro_rules! t {
 }
 
 t!(tests_default, DefaultStrategy);
-#[cfg(feature = "experimental-strategies")]
-t!(tests_helping, crate::strategy::experimental::Helping);
+#[cfg(feature = "internal-test-strategies")]
+#[allow(deprecated)]
+t!(
+    tests_full_slots,
+    crate::strategy::test_strategies::FillFastSlots
+);
+
+/// These tests assume details about the used strategy.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Accessing the value inside ArcSwap with Guards (and checks for the reference
+    /// counts).
+    #[test]
+    fn load_cnt() {
+        let a = Arc::new(0);
+        let shared = ArcSwap::from(Arc::clone(&a));
+        // One in shared, one in a
+        assert_eq!(2, Arc::strong_count(&a));
+        let guard = shared.load();
+        assert_eq!(0, **guard);
+        // The guard doesn't have its own ref count now
+        assert_eq!(2, Arc::strong_count(&a));
+        let guard_2 = shared.load();
+        // Unlike with guard, this does not deadlock
+        shared.store(Arc::new(1));
+        // But now, each guard got a full Arc inside it
+        assert_eq!(3, Arc::strong_count(&a));
+        // And when we get rid of them, they disappear
+        drop(guard_2);
+        assert_eq!(2, Arc::strong_count(&a));
+        let _b = Arc::clone(&guard);
+        assert_eq!(3, Arc::strong_count(&a));
+        // We can drop the guard it came from
+        drop(guard);
+        assert_eq!(2, Arc::strong_count(&a));
+        let guard = shared.load();
+        assert_eq!(1, **guard);
+        drop(shared);
+        // We can still use the guard after the shared disappears
+        assert_eq!(1, **guard);
+        let ptr = Arc::clone(&guard);
+        // One in shared, one in guard
+        assert_eq!(2, Arc::strong_count(&ptr));
+        drop(guard);
+        assert_eq!(1, Arc::strong_count(&ptr));
+    }
+
+    /// There can be only limited amount of leases on one thread. Following ones are
+    /// created, but contain full Arcs.
+    #[test]
+    fn lease_overflow() {
+        let a = Arc::new(0);
+        let shared = ArcSwap::from(Arc::clone(&a));
+        assert_eq!(2, Arc::strong_count(&a));
+        let mut guards = (0..1000).map(|_| shared.load()).collect::<Vec<_>>();
+        let count = Arc::strong_count(&a);
+        assert!(count > 2);
+        let guard = shared.load();
+        assert_eq!(count + 1, Arc::strong_count(&a));
+        drop(guard);
+        assert_eq!(count, Arc::strong_count(&a));
+        // When we delete the first one, it didn't have an Arc in it, so the ref count
+        // doesn't drop
+        guards.swap_remove(0);
+        assert_eq!(count, Arc::strong_count(&a));
+        // But new one reuses now vacant the slot and doesn't create a new Arc
+        let _guard = shared.load();
+        assert_eq!(count, Arc::strong_count(&a));
+    }
+}

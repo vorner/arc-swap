@@ -1,3 +1,9 @@
+# 1.2.0
+
+* Miri and 32 bit tests in CI.
+* Making the writers lock-free. Soft-removing the IndependentStrategy, as it is
+  no longer needed (hidden and the same as the DafultStrategy).
+
 # 1.1.0
 
 * Fix soundness bug around access::Map. Technically a breaking change, but
