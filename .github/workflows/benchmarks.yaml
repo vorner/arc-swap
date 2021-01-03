@@ -5,8 +5,9 @@ on:
       - master
   # Run once a week to preserve the cache
   # (even though it still feels the cache gets lost sometimes?)
-  schedule:
-    - cron: '0 0 * * 0'
+  # FIXME: Doesn't seem to be working. Using the GH pages thing for now.
+  #schedule:
+  #  - cron: '0 0 * * 0'
 
 name: benchmark pull requests
 
@@ -51,11 +52,11 @@ jobs:
           tool: cargo
           output-file-path: benches.out
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: false
+          auto-push: true
           alert-threshold: '150%'
           comment-on-alert: true
           comment-always: true
           fail-on-alert: true
-          external-data-json-path: ./bench-cache/benchmark-data.json
+          #external-data-json-path: ./bench-cache/benchmark-data.json
           # Because it doesn't put it into the PR, it puts it into the commit :-|
           alert-comment-cc-users: '@vorner'
