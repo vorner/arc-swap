@@ -56,7 +56,11 @@ jobs:
           alert-threshold: '150%'
           comment-on-alert: true
           comment-always: true
-          fail-on-alert: true
+          # We don't want that to fail. Both our benchmarks and the CI are a
+          # bit noisy and we have quite a few measurements, so the chance of
+          # one failing at random is quite high. It's still nice to have it
+          # measured and available as a comment.
+          fail-on-alert: false
           #external-data-json-path: ./bench-cache/benchmark-data.json
           # Because it doesn't put it into the PR, it puts it into the commit :-|
           alert-comment-cc-users: '@vorner'
