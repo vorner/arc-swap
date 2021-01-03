@@ -55,7 +55,8 @@ impl Slots {
                 // We are allowed to split into the check and acquiring the debt. That's because we
                 // are the only ones allowed to change NONE to something else. But we still need a
                 // read-write operation wit SeqCst on it :-(
-                slot.0.swap(ptr, SeqCst);
+                let old = slot.0.swap(ptr, SeqCst);
+                debug_assert_eq!(Debt::NONE, old);
                 local.offset.set(i + 1);
                 return Some(&self.0[i]);
             }

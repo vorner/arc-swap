@@ -114,10 +114,10 @@ use std::sync::atomic::{AtomicPtr, AtomicUsize};
 use super::Debt;
 use crate::RefCnt;
 
-pub(crate) const REPLACEMENT_TAG: usize = 0b01;
-pub(crate) const GEN_TAG: usize = 0b10;
-pub(crate) const TAG_MASK: usize = 0b11;
-pub(crate) const IDLE: usize = 0;
+pub const REPLACEMENT_TAG: usize = 0b01;
+pub const GEN_TAG: usize = 0b10;
+pub const TAG_MASK: usize = 0b11;
+pub const IDLE: usize = 0;
 
 /// Thread local data for the helping strategy.
 #[derive(Default)]
@@ -133,10 +133,36 @@ struct Handover(AtomicUsize);
 
 /// The slots for the helping strategy.
 pub(super) struct Slots {
+    /// The control structure of the slot.
+    ///
+    /// Different threads signal what stage they are in in there. It can contain:
+    ///
+    /// * `IDLE` (nothing is happening, and there may or may not be an active debt).
+    /// * a generation, tagged with GEN_TAG. The reader is trying to acquire a slot right now and a
+    ///   writer might try to help out.
+    /// * A replacement pointer, tagged with REPLACEMENT_TAG. This pointer points to an Handover,
+    ///   containing an already protected value, provided by the writer for the benefit of the
+    ///   reader. The reader should abort its own debt and use this instead. This indirection
+    ///   (storing pointer to the envelope with the actual pointer) is to make sure there's a space
+    ///   for the tag ‒ there is no guarantee the real pointer is aligned to at least 4 bytes, we
+    ///   can however force that for the Handover type.
     control: AtomicUsize,
+    /// A possibly active debt.
     slot: Debt,
+    /// If there's a generation in control, this signifies what address the reader is trying to
+    /// load from.
     active_addr: AtomicUsize,
+    /// A place where a writer can put a replacement value.
+    ///
+    /// Note that this is simply an allocation, and every participating slot contributes one, but
+    /// they may be passed around through the lifetime of the program. It is not accessed directly,
+    /// but through the space_offer thing.
+    ///
     handover: Handover,
+    /// A pointer to a handover envelope this node currently owns.
+    ///
+    /// A writer makes a switch of its and readers handover when successfully storing a replacement
+    /// in the control.
     space_offer: AtomicPtr<Handover>,
 }
 
@@ -304,25 +330,5 @@ impl Slots {
             // someone provided the replacement *and* paid the debt and we need just one of them).
             Err(replacement)
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::mem;
-    use std::sync::Arc;
-
-    use super::*;
-
-    /// Check some alignment assumptions.
-    ///
-    /// Note that we also check them at runtime, in case someone doesn't run the tests.
-    #[test]
-    fn alignments() {
-        // We don't need _exactly_ this, but that will ensure that the pointer to data is also
-        // aligned to that. Or at least always unaligned to that.
-        assert!(mem::align_of::<Arc<u8>>() >= 4);
-        assert_eq!(Arc::as_ptr(&Arc::new(0u8)) as usize % 4, 0);
-        assert!(mem::align_of::<AtomicUsize>() >= 4);
     }
 }

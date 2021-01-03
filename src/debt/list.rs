@@ -44,7 +44,7 @@ const NODE_COOLDOWN: usize = 2;
 /// The head of the debt linked list.
 static LIST_HEAD: AtomicPtr<Node> = AtomicPtr::new(ptr::null_mut());
 
-pub(crate) struct NodeReservation<'a>(&'a Node);
+pub struct NodeReservation<'a>(&'a Node);
 
 impl Drop for NodeReservation<'_> {
     fn drop(&mut self) {
@@ -126,7 +126,7 @@ impl Node {
     }
 
     /// Mark this node that a writer is currently playing with it.
-    pub(super) fn reserve_writer(&self) -> NodeReservation {
+    pub fn reserve_writer(&self) -> NodeReservation {
         self.active_writers.fetch_add(1, Acquire);
         NodeReservation(self)
     }
@@ -235,9 +235,6 @@ impl LocalNode {
     ///
     /// This stores the debt of the given pointer (untyped, casted into an usize) and returns a
     /// reference to that slot, or gives up with `None` if all the slots are currently full.
-    ///
-    /// This is technically lock-free on the first call in a given thread and wait-free on all the
-    /// other accesses.
     #[inline]
     pub(crate) fn new_fast(&self, ptr: usize) -> Option<&'static Debt> {
         let node = &self.node.get().expect("LocalNode::with ensures it is set");
@@ -245,6 +242,9 @@ impl LocalNode {
         node.fast.get_debt(ptr, &self.fast)
     }
 
+    /// Initializes a helping slot transaction.
+    ///
+    /// Returns the generation (with tag).
     pub(crate) fn new_helping(&self, ptr: usize) -> usize {
         let node = &self.node.get().expect("LocalNode::with ensures it is set");
         debug_assert_eq!(node.in_use.load(Relaxed), NODE_USED);
@@ -258,6 +258,12 @@ impl LocalNode {
         gen
     }
 
+    /// Confirm the helping transaction.
+    ///
+    /// The generation comes from previous new_helping.
+    ///
+    /// Will either return a debt with the pointer, or a debt to pay and a replacement (already
+    /// protected) address.
     pub(crate) fn confirm_helping(
         &self,
         gen: usize,
@@ -272,6 +278,10 @@ impl LocalNode {
             .map_err(|repl| (slot, repl))
     }
 
+    /// The writer side of a helping slot.
+    ///
+    /// This potentially helps the `who` node (uses self as the local node, which must be
+    /// different) by loading the address that one is trying to load.
     pub(super) fn help<R, T>(&self, who: &Node, storage_addr: usize, replacement: &R)
     where
         T: RefCnt,
