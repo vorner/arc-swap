@@ -1,6 +1,7 @@
 #![doc(test(attr(deny(warnings))))]
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![allow(deprecated)]
 
 //! Making [`Arc`][Arc] itself atomic
 //!
@@ -774,9 +775,9 @@ macro_rules! t {
             const ITERATIONS: usize = 10;
 
             #[allow(deprecated)] // We use "deprecated" testing strategies in here.
-            type AS<T> = ArcSwapAny<Arc<T>, $strategy>;
+            type As<T> = ArcSwapAny<Arc<T>, $strategy>;
             #[allow(deprecated)] // We use "deprecated" testing strategies in here.
-            type ASO<T> = ArcSwapAny<Option<Arc<T>>, $strategy>;
+            type Aso<T> = ArcSwapAny<Option<Arc<T>>, $strategy>;
 
             /// Similar to the one in doc tests of the lib, but more times and more intensive (we
             /// want to torture it a bit).
@@ -785,7 +786,7 @@ macro_rules! t {
             fn publish() {
                 const READERS: usize = 2;
                 for _ in 0..ITERATIONS {
-                    let config = AS::<String>::default();
+                    let config = As::<String>::default();
                     let ended = AtomicUsize::new(0);
                     thread::scope(|scope| {
                         for _ in 0..READERS {
@@ -817,7 +818,7 @@ macro_rules! t {
             fn swap_load() {
                 for _ in 0..100 {
                     let arc = Arc::new(42);
-                    let arc_swap = AS::from(Arc::clone(&arc));
+                    let arc_swap = As::from(Arc::clone(&arc));
                     assert_eq!(42, **arc_swap.load());
                     // It can be read multiple times
                     assert_eq!(42, **arc_swap.load());
@@ -843,7 +844,7 @@ macro_rules! t {
             #[test]
             fn multi_writers() {
                 let first_value = Arc::new((0, 0));
-                let shared = AS::from(Arc::clone(&first_value));
+                let shared = As::from(Arc::clone(&first_value));
                 const WRITER_CNT: usize = 2;
                 const READER_CNT: usize = 3;
                 #[cfg(miri)]
@@ -905,7 +906,7 @@ macro_rules! t {
 
             #[test]
             fn load_null() {
-                let shared = ASO::<usize>::default();
+                let shared = Aso::<usize>::default();
                 let guard = shared.load();
                 assert!(guard.is_none());
                 shared.store(Some(Arc::new(42)));
@@ -915,7 +916,7 @@ macro_rules! t {
             #[test]
             fn from_into() {
                 let a = Arc::new(42);
-                let shared = AS::new(a);
+                let shared = As::new(a);
                 let guard = shared.load();
                 let a = shared.into_inner();
                 assert_eq!(42, *a);
@@ -950,7 +951,7 @@ macro_rules! t {
                 for _ in 0..ITERATIONS {
                     let cnt = Arc::new(AtomicUsize::new(0));
 
-                    let shared = AS::from_pointee(ReportDrop(cnt.clone()));
+                    let shared = As::from_pointee(ReportDrop(cnt.clone()));
                     assert_eq!(cnt.load(Ordering::Relaxed), 0, "Dropped prematurely");
                     // We need the threads to wait for each other at places.
                     let sync = Barrier::new(PanicMode::Poison);
@@ -998,7 +999,7 @@ macro_rules! t {
             fn guard_drop_in_another_thread() {
                 for _ in 0..ITERATIONS {
                     let cnt = Arc::new(AtomicUsize::new(0));
-                    let shared = AS::from_pointee(ReportDrop(cnt.clone()));
+                    let shared = As::from_pointee(ReportDrop(cnt.clone()));
                     assert_eq!(cnt.load(Ordering::Relaxed), 0, "Dropped prematurely");
                     let guard = shared.load();
 
@@ -1018,7 +1019,7 @@ macro_rules! t {
 
             #[test]
             fn load_option() {
-                let shared = ASO::from_pointee(42);
+                let shared = Aso::from_pointee(42);
                 // The type here is not needed in real code, it's just addition test the type matches.
                 let opt: Option<_> = Guard::into_inner(shared.load());
                 assert_eq!(42, *opt.unwrap());
@@ -1030,14 +1031,14 @@ macro_rules! t {
             // Check stuff can get formatted
             #[test]
             fn debug_impl() {
-                let shared = AS::from_pointee(42);
+                let shared = As::from_pointee(42);
                 assert_eq!("ArcSwapAny(42)", &format!("{:?}", shared));
                 assert_eq!("42", &format!("{:?}", shared.load()));
             }
 
             #[test]
             fn display_impl() {
-                let shared = AS::from_pointee(42);
+                let shared = As::from_pointee(42);
                 assert_eq!("42", &format!("{}", shared));
                 assert_eq!("42", &format!("{}", shared.load()));
             }
@@ -1045,8 +1046,8 @@ macro_rules! t {
             // The following "tests" are not run, only compiled. They check that things that should be
             // Send/Sync actually are.
             fn _check_stuff_is_send_sync() {
-                let shared = AS::from_pointee(42);
-                let moved = AS::from_pointee(42);
+                let shared = As::from_pointee(42);
+                let moved = As::from_pointee(42);
                 let shared_ref = &shared;
                 let lease = shared.load();
                 let lease_ref = &lease;
