@@ -1,3 +1,7 @@
+# 1.3.0
+
+* Allow mapping of DynAccess.
+
 # 1.2.0
 
 * Miri and 32 bit tests in CI.

@@ -1,6 +1,6 @@
 [package]
 name = "arc-swap"
-version = "1.2.0"
+version = "1.3.0"
 authors = ["Michal 'vorner' Vaner <vorner@vorner.cz>"]
 description = "Atomically swappable Arc"
 documentation = "https://docs.rs/arc-swap"

@@ -205,6 +205,58 @@ where
     }
 }
 
+/// [DynAccess] to [Access] wrapper.
+///
+/// A workaround to allow double-dyn mapping, since `Box<dyn DynAccess>` doesn't implement [Access]
+/// and [Map] needs that.
+///
+/// ```rust
+/// use std::sync::Arc;
+///
+/// use arc_swap::ArcSwap;
+/// use arc_swap::access::{AccessConvert, DynAccess, Map};
+///
+/// struct Inner {
+///     val: usize,
+/// }
+///
+/// struct Middle {
+///     inner: Inner,
+/// }
+///
+/// struct Outer {
+///     middle: Middle,
+/// }
+///
+/// let outer = Arc::new(ArcSwap::from_pointee(Outer {
+///     middle: Middle {
+///         inner: Inner {
+///             val: 42,
+///         }
+///     }
+/// }));
+///
+/// let middle: Arc<dyn DynAccess<Middle>> =
+///     Arc::new(Map::new(outer, |outer: &Outer| &outer.middle));
+/// let inner: Arc<dyn DynAccess<Inner>> =
+///     Arc::new(Map::new(AccessConvert(middle), |middle: &Middle| &middle.inner));
+/// let guard = inner.load();
+/// assert_eq!(42, guard.val);
+/// ```
+pub struct AccessConvert<D>(pub D);
+
+impl<T, D> Access<T> for AccessConvert<D>
+where
+    D: Deref,
+    D::Target: DynAccess<T>,
+{
+    type Guard = DynGuard<T>;
+
+    fn load(&self) -> Self::Guard {
+        self.0.load()
+    }
+}
+
 #[doc(hidden)]
 #[derive(Copy, Clone, Debug)]
 pub struct MapGuard<G, F, T, R> {
