@@ -50,22 +50,30 @@ pub trait Access<T> {
 /// ```rust
 /// # fn do_something<V>(_v: V) { }
 /// use std::sync::Arc;
+/// use std::sync::atomic::{AtomicBool, Ordering};
 ///
 /// use arc_swap::{ArcSwap, Cache};
 ///
 /// let shared = Arc::new(ArcSwap::from_pointee(42));
+/// # let mut threads = Vec::new();
+/// let terminate = Arc::new(AtomicBool::new(false));
 /// // Start 10 worker threads...
 /// for _ in 0..10 {
 ///     let mut cache = Cache::new(Arc::clone(&shared));
+///     let terminate = Arc::clone(&terminate);
+///     # let thread =
 ///     std::thread::spawn(move || {
 ///         // Keep loading it like mad..
-///         loop {
+///         while !terminate.load(Ordering::Relaxed) {
 ///             let value = cache.load();
 ///             do_something(value);
 ///         }
 ///     });
+///     # threads.push(thread);
 /// }
 /// shared.store(Arc::new(12));
+/// # terminate.store(true, Ordering::Relaxed);
+/// # for thread in threads { thread.join().unwrap() }
 /// ```
 ///
 /// [Arc]: std::sync::Arc

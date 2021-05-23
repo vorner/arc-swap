@@ -44,29 +44,31 @@
 //!
 //! ```rust
 //! use std::sync::Arc;
-//! use std::thread;
+//! use std::thread::{self, JoinHandle};
 //! use std::time::Duration;
 //!
 //! use arc_swap::ArcSwap;
 //! use arc_swap::access::{Access, Constant, Map};
 //!
-//! fn work_with_usize<A: Access<usize> + Send + 'static>(a: A) {
+//! fn work_with_usize<A: Access<usize> + Send + 'static>(a: A) -> JoinHandle<()> {
 //!     thread::spawn(move || {
-//!         loop {
-//!             let value = a.load();
-//!             println!("{}", *value);
+//!         let mut value = 0;
+//!         while value != 42 {
+//!             let guard = a.load();
+//!             value = *guard;
+//!             println!("{}", value);
 //!             // Not strictly necessary, but dropping the guard can free some resources, like
 //!             // slots for tracking what values are still in use. We do it before the sleeping,
 //!             // not at the end of the scope.
-//!             drop(value);
+//!             drop(guard);
 //!             thread::sleep(Duration::from_millis(50));
 //!         }
-//!     });
+//!     })
 //! }
 //!
 //! // Passing the whole thing directly
 //! // (If we kept another Arc to it, we could change the value behind the scenes)
-//! work_with_usize(Arc::new(ArcSwap::from_pointee(42)));
+//! work_with_usize(Arc::new(ArcSwap::from_pointee(42))).join().unwrap();
 //!
 //! // Passing a subset of a structure
 //! struct Cfg {
@@ -74,11 +76,12 @@
 //! }
 //!
 //! let cfg = Arc::new(ArcSwap::from_pointee(Cfg { value: 0 }));
-//! work_with_usize(Map::new(Arc::clone(&cfg), |cfg: &Cfg| &cfg.value));
+//! let thread = work_with_usize(Map::new(Arc::clone(&cfg), |cfg: &Cfg| &cfg.value));
 //! cfg.store(Arc::new(Cfg { value: 42 }));
+//! thread.join().unwrap();
 //!
 //! // Passing a constant that can't change. Useful mostly for testing purposes.
-//! work_with_usize(Constant(42));
+//! work_with_usize(Constant(42)).join().unwrap();
 //! ```
 
 use std::marker::PhantomData;
@@ -177,15 +180,11 @@ impl<T: ?Sized> Deref for DynGuard<T> {
 /// # Examples
 ///
 /// ```rust
-/// use std::thread;
-///
 /// use arc_swap::access::{Constant, DynAccess};
 ///
 /// fn do_something(value: Box<dyn DynAccess<usize> + Send>) {
-///     thread::spawn(move || {
-///         let v = value.load();
-///         println!("{}", *v);
-///     });
+///     let v = value.load();
+///     println!("{}", *v);
 /// }
 ///
 /// do_something(Box::new(Constant(42)));
