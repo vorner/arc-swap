@@ -1,6 +1,9 @@
 # 1.3.0
 
 * Allow mapping of DynAccess.
+* Fix some lints.
+* Don't leave threads running in tests/doctests. It's a bad form and annoys
+  miri.
 
 # 1.2.0
 
