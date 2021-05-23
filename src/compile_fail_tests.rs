@@ -14,7 +14,9 @@
 //! let shared = arc_swap::ArcSwap::from_pointee(42);
 //! std::thread::spawn(|| {
 //!     drop(shared);
-//! });
+//! })
+//! .join()
+//! .unwrap();
 //! ```
 //!
 //! ```rust,compile_fail
@@ -30,7 +32,9 @@
 //! let guard = shared.load();
 //! std::thread::spawn(|| {
 //!     drop(guard);
-//! });
+//! })
+//! .join()
+//! .unwrap();
 //! ```
 //!
 //! ```rust,compile_fail
@@ -77,7 +81,7 @@
 //! use arc_swap::ArcSwapAny;
 //!
 //! let a: ArcSwapAny<Arc<usize>> = ArcSwapAny::new(Arc::new(42));
-//! std::thread::spawn(move || drop(a));
+//! std::thread::spawn(move || drop(a)).join().unwrap();
 //! ```
 //!
 //! ```rust,compile_fail

@@ -23,6 +23,7 @@
 //!
 //! ```rust
 //! # use std::sync::Arc;
+//! # use std::sync::atomic::{AtomicBool, Ordering};
 //! # use std::thread;
 //! # use std::time::Duration;
 //! #
@@ -37,31 +38,43 @@
 //!
 //! // We wrap the ArcSwap into an Arc, so we can share it between threads.
 //! let config = Arc::new(ArcSwap::from_pointee(Config::default()));
+//!
+//! let terminate = Arc::new(AtomicBool::new(false));
+//! let mut threads = Vec::new();
+//!
 //! // The configuration thread
-//! thread::spawn({
+//! threads.push(thread::spawn({
 //!     let config = Arc::clone(&config);
+//!     let terminate = Arc::clone(&terminate);
 //!     move || {
-//!         loop {
-//!             thread::sleep(Duration::from_secs(60));
+//!         while !terminate.load(Ordering::Relaxed) {
+//!             thread::sleep(Duration::from_secs(6));
 //!             // Actually, load it from somewhere
 //!             let new_config = Arc::new(Config::default());
 //!             config.store(new_config);
 //!         }
 //!     }
-//! });
+//! }));
 //!
 //! // The worker thread
 //! for _ in 0..10 {
-//!     thread::spawn({
+//!     threads.push(thread::spawn({
 //!         let config = Arc::clone(&config);
+//!         let terminate = Arc::clone(&terminate);
 //!         move || {
-//!             loop {
+//!             while !terminate.load(Ordering::Relaxed) {
 //!                 let work = Work::fetch();
 //!                 let config = config.load();
 //!                 work.perform(&config);
 //!             }
 //!         }
-//!     });
+//!     }));
+//! }
+//!
+//! // Terminate gracefully
+//! terminate.store(true, Ordering::Relaxed);
+//! for thread in threads {
+//!     thread.join().unwrap();
 //! }
 //! ```
 //!
@@ -134,6 +147,7 @@
 //! ```rust
 //! # use std::sync::Arc;
 //! # use std::thread;
+//! # use std::sync::atomic::{AtomicBool, Ordering};
 //! # use arc_swap::{ArcSwap, Cache};
 //! # struct Packet; impl Packet { fn receive() -> Self { Packet } }
 //!
@@ -150,12 +164,16 @@
 //!
 //! let routing_table = Arc::new(ArcSwap::from_pointee(RoutingTable::default()));
 //!
+//! let terminate = Arc::new(AtomicBool::new(false));
+//! let mut threads = Vec::new();
+//!
 //! for _ in 0..10 {
-//!     thread::spawn({
+//!     let t = thread::spawn({
 //!         let routing_table = Arc::clone(&routing_table);
+//!         let terminate = Arc::clone(&terminate);
 //!         move || {
 //!             let mut routing_table = Cache::new(routing_table);
-//!             loop {
+//!             while !terminate.load(Ordering::Relaxed) {
 //!                 let packet = Packet::receive();
 //!                 // This load is cheaper, because we cache in the private Cache thing.
 //!                 // But if the above receive takes a long time, the Cache will keep the stale
@@ -165,6 +183,13 @@
 //!             }
 //!         }
 //!     });
+//!     threads.push(t);
+//! }
+//!
+//! // Shut down properly
+//! terminate.store(true, Ordering::Relaxed);
+//! for thread in threads {
+//!     thread.join().unwrap();
 //! }
 //! ```
 //!
