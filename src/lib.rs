@@ -124,6 +124,9 @@
 //!
 //! [RwLock]: https://doc.rust-lang.org/std/sync/struct.RwLock.html
 
+#![no_std]
+extern crate alloc;
+
 pub mod access;
 mod as_raw;
 pub mod cache;
@@ -135,14 +138,14 @@ pub mod strategy;
 #[cfg(feature = "weak")]
 mod weak;
 
-use std::borrow::Borrow;
-use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
-use std::marker::PhantomData;
-use std::mem;
-use std::ops::Deref;
-use std::ptr;
-use std::sync::atomic::{AtomicPtr, Ordering};
-use std::sync::Arc;
+use core::borrow::Borrow;
+use core::fmt::{Debug, Display, Formatter, Result as FmtResult};
+use core::marker::PhantomData;
+use core::mem;
+use core::ops::Deref;
+use core::ptr;
+use core::sync::atomic::{AtomicPtr, Ordering};
+use alloc::sync::Arc;
 
 use crate::access::{Access, Map};
 pub use crate::as_raw::AsRaw;

@@ -36,8 +36,8 @@
 //! [`ArcSwap`]: crate::ArcSwap
 //! [`load`]: crate::ArcSwapAny::load
 
-use std::borrow::Borrow;
-use std::sync::atomic::AtomicPtr;
+use core::borrow::Borrow;
+use core::sync::atomic::AtomicPtr;
 
 use crate::ref_cnt::RefCnt;
 

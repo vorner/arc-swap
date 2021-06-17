@@ -26,11 +26,12 @@
 //! at least as up to date value of the writers as when the cooldown started. That we if we see 0,
 //! we know it must have happened since then.
 
-use std::cell::Cell;
-use std::ptr;
-use std::slice::Iter;
-use std::sync::atomic::Ordering::*;
-use std::sync::atomic::{AtomicPtr, AtomicUsize};
+use core::cell::Cell;
+use core::ptr;
+use alloc::slice::Iter;
+use core::sync::atomic::Ordering::*;
+use core::sync::atomic::{AtomicPtr, AtomicUsize};
+use alloc::boxed::Box;
 
 use super::fast::{Local as FastLocal, Slots as FastSlots};
 use super::helping::{Local as HelpingLocal, Slots as HelpingSlots};

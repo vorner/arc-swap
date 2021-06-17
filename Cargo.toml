@@ -23,8 +23,12 @@ weak = []
 internal-test-strategies = []
 # Possibly some strategies we are experimenting with. Currently empty. No stability guarantees are included about them.
 experimental-strategies = []
+# no_std doesn't have RwLock
+no_std = ["parking_lot"]
 
 [dependencies]
+# Optional dependency for supporting no_std
+parking_lot = { version = "0.11.1", optional = true }
 
 [dev-dependencies]
 adaptive-barrier = "~0.1"

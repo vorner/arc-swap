@@ -84,10 +84,11 @@
 //! work_with_usize(Constant(42)).join().unwrap();
 //! ```
 
-use std::marker::PhantomData;
-use std::ops::Deref;
-use std::rc::Rc;
-use std::sync::Arc;
+use core::marker::PhantomData;
+use core::ops::Deref;
+use alloc::rc::Rc;
+use alloc::sync::Arc;
+use alloc::boxed::Box;
 
 use super::ref_cnt::RefCnt;
 use super::strategy::Strategy;
