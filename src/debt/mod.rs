@@ -116,7 +116,7 @@ impl Debt {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use alloc::sync::Arc;
 
     /// Checks the assumption that arcs to ZSTs have different pointer values.
     #[test]

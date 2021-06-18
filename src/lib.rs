@@ -124,6 +124,8 @@
 //!
 //! [RwLock]: https://doc.rust-lang.org/std/sync/struct.RwLock.html
 
+#![feature(thread_local)]
+
 #![no_std]
 extern crate alloc;
 
@@ -767,8 +769,10 @@ macro_rules! t {
     ($name: ident, $strategy: ty) => {
         #[cfg(test)]
         mod $name {
-            use std::panic;
-            use std::sync::atomic::{self, AtomicUsize};
+            use core::panic;
+            use core::sync::atomic::{self, AtomicUsize};
+            use alloc::format;
+            use alloc::borrow::ToOwned;
 
             use adaptive_barrier::{Barrier, PanicMode};
             use crossbeam_utils::thread;
@@ -789,7 +793,7 @@ macro_rules! t {
             fn publish() {
                 const READERS: usize = 2;
                 for _ in 0..ITERATIONS {
-                    let config = As::<String>::default();
+                    let config = As::<alloc::string::String>::default();
                     let ended = AtomicUsize::new(0);
                     thread::scope(|scope| {
                         for _ in 0..READERS {
@@ -1084,8 +1088,9 @@ macro_rules! t {
             /// A panic from within the rcu callback should not change anything.
             #[test]
             fn rcu_panic() {
+                extern crate std;
                 let shared = ArcSwap::from(Arc::new(0));
-                assert!(panic::catch_unwind(|| shared.rcu(|_| -> usize { panic!() })).is_err());
+                assert!(std::panic::catch_unwind(|| shared.rcu(|_| -> usize { panic!() })).is_err());
                 assert_eq!(1, Arc::strong_count(&shared.swap(Arc::new(42))));
             }
 
@@ -1141,7 +1146,7 @@ macro_rules! t {
                     // Fill up the slots sometimes
                     let fillup = || {
                         if i % 2 == 0 {
-                            Some((0..50).map(|_| shared.load()).collect::<Vec<_>>())
+                            Some((0..50).map(|_| shared.load()).collect::<alloc::vec::Vec<_>>())
                         } else {
                             None
                         }
@@ -1240,7 +1245,7 @@ mod tests {
         let a = Arc::new(0);
         let shared = ArcSwap::from(Arc::clone(&a));
         assert_eq!(2, Arc::strong_count(&a));
-        let mut guards = (0..1000).map(|_| shared.load()).collect::<Vec<_>>();
+        let mut guards = (0..1000).map(|_| shared.load()).collect::<alloc::vec::Vec<_>>();
         let count = Arc::strong_count(&a);
         assert!(count > 2);
         let guard = shared.load();
