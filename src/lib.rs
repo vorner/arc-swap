@@ -1181,12 +1181,15 @@ macro_rules! t {
 }
 
 t!(tests_default, DefaultStrategy);
-#[cfg(feature = "internal-test-strategies")]
+#[cfg(all(feature = "internal-test-strategies", test))]
 #[allow(deprecated)]
-t!(
-    tests_full_slots,
-    crate::strategy::test_strategies::FillFastSlots
-);
+mod internal_strategies {
+    use super::*;
+    t!(
+        tests_full_slots,
+        crate::strategy::test_strategies::FillFastSlots
+    );
+}
 
 /// These tests assume details about the used strategy.
 #[cfg(test)]

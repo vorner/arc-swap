@@ -76,6 +76,34 @@ pub trait Access<T> {
 /// # for thread in threads { thread.join().unwrap() }
 /// ```
 ///
+/// Another one with using a thread local storage and explicit types:
+///
+/// ```rust
+/// # use std::sync::Arc;
+/// # use std::ops::Deref;
+/// # use std::cell::RefCell;
+/// #
+/// # use arc_swap::ArcSwap;
+/// # use arc_swap::cache::Cache;
+/// # use once_cell::sync::Lazy;
+/// #
+/// # #[derive(Debug, Default)]
+/// # struct Config;
+/// #
+/// static CURRENT_CONFIG: Lazy<ArcSwap<Config>> = Lazy::new(|| ArcSwap::from_pointee(Config::default()));
+///
+/// thread_local! {
+///     static CACHE: RefCell<Cache<&'static ArcSwap<Config>, Arc<Config>>> = RefCell::new(Cache::from(CURRENT_CONFIG.deref()));
+/// }
+///
+/// CACHE.with(|c| {
+///     // * RefCell needed, because load on cache is `&mut`.
+///     // * You want to operate inside the `with` ‒ cloning the Arc is comparably expensive as
+///     //   ArcSwap::load itself and whatever you'd save by the cache would be lost on that.
+///     println!("{:?}", c.borrow_mut().load());
+/// });
+/// ```
+///
 /// [Arc]: std::sync::Arc
 /// [load_full]: ArcSwapAny::load_full
 #[derive(Clone, Debug)]

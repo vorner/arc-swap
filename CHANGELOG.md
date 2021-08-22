@@ -1,3 +1,7 @@
+# 1.3.1
+
+* Cache doc improvements.
+
 # 1.3.0
 
 * Allow mapping of DynAccess.

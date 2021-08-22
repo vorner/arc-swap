@@ -43,14 +43,14 @@ impl<'a, T: RefCnt> AsRaw<T::Base> for &'a T {
 impl<'a, T: RefCnt> Sealed for &'a Guard<T> {}
 impl<'a, T: RefCnt> AsRaw<T::Base> for &'a Guard<T> {
     fn as_raw(&self) -> *mut T::Base {
-        T::as_ptr(&self)
+        T::as_ptr(self)
     }
 }
 
 impl<'a, T: RefCnt> Sealed for Guard<T> {}
 impl<'a, T: RefCnt> AsRaw<T::Base> for Guard<T> {
     fn as_raw(&self) -> *mut T::Base {
-        T::as_ptr(&self)
+        T::as_ptr(self)
     }
 }
 
