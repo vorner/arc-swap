@@ -1,3 +1,8 @@
+# 1.3.2
+
+* More helpful description of the `AsRaw` trait (isn't implemented for owned
+  `Arc`/`Option<Arc>`).
+
 # 1.3.1
 
 * Cache doc improvements.

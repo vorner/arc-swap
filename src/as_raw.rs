@@ -28,6 +28,9 @@ use self::sealed::Sealed;
 /// shared.compare_and_swap(&shared.load(), Some(Arc::clone(&a)));
 /// shared.compare_and_swap(ptr::null(), Some(Arc::clone(&a)));
 /// ```
+///
+/// Due to technical limitation, this is not implemented for owned `Arc`/`Option<Arc<_>>`, they
+/// need to be borrowed.
 pub trait AsRaw<T>: Sealed {
     /// Converts the value into a raw pointer.
     fn as_raw(&self) -> *mut T;

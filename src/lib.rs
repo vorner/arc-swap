@@ -476,7 +476,8 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
     /// the limitations).
     ///
     /// The `current` can be specified as `&Arc`, [`Guard`](struct.Guard.html),
-    /// [`&Guards`](struct.Guards.html) or as a raw pointer.
+    /// [`&Guards`](struct.Guards.html) or as a raw pointer (but _not_ owned `Arc`). See the
+    /// [`AsRaw`] trait.
     pub fn compare_and_swap<C>(&self, current: C, new: T) -> Guard<T, S>
     where
         C: AsRaw<T::Base>,
