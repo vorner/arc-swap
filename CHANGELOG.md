@@ -1,3 +1,7 @@
+# 1.4.0
+
+* Allow const-initializing ArcSwapOption (`const_empty` method).
+
 # 1.3.2
 
 * More helpful description of the `AsRaw` trait (isn't implemented for owned

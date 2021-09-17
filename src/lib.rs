@@ -148,6 +148,7 @@ use crate::access::{Access, Map};
 pub use crate::as_raw::AsRaw;
 pub use crate::cache::Cache;
 pub use crate::ref_cnt::RefCnt;
+use crate::strategy::hybrid::{DefaultConfig, HybridStrategy};
 use crate::strategy::sealed::Protected;
 use crate::strategy::{CaS, Strategy};
 pub use crate::strategy::{DefaultStrategy, IndependentStrategy};
@@ -734,6 +735,37 @@ impl<T, S: Strategy<Option<Arc<T>>>> ArcSwapAny<Option<Arc<T>>, S> {
         S: Default,
     {
         Self::new(None)
+    }
+}
+
+impl<T> ArcSwapOption<T> {
+    /// A const-fn equilavent of [empty].
+    ///
+    /// Just like [empty], this creates an `None`-holding `ArcSwapOption`. The [empty] is, however,
+    /// more general ‒ this is available only for the default strategy, while [empty] is for any
+    /// [Default]-constructible strategy (current or future one).
+    ///
+    /// [empty]: ArcSwapAny::empty
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use std::sync::Arc;
+    /// # use arc_swap::ArcSwapOption;
+    /// static GLOBAL_DATA: ArcSwapOption<usize> = ArcSwapOption::const_empty();
+    ///
+    /// assert!(GLOBAL_DATA.load().is_none());
+    /// GLOBAL_DATA.store(Some(Arc::new(42)));
+    /// assert_eq!(42, **GLOBAL_DATA.load().as_ref().unwrap());
+    /// ```
+    pub const fn const_empty() -> Self {
+        Self {
+            ptr: AtomicPtr::new(ptr::null_mut()),
+            _phantom_arc: PhantomData,
+            strategy: HybridStrategy {
+                _config: DefaultConfig,
+            },
+        }
     }
 }
 

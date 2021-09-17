@@ -171,7 +171,7 @@ impl Config for DefaultConfig {
 
 #[derive(Clone, Default)]
 pub struct HybridStrategy<Cfg> {
-    _config: Cfg,
+    pub(crate) _config: Cfg,
 }
 
 impl<T, Cfg> InnerStrategy<T> for HybridStrategy<Cfg>
