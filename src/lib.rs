@@ -739,7 +739,7 @@ impl<T, S: Strategy<Option<Arc<T>>>> ArcSwapAny<Option<Arc<T>>, S> {
 }
 
 impl<T> ArcSwapOption<T> {
-    /// A const-fn equilavent of [empty].
+    /// A const-fn equivalent of [empty].
     ///
     /// Just like [empty], this creates an `None`-holding `ArcSwapOption`. The [empty] is, however,
     /// more general ‒ this is available only for the default strategy, while [empty] is for any
