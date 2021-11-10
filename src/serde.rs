@@ -5,25 +5,6 @@ use serde::{Deserialize, Deserializer};
 use crate::{RefCnt, ArcSwapAny, Strategy};
 
 #[cfg(feature = "serialize")]
-/// # Examples
-///
-/// ```rust
-/// use arc_swap::ArcSwap;
-///
-/// #[derive(serde::Serialize)]
-/// struct Foo {
-///     field0: usize,
-///     field1: String,
-/// }
-///
-/// let data = Foo {
-///     field0: 123,
-///     field1: "123".to_owned(),
-/// };
-///
-/// let data_json = serde_json::to_string(&data).unwrap();
-/// println!("{}", data_json);
-/// ```
 impl<T, S> Serialize for ArcSwapAny<T, S>
     where
         T: RefCnt + Serialize,
@@ -35,20 +16,6 @@ impl<T, S> Serialize for ArcSwapAny<T, S>
 }
 
 #[cfg(feature = "deserialize")]
-/// # Examples
-///
-/// ```rust
-/// use arc_swap::ArcSwap;
-///
-/// #[derive(serde::Deserialize)]
-/// struct Foo {
-///     field0: usize,
-///     field1: String,
-/// }
-///
-/// let data = serde_json::from_str::<ArcSwap<Foo>>(r#"{"field0":123,"field1":"123"}"#).unwrap();
-/// println!("{:?}", data);
-/// ```
 impl<'de, T, S> Deserialize<'de> for ArcSwapAny<T, S>
     where
         T: RefCnt + Deserialize<'de>,
