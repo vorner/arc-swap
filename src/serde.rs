@@ -1,10 +1,6 @@
-#[cfg(feature = "serialize")]
-use serde::{Serialize, Serializer};
-#[cfg(feature = "deserialize")]
-use serde::{Deserialize, Deserializer};
+use serde::{Serialize, Serializer, Deserialize, Deserializer};
 use crate::{RefCnt, ArcSwapAny, Strategy};
 
-#[cfg(feature = "serialize")]
 impl<T, S> Serialize for ArcSwapAny<T, S>
     where
         T: RefCnt + Serialize,
@@ -15,7 +11,6 @@ impl<T, S> Serialize for ArcSwapAny<T, S>
     }
 }
 
-#[cfg(feature = "deserialize")]
 impl<'de, T, S> Deserialize<'de> for ArcSwapAny<T, S>
     where
         T: RefCnt + Deserialize<'de>,

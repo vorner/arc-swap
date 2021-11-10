@@ -23,8 +23,6 @@ weak = []
 internal-test-strategies = []
 # Possibly some strategies we are experimenting with. Currently empty. No stability guarantees are included about them.
 experimental-strategies = []
-serialize = ["serde"]
-deserialize = ["serde"]
 
 [dependencies]
 serde = { version = "1.0.130", features = ["rc"], optional = true }

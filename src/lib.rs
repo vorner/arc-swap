@@ -134,7 +134,7 @@ mod ref_cnt;
 pub mod strategy;
 #[cfg(feature = "weak")]
 mod weak;
-#[cfg(any(feature="serialize",feature="deserialize"))]
+#[cfg(feature="serde")]
 mod serde;
 
 use std::borrow::Borrow;
