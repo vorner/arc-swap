@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1632046961562,
+  "lastUpdate": 1636572024681,
   "repoUrl": "https://github.com/vorner/arc-swap",
   "entries": {
     "Track benchmarks": [
@@ -2355,6 +2355,120 @@ window.BENCHMARK_DATA = {
             "name": "concurrent_store/store",
             "value": 1238,
             "range": "± 19",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/cache",
+            "value": 1,
+            "range": "± 0",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "vorner@vorner.cz",
+            "name": "Michal 'vorner' Vaner",
+            "username": "vorner"
+          },
+          "committer": {
+            "email": "vorner@vorner.cz",
+            "name": "Michal 'vorner' Vaner",
+            "username": "vorner"
+          },
+          "distinct": true,
+          "id": "13e5e3f002dc51b3d938cd1e30db139e3fc96278",
+          "message": "Tests on pull requests too",
+          "timestamp": "2021-11-10T20:12:04+01:00",
+          "tree_id": "51b139c3b919a0101ec0c1638941d903ae886c5d",
+          "url": "https://github.com/vorner/arc-swap/commit/13e5e3f002dc51b3d938cd1e30db139e3fc96278"
+        },
+        "date": 1636572024054,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "uncontended/load",
+            "value": 18,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/load_full",
+            "value": 34,
+            "range": "± 6",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/load_many",
+            "value": 55,
+            "range": "± 4",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/store",
+            "value": 156,
+            "range": "± 11",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/cache",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/load",
+            "value": 26,
+            "range": "± 9",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/load_full",
+            "value": 39,
+            "range": "± 16",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/load_many",
+            "value": 76,
+            "range": "± 23",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/store",
+            "value": 1141,
+            "range": "± 404",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/cache",
+            "value": 1,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/load",
+            "value": 77,
+            "range": "± 7",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/load_full",
+            "value": 101,
+            "range": "± 6",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/load_many",
+            "value": 145,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/store",
+            "value": 1071,
+            "range": "± 71",
             "unit": "ns/iter"
           },
           {
