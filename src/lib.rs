@@ -134,6 +134,8 @@ mod ref_cnt;
 pub mod strategy;
 #[cfg(feature = "weak")]
 mod weak;
+#[cfg(any(feature="serialize",feature="deserialize"))]
+mod serde;
 
 use std::borrow::Borrow;
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
