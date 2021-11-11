@@ -1,6 +1,6 @@
-use std::ptr;
-use std::rc::Rc;
-use std::sync::Arc;
+use core::ptr;
+use alloc::rc::Rc;
+use alloc::sync::Arc;
 
 /// A trait describing smart reference counted pointers.
 ///

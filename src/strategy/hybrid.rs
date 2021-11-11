@@ -13,12 +13,12 @@
 //! See the [crate::debt] module for the actual slot manipulation. Here we just wrap them into the
 //! strategy.
 
-use std::borrow::Borrow;
-use std::mem::{self, ManuallyDrop};
-use std::ops::Deref;
-use std::ptr;
-use std::sync::atomic::AtomicPtr;
-use std::sync::atomic::Ordering::*;
+use core::borrow::Borrow;
+use core::mem::{self, ManuallyDrop};
+use core::ops::Deref;
+use core::ptr;
+use core::sync::atomic::AtomicPtr;
+use core::sync::atomic::Ordering::*;
 
 use super::sealed::{CaS, InnerStrategy, Protected};
 use crate::debt::{Debt, LocalNode};

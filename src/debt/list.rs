@@ -26,11 +26,12 @@
 //! at least as up to date value of the writers as when the cooldown started. That we if we see 0,
 //! we know it must have happened since then.
 
-use std::cell::Cell;
-use std::ptr;
-use std::slice::Iter;
-use std::sync::atomic::Ordering::*;
-use std::sync::atomic::{AtomicPtr, AtomicUsize};
+use core::cell::Cell;
+use core::ptr;
+use alloc::slice::Iter;
+use core::sync::atomic::Ordering::*;
+use core::sync::atomic::{AtomicPtr, AtomicUsize};
+use alloc::boxed::Box;
 
 use super::fast::{Local as FastLocal, Slots as FastSlots};
 use super::helping::{Local as HelpingLocal, Slots as HelpingSlots};
@@ -205,8 +206,7 @@ pub(crate) struct LocalNode {
 impl LocalNode {
     pub(crate) fn with<R, F: FnOnce(&LocalNode) -> R>(f: F) -> R {
         let f = Cell::new(Some(f));
-        THREAD_HEAD
-            .try_with(|head| {
+        thread_head_try_with(|head| {
                 if head.node.get().is_none() {
                     head.node.set(Some(Node::get()));
                 }
@@ -302,6 +302,11 @@ impl Drop for LocalNode {
     }
 }
 
+#[cfg(not(feature = "no_std"))]
+extern crate std;
+#[cfg(not(feature = "no_std"))]
+use std::thread_local;
+#[cfg(not(feature = "no_std"))]
 thread_local! {
     /// A debt node assigned to this thread.
     static THREAD_HEAD: LocalNode = LocalNode {
@@ -309,6 +314,31 @@ thread_local! {
         fast: FastLocal::default(),
         helping: HelpingLocal::default(),
     };
+}
+#[cfg(not(feature = "no_std"))]
+fn thread_head_try_with<F, R>(f: F) -> Result<R, std::thread::AccessError>
+where
+    F: FnOnce(&LocalNode) -> R,
+{
+    THREAD_HEAD.try_with(f)
+}
+
+#[cfg(feature = "no_std")]
+use static_init::dynamic;
+#[cfg(feature = "no_std")]
+#[dynamic(drop)]
+#[thread_local]
+static THREAD_HEAD: LocalNode = LocalNode {
+    node: Cell::new(None),
+    fast: FastLocal::default(),
+    helping: HelpingLocal::default(),
+};
+#[cfg(feature = "no_std")]
+fn thread_head_try_with<F, R>(f: F) -> Result<R, ()>
+    where
+        F: FnOnce(&LocalNode) -> R,
+{
+    Result::Ok(f(&THREAD_HEAD))
 }
 
 #[cfg(test)]
@@ -318,7 +348,7 @@ mod tests {
     impl Node {
         fn is_empty(&self) -> bool {
             self.fast_slots()
-                .chain(std::iter::once(self.helping_slot()))
+                .chain(core::iter::once(self.helping_slot()))
                 .all(|d| d.0.load(Relaxed) == Debt::NONE)
         }
 

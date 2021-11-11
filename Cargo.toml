@@ -23,8 +23,16 @@ weak = []
 internal-test-strategies = []
 # Possibly some strategies we are experimenting with. Currently empty. No stability guarantees are included about them.
 experimental-strategies = []
+# no_std doesn't have RwLock and thread_local!
+no_std = ["parking_lot", "static_init"]
+no_std_spin_loop = ["static_init/spin_loop"]
 
 [dependencies]
+# Optional dependency for supporting no_std
+# RwLock
+parking_lot = { version = "0.11.1", optional = true }
+# thread_local!
+static_init = { version = "1.0.1", optional = true, features = ["thread_local"] }
 
 [dev-dependencies]
 adaptive-barrier = "~0.1"

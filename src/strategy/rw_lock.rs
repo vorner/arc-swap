@@ -1,5 +1,12 @@
-use std::sync::atomic::{AtomicPtr, Ordering};
+use core::sync::atomic::{AtomicPtr, Ordering};
+
+#[cfg(not(feature = "no_std"))]
+extern crate std;
+#[cfg(not(feature = "no_std"))]
 use std::sync::RwLock;
+
+#[cfg(feature = "no_std")]
+use parking_lot::RwLock;
 
 use super::sealed::{CaS, InnerStrategy, Protected};
 use crate::as_raw::AsRaw;
@@ -20,7 +27,10 @@ impl<T: RefCnt> Protected<T> for T {
 impl<T: RefCnt> InnerStrategy<T> for RwLock<()> {
     type Protected = T;
     unsafe fn load(&self, storage: &AtomicPtr<T::Base>) -> T {
+        #[cfg(not(feature = "no_std"))]
         let _guard = self.read().expect("We don't panic in here");
+        #[cfg(feature = "no_std")]
+        let _guard = self.read();
         let ptr = storage.load(Ordering::Acquire);
         let ptr = T::from_ptr(ptr as *const T::Base);
         T::inc(&ptr);
@@ -30,7 +40,10 @@ impl<T: RefCnt> InnerStrategy<T> for RwLock<()> {
 
     unsafe fn wait_for_readers(&self, _: *const T::Base, _: &AtomicPtr<T::Base>) {
         // By acquiring the write lock, we make sure there are no read locks present across it.
+        #[cfg(not(feature = "no_std"))]
         drop(self.write().expect("We don't panic in here"));
+        #[cfg(feature = "no_std")]
+        drop(self.write());
     }
 }
 

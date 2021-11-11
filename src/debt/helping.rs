@@ -106,10 +106,10 @@
 //!   writer and that change is the destruction ‒ by that time, the destroying thread has exclusive
 //!   ownership and therefore there can be no new readers.
 
-use std::cell::Cell;
-use std::ptr;
-use std::sync::atomic::Ordering::*;
-use std::sync::atomic::{AtomicPtr, AtomicUsize};
+use core::cell::Cell;
+use core::ptr;
+use core::sync::atomic::Ordering::*;
+use core::sync::atomic::{AtomicPtr, AtomicUsize};
 
 use super::Debt;
 use crate::RefCnt;

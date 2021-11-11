@@ -6,8 +6,8 @@
 //!
 //! [Arc]: std::sync::Arc
 
-use std::ops::Deref;
-use std::sync::atomic::Ordering;
+use core::ops::Deref;
+use core::sync::atomic::Ordering;
 
 use super::ref_cnt::RefCnt;
 use super::strategy::Strategy;
@@ -272,7 +272,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use alloc::sync::Arc;
 
     use super::*;
     use crate::{ArcSwap, ArcSwapOption};
