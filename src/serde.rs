@@ -1,10 +1,10 @@
-use serde::{Serialize, Serializer, Deserialize, Deserializer};
-use crate::{RefCnt, ArcSwapAny, Strategy};
+use crate::{ArcSwapAny, RefCnt, Strategy};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 impl<T, S> Serialize for ArcSwapAny<T, S>
-    where
-        T: RefCnt + Serialize,
-        S: Strategy<T>,
+where
+    T: RefCnt + Serialize,
+    S: Strategy<T>,
 {
     fn serialize<Ser: Serializer>(&self, serializer: Ser) -> Result<Ser::Ok, Ser::Error> {
         self.load().serialize(serializer)
@@ -12,9 +12,9 @@ impl<T, S> Serialize for ArcSwapAny<T, S>
 }
 
 impl<'de, T, S> Deserialize<'de> for ArcSwapAny<T, S>
-    where
-        T: RefCnt + Deserialize<'de>,
-        S: Strategy<T> + Default,
+where
+    T: RefCnt + Deserialize<'de>,
+    S: Strategy<T> + Default,
 {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         Ok(Self::from(T::deserialize(deserializer)?))
@@ -23,16 +23,16 @@ impl<'de, T, S> Deserialize<'de> for ArcSwapAny<T, S>
 
 #[cfg(test)]
 mod tests {
-    use crate::{ArcSwapOption, ArcSwap};
-    use serde_derive::{Serialize, Deserialize};
+    use crate::{ArcSwap, ArcSwapOption};
+    use serde_derive::{Deserialize, Serialize};
 
-    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize,)]
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     struct Foo {
         field0: usize,
         field1: String,
     }
 
-    #[derive(Debug, Serialize, Deserialize,)]
+    #[derive(Debug, Serialize, Deserialize)]
     struct Bar {
         field0: ArcSwap<usize>,
         field1: ArcSwapOption<String>,
