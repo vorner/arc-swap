@@ -128,7 +128,7 @@ mod tests {
     #[test]
     fn test_deserialize_option_none() {
         let str = "null";
-        let data = serde_json::from_str::<ArcSwapOption<Foo>>(&str).unwrap();
+        let data = serde_json::from_str::<ArcSwapOption<Foo>>(str).unwrap();
 
         assert_eq!(data.load_full(), None);
     }
