@@ -131,6 +131,8 @@ mod compile_fail_tests;
 mod debt;
 pub mod docs;
 mod ref_cnt;
+#[cfg(feature = "serde")]
+mod serde;
 pub mod strategy;
 #[cfg(feature = "weak")]
 mod weak;
