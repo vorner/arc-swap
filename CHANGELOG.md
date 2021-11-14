@@ -1,3 +1,7 @@
+# 1.5.0
+
+* Support serde (by a feature).
+
 # 1.4.0
 
 * Allow const-initializing ArcSwapOption (`const_empty` method).
