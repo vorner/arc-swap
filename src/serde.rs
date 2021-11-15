@@ -85,6 +85,8 @@ mod tests {
                     len: 2,
                 },
                 Token::Str("field0"),
+                #[cfg(target_pointer_width = "16")]
+                Token::U16(u16::MAX),
                 #[cfg(target_pointer_width = "32")]
                 Token::U32(u32::MAX),
                 #[cfg(target_pointer_width = "64")]
@@ -107,6 +109,8 @@ mod tests {
                     len: 2,
                 },
                 Token::Str("field0"),
+                #[cfg(target_pointer_width = "16")]
+                Token::U16(u16::MAX),
                 #[cfg(target_pointer_width = "32")]
                 Token::U32(u32::MAX),
                 #[cfg(target_pointer_width = "64")]
@@ -138,6 +142,8 @@ mod tests {
                     len: 2,
                 },
                 Token::Str("field0"),
+                #[cfg(target_pointer_width = "16")]
+                Token::U16(u16::MAX),
                 #[cfg(target_pointer_width = "32")]
                 Token::U32(u32::MAX),
                 #[cfg(target_pointer_width = "64")]
