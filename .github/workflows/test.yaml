@@ -213,3 +213,26 @@ jobs:
           PROPTEST_CASES: "10"
           MIRIFLAGS: "-Zmiri-disable-isolation"
         run: cargo miri test --all-features
+
+  thread_sanitizer:
+    name: Thread Sanitizer checks
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ github.event.repository.name }}-${{ runner.os }}-cargo-thread_sanitizer-v2
+    - name: Install latest nightly
+      uses: actions-rs/toolchain@v1
+      with:
+          toolchain: nightly
+          override: true
+          components: rust-src
+    - name: Run thread sanitizer
+      run: for _ in $(seq 1 10); do RUSTFLAGS='-Zsanitizer=thread' cargo +nightly test -Z build-std --target --target $(uname -m)-unknown-linux-gnu; done
