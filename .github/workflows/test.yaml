@@ -236,6 +236,7 @@ jobs:
           components: rust-src
     - name: Run thread sanitizer
       run: |
-        export RUSTDOCFLAGS='-Zsanitizer=thread'
-        export RUSTFLAGS='-Zsanitizer=thread'
         for _ in $(seq 1 10); do cargo +nightly test -Z build-std --target --target $(uname -m)-unknown-linux-gnu; done
+      env:
+        RUSTDOCFLAGS: "-Zsanitizer=thread"
+        RUSTFLAGS: "-Zsanitizer=thread"
