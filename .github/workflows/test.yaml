@@ -236,6 +236,11 @@ jobs:
           components: rust-src
     - name: Run thread sanitizer
       run: |
+        # Thread sanitizer isn't guaranteed to catch all data races, it can only catch it
+        # the data race if it happens when running the program.
+        #
+        # Running the tests multiple times increase the chances that data races are found
+        # by the thread sanitizer.
         for _ in $(seq 1 10); do cargo +nightly test -Z build-std --target --target $(uname -m)-unknown-linux-gnu; done
       env:
         RUSTDOCFLAGS: "-Zsanitizer=thread"
