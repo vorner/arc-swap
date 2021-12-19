@@ -1,5 +1,6 @@
 on:
-  pull_request:
+  # For some reason, this fails due to some permissions.
+  # pull_request:
   push:
     branches:
       - master
