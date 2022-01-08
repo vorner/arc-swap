@@ -1,3 +1,7 @@
+# Unreleased
+
+* docs: Mention triomphe's `ThinArc` around the fat-pointer limitations.
+
 # 1.5.0
 
 * Support serde (by a feature).

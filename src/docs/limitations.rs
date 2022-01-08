@@ -19,6 +19,9 @@
 //! # drop(data);
 //! ```
 //!
+//! It also may be possible to use `ArcSwap` with the [`triomphe::ThinArc`] (that crate needs
+//! enabling a feature flag to cooperate with `ArcSwap`).
+//!
 //! # Too many [`Guard`]s
 //!
 //! There's only limited number of "fast" slots for borrowing from [`ArcSwap`] for each single
@@ -46,3 +49,5 @@
 //! let new = ArcSwap::new(old.load_full());
 //! # let _ = new;
 //! ```
+//!
+//! [`triomphe::ThinArc`]: https://docs.rs/triomphe/latest/triomphe/struct.ThinArc.html
