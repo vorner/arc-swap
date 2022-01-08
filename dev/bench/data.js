@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1639996920830,
+  "lastUpdate": 1641644847401,
   "repoUrl": "https://github.com/vorner/arc-swap",
   "entries": {
     "Track benchmarks": [
@@ -3035,6 +3035,120 @@ window.BENCHMARK_DATA = {
             "name": "concurrent_store/store",
             "value": 1067,
             "range": "± 44",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/cache",
+            "value": 1,
+            "range": "± 0",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "vorner@vorner.cz",
+            "name": "Michal 'vorner' Vaner",
+            "username": "vorner"
+          },
+          "committer": {
+            "email": "vorner@vorner.cz",
+            "name": "Michal 'vorner' Vaner",
+            "username": "vorner"
+          },
+          "distinct": true,
+          "id": "cc90e97bf2284d183200a58b3b7658af43938fee",
+          "message": "Merge branch 'master' of github.com:vorner/arc-swap",
+          "timestamp": "2022-01-08T13:19:55+01:00",
+          "tree_id": "c864274a4f9dc76c913d0cc60d48941fcd0dc284",
+          "url": "https://github.com/vorner/arc-swap/commit/cc90e97bf2284d183200a58b3b7658af43938fee"
+        },
+        "date": 1641644846976,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "uncontended/load",
+            "value": 21,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/load_full",
+            "value": 38,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/load_many",
+            "value": 48,
+            "range": "± 7",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/store",
+            "value": 148,
+            "range": "± 9",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/cache",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/load",
+            "value": 30,
+            "range": "± 10",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/load_full",
+            "value": 55,
+            "range": "± 49",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/load_many",
+            "value": 68,
+            "range": "± 24",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/store",
+            "value": 895,
+            "range": "± 390",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/cache",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/load",
+            "value": 94,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/load_full",
+            "value": 121,
+            "range": "± 7",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/load_many",
+            "value": 164,
+            "range": "± 10",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/store",
+            "value": 1202,
+            "range": "± 84",
             "unit": "ns/iter"
           },
           {
