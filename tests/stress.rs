@@ -4,7 +4,8 @@
 //! discover any possible race condition.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
+use std::ops::Deref;
 
 use adaptive_barrier::{Barrier, PanicMode};
 use arc_swap::strategy::{CaS, DefaultStrategy, IndependentStrategy, Strategy};
@@ -236,6 +237,8 @@ where
                 for _ in 0..iters {
                     let guards = (0..256).map(|_| shared.load()).collect::<Vec<_>>();
                     for (l, h) in guards.iter().tuple_windows() {
+                        assert!(Arc::strong_count(&*l) >= 1);
+                        (*l).deref();
                         assert!(**l <= **h, "{} > {}", l, h);
                     }
                 }
@@ -247,6 +250,19 @@ where
     assert_eq!(2, Arc::strong_count(&v));
 }
 
+#[test]
+fn load_linear() {
+    let _lock = lock();
+    let shared = arc_swap::ArcSwap::from_pointee(0);
+
+    let mut guards = Vec::new();
+
+    for i in 0..500 {
+        guards.push(shared.load());
+        shared.store(Arc::new(i));
+    }
+}
+
 #[cfg(not(miri))]
 const ITER_SMALL: usize = 100;
 #[cfg(not(miri))]
@@ -255,7 +271,7 @@ const ITER_MID: usize = 1000;
 #[cfg(miri)]
 const ITER_SMALL: usize = 2;
 #[cfg(miri)]
-const ITER_MID: usize = 5;
+const ITER_MID: usize = 10;
 
 macro_rules! t {
     ($name: ident, $strategy: ty) => {
@@ -302,7 +318,8 @@ macro_rules! t {
 }
 
 t!(default, DefaultStrategy);
-t!(independent, IndependentStrategy);
+//t!(rwlock, RwLock<()>);
+//t!(independent, IndependentStrategy);
 #[cfg(feature = "internal-test-strategies")]
 t!(
     full_slots,

@@ -829,7 +829,7 @@ macro_rules! t {
                                 let cfg = config.load_full();
                                 if !cfg.is_empty() {
                                     assert_eq!(*cfg, "New configuration");
-                                    ended.fetch_add(1, Ordering::Relaxed);
+                                    ended.fetch_add(1, Ordering::SeqCst);
                                     return;
                                 }
                                 atomic::spin_loop_hint();
@@ -841,7 +841,7 @@ macro_rules! t {
                         });
                     })
                     .unwrap();
-                    assert_eq!(READERS, ended.load(Ordering::Relaxed));
+                    assert_eq!(READERS, ended.load(Ordering::SeqCst));
                     let arc = config.load_full();
                     assert_eq!(2, Arc::strong_count(&arc));
                     assert_eq!(0, Arc::weak_count(&arc));
@@ -968,7 +968,7 @@ macro_rules! t {
             struct ReportDrop(Arc<AtomicUsize>);
             impl Drop for ReportDrop {
                 fn drop(&mut self) {
-                    self.0.fetch_add(1, Ordering::Relaxed);
+                    self.0.fetch_add(1, Ordering::SeqCst);
                 }
             }
 
@@ -987,7 +987,7 @@ macro_rules! t {
                     let cnt = Arc::new(AtomicUsize::new(0));
 
                     let shared = As::from_pointee(ReportDrop(cnt.clone()));
-                    assert_eq!(cnt.load(Ordering::Relaxed), 0, "Dropped prematurely");
+                    assert_eq!(cnt.load(Ordering::SeqCst), 0, "Dropped prematurely");
                     // We need the threads to wait for each other at places.
                     let sync = Barrier::new(PanicMode::Poison);
 

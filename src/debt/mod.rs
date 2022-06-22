@@ -73,7 +73,7 @@ impl Debt {
             // necessarily observe that increment, but whoever destroys the pointer *must* see the
             // up to date value, with all increments already counted in (the Arc takes care of that
             // part).
-            .compare_exchange(ptr as usize, Self::NONE, Release, Relaxed)
+            .compare_exchange(ptr as usize, Self::NONE, SeqCst, SeqCst)
             .is_ok()
     }
 

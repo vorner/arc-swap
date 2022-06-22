@@ -42,7 +42,7 @@ use std::sync::atomic::AtomicPtr;
 use crate::ref_cnt::RefCnt;
 
 pub(crate) mod hybrid;
-mod rw_lock;
+pub mod rw_lock;
 // Do not use from outside of the crate.
 #[cfg(feature = "internal-test-strategies")]
 #[doc(hidden)]

@@ -24,16 +24,27 @@ use super::sealed::{CaS, InnerStrategy, Protected};
 use crate::debt::{Debt, LocalNode};
 use crate::ref_cnt::RefCnt;
 
+#[derive(Debug)]
+pub enum Origin {
+    Fast,
+    FastChanged,
+    ConfirmedHelp,
+    Replacement,
+    Direct,
+}
+
 pub struct HybridProtection<T: RefCnt> {
     debt: Option<&'static Debt>,
     ptr: ManuallyDrop<T>,
+    origin: Origin,
 }
 
 impl<T: RefCnt> HybridProtection<T> {
-    pub(super) unsafe fn new(ptr: *const T::Base, debt: Option<&'static Debt>) -> Self {
+    pub(super) unsafe fn new(ptr: *const T::Base, debt: Option<&'static Debt>, origin: Origin) -> Self {
         Self {
             debt,
             ptr: ManuallyDrop::new(T::from_ptr(ptr)),
+            origin,
         }
     }
 
@@ -41,14 +52,14 @@ impl<T: RefCnt> HybridProtection<T> {
     #[inline]
     fn attempt(node: &LocalNode, storage: &AtomicPtr<T::Base>) -> Option<Self> {
         // Relaxed is good enough here, see the Acquire below
-        let ptr = storage.load(Relaxed);
+        let ptr = storage.load(SeqCst);
         // Try to get a debt slot. If not possible, fail.
         let debt = node.new_fast(ptr as usize)?;
 
-        let confirm = storage.load(Acquire);
+        let confirm = storage.load(SeqCst);
         if ptr == confirm {
             // Successfully got a debt
-            Some(unsafe { Self::new(ptr, Some(debt)) })
+            Some(unsafe { Self::new(ptr, Some(debt), Origin::Fast) })
         } else if debt.pay::<T>(ptr) {
             // It changed in the meantime, we return the debt (that is on the outdated pointer,
             // possibly destroyed) and fail.
@@ -56,7 +67,7 @@ impl<T: RefCnt> HybridProtection<T> {
         } else {
             // It changed in the meantime, but the debt for the previous pointer was already paid
             // for by someone else, so we are fine using it.
-            Some(unsafe { Self::new(ptr, None) })
+            Some(unsafe { Self::new(ptr, None, Origin::FastChanged) })
         }
     }
 
@@ -68,14 +79,14 @@ impl<T: RefCnt> HybridProtection<T> {
         // We already synchronized the start of the sequence by SeqCst in the new_helping vs swap on
         // the pointer. We just need to make sure to bring the pointee in (this can be newer than
         // what we got in the Debt)
-        let candidate = storage.load(Acquire);
+        let candidate = storage.load(SeqCst);
 
         // Try to replace the debt with our candidate. If it works, we get the debt slot to use. If
         // not, we get a replacement value, already protected and a debt to take care of.
         match node.confirm_helping(gen, candidate as usize) {
             Ok(debt) => {
                 // The fast path -> we got the debt confirmed alright.
-                Self::from_inner(unsafe { Self::new(candidate, Some(debt)).into_inner() })
+                Self::from_inner(unsafe { Self::new(candidate, Some(debt), Origin::ConfirmedHelp).into_inner() })
             }
             Err((unused_debt, replacement)) => {
                 // The debt is on the candidate we provided and it is unused, we so we just pay it
@@ -85,7 +96,7 @@ impl<T: RefCnt> HybridProtection<T> {
                 }
                 // We got a (possibly) different pointer out. But that one is already protected and
                 // the slot is paid back.
-                unsafe { Self::new(replacement as *mut _, None) }
+                unsafe { Self::new(replacement as *mut _, None, Origin::Replacement) }
             }
         }
     }
@@ -106,7 +117,14 @@ impl<T: RefCnt> Drop for HybridProtection<T> {
             // If we owed something, just return the debt. We don't have a pointer owned, so
             // nothing to release.
             Some(debt) => {
-                let ptr = T::as_ptr(&self.ptr);
+                use Origin::*;
+                let ptr = match self.origin {
+                    Fast => T::as_ptr(&self.ptr),
+                    FastChanged => T::as_ptr(&self.ptr),
+                    ConfirmedHelp => T::as_ptr(&self.ptr),
+                    Replacement => T::as_ptr(&self.ptr),
+                    Direct => T::as_ptr(&self.ptr),
+                };
                 if debt.pay::<T>(ptr) {
                     return;
                 }
@@ -125,6 +143,7 @@ impl<T: RefCnt> Protected<T> for HybridProtection<T> {
         Self {
             debt: None,
             ptr: ManuallyDrop::new(ptr),
+            origin: Origin::Direct,
         }
     }
 
@@ -216,7 +235,7 @@ impl<T: RefCnt, Cfg: Config> CaS<T> for HybridStrategy<Cfg> {
             // If they are still equal, put the new one in.
             let new_raw = T::as_ptr(&new);
             if storage
-                .compare_exchange_weak(current.as_raw(), new_raw, SeqCst, Relaxed)
+                .compare_exchange_weak(current.as_raw(), new_raw, SeqCst, SeqCst)
                 .is_ok()
             {
                 // We successfully put the new value in. The ref count went in there too.

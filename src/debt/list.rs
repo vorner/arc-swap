@@ -48,7 +48,7 @@ pub struct NodeReservation<'a>(&'a Node);
 
 impl Drop for NodeReservation<'_> {
     fn drop(&mut self) {
-        self.0.active_writers.fetch_sub(1, Release);
+        self.0.active_writers.fetch_sub(1, SeqCst);
     }
 }
 
@@ -85,7 +85,7 @@ impl Node {
         //
         // Note that the other pointers in the chain never change and are *ordinary* pointers. The
         // whole linked list is synchronized through the head.
-        let mut current = unsafe { LIST_HEAD.load(Acquire).as_ref() };
+        let mut current = unsafe { LIST_HEAD.load(SeqCst).as_ref() };
         while let Some(node) = current {
             let result = f(node);
             if result.is_some() {
@@ -101,7 +101,7 @@ impl Node {
         // Trick: Make sure we have an up to date value of the active_writers in this thread, so we
         // can properly release it below.
         let _reservation = self.reserve_writer();
-        assert_eq!(NODE_USED, self.in_use.swap(NODE_COOLDOWN, Release));
+        assert_eq!(NODE_USED, self.in_use.swap(NODE_COOLDOWN, SeqCst));
     }
 
     /// Perform a cooldown if the node is ready.
@@ -113,7 +113,7 @@ impl Node {
         // * More importantly, sync the value of active_writers to be at least the value when the
         //   cooldown started. That way we know the 0 we observe happened some time after
         //   start_cooldown.
-        if self.in_use.load(Acquire) == NODE_COOLDOWN {
+        if self.in_use.load(SeqCst) == NODE_COOLDOWN {
             // The rest can be nicely relaxed ‒ no memory is being synchronized by these
             // operations. We just see an up to date 0 and allow someone (possibly us) to claim the
             // node later on.
@@ -127,7 +127,7 @@ impl Node {
 
     /// Mark this node that a writer is currently playing with it.
     pub fn reserve_writer(&self) -> NodeReservation {
-        self.active_writers.fetch_add(1, Acquire);
+        self.active_writers.fetch_add(1, SeqCst);
         NodeReservation(self)
     }
 
@@ -143,7 +143,7 @@ impl Node {
                 .in_use
                 // We claim a unique control over the generation and the right to write to slots if
                 // they are NO_DEPT
-                .compare_exchange(NODE_UNUSED, NODE_USED, Acquire, Relaxed)
+                .compare_exchange(NODE_UNUSED, NODE_USED, SeqCst, SeqCst)
                 .is_ok()
             {
                 Some(node)
