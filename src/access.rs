@@ -112,10 +112,50 @@ pub trait Access<T> {
     fn load(&self) -> Self::Guard;
 }
 
-impl<T, A: Access<T>, P: Deref<Target = A>> Access<T> for P {
+impl<T, A: Access<T> + ?Sized, P: Deref<Target = A>> Access<T> for P {
     type Guard = A::Guard;
     fn load(&self) -> Self::Guard {
         self.deref().load()
+    }
+}
+
+impl<T> Access<T> for dyn DynAccess<T> + '_ {
+    type Guard = DynGuard<T>;
+
+    fn load(&self) -> Self::Guard {
+        self.load()
+    }
+}
+
+impl<T> Access<T> for dyn DynAccess<T> + '_ + Send {
+    type Guard = DynGuard<T>;
+
+    fn load(&self) -> Self::Guard {
+        self.load()
+    }
+}
+
+impl<T> Access<T> for dyn DynAccess<T> + '_ + Sync + Send {
+    type Guard = DynGuard<T>;
+
+    fn load(&self) -> Self::Guard {
+        self.load()
+    }
+}
+
+// Should probably be moved to a more appropriate place / perhaps more extensively tested / etc
+#[cfg(test)]
+mod test {
+    use super::*;
+    fn _expect_access<T>(_: impl Access<T>) {}
+    fn _test1<T>(x: Box<dyn DynAccess<T> + '_>) {
+        _expect_access(x)
+    }
+    fn _test2<T>(x: Box<dyn DynAccess<T> + '_ + Send>) {
+        _expect_access(x)
+    }
+    fn _test3<T>(x: Box<dyn DynAccess<T> + '_ + Send + Sync>) {
+        _expect_access(x)
     }
 }
 
