@@ -45,7 +45,10 @@ impl<T: RefCnt> HybridProtection<T> {
         // Try to get a debt slot. If not possible, fail.
         let debt = node.new_fast(ptr as usize)?;
 
-        let confirm = storage.load(Acquire);
+        // Acquire to get the data.
+        //
+        // SeqCst to make sure the storage vs. the debt are well ordered.
+        let confirm = storage.load(SeqCst);
         if ptr == confirm {
             // Successfully got a debt
             Some(unsafe { Self::new(ptr, Some(debt)) })

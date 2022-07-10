@@ -83,9 +83,12 @@ impl Node {
         // Acquire ‒ we want to make sure we read the correct version of data at the end of the
         // pointer. Any write to the DEBT_HEAD is with Release.
         //
+        // Furthermore, we need to see the newest version of the list in case we examine the debts
+        // - if a new one is added recently, we don't want a stale read -> SeqCst.
+        //
         // Note that the other pointers in the chain never change and are *ordinary* pointers. The
         // whole linked list is synchronized through the head.
-        let mut current = unsafe { LIST_HEAD.load(Acquire).as_ref() };
+        let mut current = unsafe { LIST_HEAD.load(SeqCst).as_ref() };
         while let Some(node) = current {
             let result = f(node);
             if result.is_some() {
@@ -143,7 +146,7 @@ impl Node {
                 .in_use
                 // We claim a unique control over the generation and the right to write to slots if
                 // they are NO_DEPT
-                .compare_exchange(NODE_UNUSED, NODE_USED, Acquire, Relaxed)
+                .compare_exchange(NODE_UNUSED, NODE_USED, SeqCst, Relaxed)
                 .is_ok()
             {
                 Some(node)
@@ -167,7 +170,10 @@ impl Node {
                     head, node,
                     // We need to release *the whole chain* here. For that, we need to
                     // acquire it first.
-                    AcqRel, Relaxed, // Nothing changed, go next round of the loop.
+                    //
+                    // SeqCst because we need to make sure it is properly set "before" we do
+                    // anything to the debts.
+                    SeqCst, Relaxed, // Nothing changed, go next round of the loop.
                 ) {
                     head = old;
                 } else {
