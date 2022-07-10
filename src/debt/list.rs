@@ -143,7 +143,7 @@ impl Node {
                 .in_use
                 // We claim a unique control over the generation and the right to write to slots if
                 // they are NO_DEPT
-                .compare_exchange(NODE_UNUSED, NODE_USED, SeqCst, SeqCst)
+                .compare_exchange(NODE_UNUSED, NODE_USED, SeqCst, Relaxed)
                 .is_ok()
             {
                 Some(node)
@@ -167,7 +167,7 @@ impl Node {
                     head, node,
                     // We need to release *the whole chain* here. For that, we need to
                     // acquire it first.
-                    AcqRel, Relaxed, // Nothing changed, go next round of the loop.
+                    SeqCst, Relaxed, // Nothing changed, go next round of the loop.
                 ) {
                     head = old;
                 } else {
