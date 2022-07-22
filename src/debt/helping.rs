@@ -200,7 +200,7 @@ impl Slots {
         // generation/released slot. That way we may re-confirm in the writer that the reader is
         // not in between here and the compare_exchange below with a stale gen (eg. if we are in
         // here, the re-confirm there will load the NO_DEPT and we are fine).
-        self.active_addr.store(ptr, Release);
+        self.active_addr.store(ptr, SeqCst);
 
         // We are the only ones allowed to do the IDLE -> * transition and we never leave it in
         // anything else after an transaction, so this is OK. But we still need a load-store SeqCst
@@ -219,7 +219,7 @@ impl Slots {
     {
         debug_assert_eq!(IDLE, self.control.load(Relaxed));
         // Also acquires the auxiliary data in other variables.
-        let mut control = who.control.load(Acquire);
+        let mut control = who.control.load(SeqCst);
         loop {
             match control & TAG_MASK {
                 // Nothing to help with
@@ -236,10 +236,10 @@ impl Slots {
                     // we also sync the control into our thread once more and reconfirm that the
                     // value of the active_addr is in between two same instances, therefore up to
                     // date to it.
-                    let active_addr = who.active_addr.load(Acquire);
+                    let active_addr = who.active_addr.load(SeqCst);
                     if active_addr != storage_addr {
                         // Acquire for the same reason as on the top.
-                        let new_control = who.control.load(Acquire);
+                        let new_control = who.control.load(SeqCst);
                         if new_control == control {
                             // The other thread is doing something, but to some other ArcSwap, so
                             // we don't care. Cool, done.
@@ -260,13 +260,13 @@ impl Slots {
                     // If we succeed in helping the other thread, we take their empty space in
                     // return for us that we pass to them. It's already there, the value is synced
                     // to us by Acquire on control.
-                    let their_space = who.space_offer.load(Acquire);
+                    let their_space = who.space_offer.load(SeqCst);
                     // Relaxed is fine, our own thread and nobody but us writes in here.
-                    let my_space = self.space_offer.load(Relaxed);
+                    let my_space = self.space_offer.load(SeqCst);
                     // Relaxed is fine, we'll sync by the next compare-exchange. If we don't, the
                     // value won't ever be read anyway.
                     unsafe {
-                        (*my_space).0.store(replace_addr, Relaxed);
+                        (*my_space).0.store(replace_addr, SeqCst);
                     }
                     // Ensured by the align annotation at the type.
                     assert_eq!(my_space as usize & TAG_MASK, 0);
@@ -277,12 +277,12 @@ impl Slots {
                     // space (it won't have changed, it does when the control is set to IDLE).
                     match who
                         .control
-                        .compare_exchange(control, space_addr, AcqRel, Acquire)
+                        .compare_exchange(control, space_addr, SeqCst, SeqCst)
                     {
                         Ok(_) => {
                             // We have successfully sent our replacement out (Release) and got
                             // their space in return (Acquire on that load above).
-                            self.space_offer.store(their_space, Release);
+                            self.space_offer.store(their_space, SeqCst);
                             // The ref count went with it, so forget about it here.
                             T::into_ptr(replacement);
                             // We have successfully helped out, so we are done.
@@ -309,12 +309,12 @@ impl Slots {
         // Put the slot there and consider it acquire of a „lock“. For that we need swap, not store
         // only (we need Acquire and Acquire works only on loads). Release is to make sure control
         // is observable by the other thread (but that's probably not necessary anyway?)
-        let prev = self.slot.0.swap(ptr as usize, AcqRel);
+        let prev = self.slot.0.swap(ptr as usize, SeqCst);
         debug_assert_eq!(Debt::NONE, prev);
 
         // Confirm by writing to the control (or discover that we got helped). We stop anyone else
         // from helping by setting it to IDLE.
-        let control = self.control.swap(IDLE, AcqRel);
+        let control = self.control.swap(IDLE, SeqCst);
         if control == gen {
             // Nobody interfered, we have our debt in place and can proceed.
             Ok(())
@@ -322,9 +322,9 @@ impl Slots {
             // Someone put a replacement in there.
             debug_assert_eq!(control & TAG_MASK, REPLACEMENT_TAG);
             let handover = (control & !TAG_MASK) as *mut Handover;
-            let replacement = unsafe { &*handover }.0.load(Acquire);
+            let replacement = unsafe { &*handover }.0.load(SeqCst);
             // Make sure we advertise the right envelope when we set it to generation next time.
-            self.space_offer.store(handover, Release);
+            self.space_offer.store(handover, SeqCst);
             // Note we've left the debt in place. The caller should pay it back (without ever
             // taking advantage of it) to make sure any extra is actually dropped (it is possible
             // someone provided the replacement *and* paid the debt and we need just one of them).
