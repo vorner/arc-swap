@@ -1,5 +1,9 @@
-# Unreleased
+# 1.5.1
 
+* bug: Insufficient synchronization on weak platforms (#76).
+
+  Never observed in practice (it's suspected practical weak platforms like ARM
+  are still stronger than the model), but still technically UB.
 * docs: Mention triomphe's `ThinArc` around the fat-pointer limitations.
 
 # 1.5.0

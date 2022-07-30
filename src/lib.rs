@@ -164,7 +164,7 @@ pub struct Guard<T: RefCnt, S: Strategy<T> = DefaultStrategy> {
     inner: S::Protected,
 }
 
-impl<'a, T: RefCnt, S: Strategy<T>> Guard<T, S> {
+impl<T: RefCnt, S: Strategy<T>> Guard<T, S> {
     /// Converts it into the held value.
     ///
     /// This, on occasion, may be a tiny bit faster than cloning the Arc or whatever is being held
@@ -199,7 +199,7 @@ impl<'a, T: RefCnt, S: Strategy<T>> Guard<T, S> {
     }
 }
 
-impl<'a, T: RefCnt, S: Strategy<T>> Deref for Guard<T, S> {
+impl<T: RefCnt, S: Strategy<T>> Deref for Guard<T, S> {
     type Target = T;
     #[inline]
     fn deref(&self) -> &T {

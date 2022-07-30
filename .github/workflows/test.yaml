@@ -22,7 +22,7 @@ jobs:
           - stable
           - beta
           - nightly
-          - 1.45.0 # The weak-into-raw feature stabilized
+          # 1.45.0 # The weak-into-raw feature stabilized
           # 1.31.0 is tested separately, because it is supposed to only build
 
     runs-on: ${{ matrix.os }}
@@ -170,6 +170,26 @@ jobs:
       - name: Run clippy linter
         run: cargo test --all --release --benches --all-features
 
+  semi-ancient:
+    name: Check it compiles on old Rust (1.45.0)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: 1.45.0
+          profile: minimal
+          default: true
+
+      - name: Restore cache
+        uses: Swatinem/rust-cache@v1
+
+      - name: Run check
+        run: rm Cargo.lock && cargo check --all-features
+
   ancient:
     name: Check it compiles on old Rust (1.31.0)
     runs-on: ubuntu-latest
@@ -187,7 +207,7 @@ jobs:
       - name: Restore cache
         uses: Swatinem/rust-cache@v1
 
-      - name: Run clippy linter
+      - name: Run check
         run: rm Cargo.lock && cargo check
 
   miri:
@@ -211,7 +231,8 @@ jobs:
       - name: Run miri
         env:
           PROPTEST_CASES: "10"
-          MIRIFLAGS: "-Zmiri-disable-isolation"
+          # TODO: Do something with the stacked borrows. Figure out what it means.
+          MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-disable-stacked-borrows"
         run: cargo miri test --all-features
 
   thread_sanitizer-MacOS:
