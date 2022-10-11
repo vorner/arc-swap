@@ -92,7 +92,7 @@ unsafe impl<T> RefCnt for Arc<T> {
         Arc::into_raw(me) as *mut T
     }
     fn as_ptr(me: &Arc<T>) -> *mut T {
-        me as &T as *const T as *mut T
+        Arc::as_ptr(me) as *mut T
     }
     unsafe fn from_ptr(ptr: *const T) -> Arc<T> {
         Arc::from_raw(ptr)
