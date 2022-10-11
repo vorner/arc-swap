@@ -231,7 +231,7 @@ jobs:
       - name: Run miri
         env:
           PROPTEST_CASES: "10"
-          MIRIFLAGS: "-Zmiri-disable-isolation"
+          MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-permissive-provenance"
         run: cargo miri test --all-features
 
   thread_sanitizer-MacOS:
