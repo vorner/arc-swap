@@ -883,7 +883,7 @@ macro_rules! t {
                 const WRITER_CNT: usize = 2;
                 const READER_CNT: usize = 3;
                 #[cfg(miri)]
-                const ITERATIONS: usize = 10;
+                const ITERATIONS: usize = 5;
                 #[cfg(not(miri))]
                 const ITERATIONS: usize = 100;
                 const SEQ: usize = 50;
@@ -1160,6 +1160,9 @@ macro_rules! t {
             #[test]
             /// Make sure the reference count and compare_and_swap works as expected.
             fn cas_ref_cnt() {
+                #[cfg(miri)]
+                const ITERATIONS: usize = 10;
+                #[cfg(not(miri))]
                 const ITERATIONS: usize = 50;
                 let shared = ArcSwap::from(Arc::new(0));
                 for i in 0..ITERATIONS {
@@ -1173,7 +1176,7 @@ macro_rules! t {
                     // Fill up the slots sometimes
                     let fillup = || {
                         if i % 2 == 0 {
-                            Some((0..50).map(|_| shared.load()).collect::<Vec<_>>())
+                            Some((0..ITERATIONS).map(|_| shared.load()).collect::<Vec<_>>())
                         } else {
                             None
                         }
@@ -1272,10 +1275,14 @@ mod tests {
     /// created, but contain full Arcs.
     #[test]
     fn lease_overflow() {
+        #[cfg(miri)]
+        const GUARD_COUNT: usize = 100;
+        #[cfg(not(miri))]
+        const GUARD_COUNT: usize = 1000;
         let a = Arc::new(0);
         let shared = ArcSwap::from(Arc::clone(&a));
         assert_eq!(2, Arc::strong_count(&a));
-        let mut guards = (0..1000).map(|_| shared.load()).collect::<Vec<_>>();
+        let mut guards = (0..GUARD_COUNT).map(|_| shared.load()).collect::<Vec<_>>();
         let count = Arc::strong_count(&a);
         assert!(count > 2);
         let guard = shared.load();

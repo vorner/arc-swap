@@ -231,8 +231,7 @@ jobs:
       - name: Run miri
         env:
           PROPTEST_CASES: "10"
-          # TODO: Do something with the stacked borrows. Figure out what it means.
-          MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-disable-stacked-borrows"
+          MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-permissive-provenance"
         run: cargo miri test --all-features
 
   thread_sanitizer-MacOS:
