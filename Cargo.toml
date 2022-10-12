@@ -25,6 +25,7 @@ internal-test-strategies = []
 experimental-strategies = []
 
 [dependencies]
+rustversion = "1.0.9"
 serde = { version = "1", features = ["rc"], optional = true }
 
 [dev-dependencies]
