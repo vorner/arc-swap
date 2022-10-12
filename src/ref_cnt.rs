@@ -92,7 +92,12 @@ unsafe impl<T> RefCnt for Arc<T> {
         Arc::into_raw(me) as *mut T
     }
     fn as_ptr(me: &Arc<T>) -> *mut T {
-        Arc::as_ptr(me) as *mut T
+        // SAFETY: The refcount will be incremented then decremented
+        // so we force the compiler to remove the overflow check
+        if Arc::strong_count(me) == usize::max_value() { unsafe { std::hint::unreachable_unchecked(); } }
+        let ptr = Arc::into_raw(Arc::clone(me));
+        let _ = unsafe { Arc::from_raw(ptr) };
+        ptr as *mut T
     }
     unsafe fn from_ptr(ptr: *const T) -> Arc<T> {
         Arc::from_raw(ptr)
@@ -105,7 +110,12 @@ unsafe impl<T> RefCnt for Rc<T> {
         Rc::into_raw(me) as *mut T
     }
     fn as_ptr(me: &Rc<T>) -> *mut T {
-        me as &T as *const T as *mut T
+        // SAFETY: The refcount will be incremented then decremented
+        // so we force the compiler to remove the overflow check
+        if Rc::strong_count(me) == usize::max_value() { unsafe { std::hint::unreachable_unchecked(); } }
+        let ptr = Rc::into_raw(Rc::clone(me));
+        let _ = unsafe { Rc::from_raw(ptr) };
+        ptr as *mut T
     }
     unsafe fn from_ptr(ptr: *const T) -> Rc<T> {
         Rc::from_raw(ptr)
