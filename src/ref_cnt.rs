@@ -92,7 +92,9 @@ unsafe impl<T> RefCnt for Arc<T> {
         Arc::into_raw(me) as *mut T
     }
     fn as_ptr(me: &Arc<T>) -> *mut T {
-        me as &T as *const T as *mut T
+        // SAFETY: &T cast to *const T will always be aligned, initialised and valid for reads
+        let ptr = Arc::into_raw(unsafe { std::ptr::read(me) });
+        ptr as *mut T
     }
     unsafe fn from_ptr(ptr: *const T) -> Arc<T> {
         Arc::from_raw(ptr)
@@ -105,7 +107,9 @@ unsafe impl<T> RefCnt for Rc<T> {
         Rc::into_raw(me) as *mut T
     }
     fn as_ptr(me: &Rc<T>) -> *mut T {
-        me as &T as *const T as *mut T
+        // SAFETY: &T cast to *const T will always be aligned, initialised and valid for reads
+        let ptr = Rc::into_raw(unsafe { std::ptr::read(me) });
+        ptr as *mut T
     }
     unsafe fn from_ptr(ptr: *const T) -> Rc<T> {
         Rc::from_raw(ptr)
