@@ -8,12 +8,10 @@ repository = "https://github.com/vorner/arc-swap"
 readme = "README.md"
 keywords = ["atomic", "Arc"]
 categories = ["data-structures", "memory-management"]
-license = "Apache-2.0/MIT"
+license = "MIT OR Apache-2.0"
 edition = "2018"
 
 [badges]
-travis-ci = { repository = "vorner/arc-swap" }
-appveyor = { repository = "vorner/arc-swap" }
 maintenance = { status = "actively-developed" }
 
 [features]
