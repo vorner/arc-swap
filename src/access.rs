@@ -449,7 +449,7 @@ mod tests {
     #[test]
     fn constant() {
         let c = Constant(42);
-        check_static_dispatch_direct(&c);
+        check_static_dispatch_direct(c);
         check_dyn_dispatch_direct(&c);
         check_static_dispatch_direct(c);
     }
