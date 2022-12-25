@@ -1,3 +1,5 @@
+* The `AccessConvert` wrapper is needed less often in practice (#77).
+
 # 1.5.1
 
 * bug: Insufficient synchronization on weak platforms (#76).
