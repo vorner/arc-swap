@@ -112,10 +112,34 @@ pub trait Access<T> {
     fn load(&self) -> Self::Guard;
 }
 
-impl<T, A: Access<T>, P: Deref<Target = A>> Access<T> for P {
+impl<T, A: Access<T> + ?Sized, P: Deref<Target = A>> Access<T> for P {
     type Guard = A::Guard;
     fn load(&self) -> Self::Guard {
         self.deref().load()
+    }
+}
+
+impl<T> Access<T> for dyn DynAccess<T> + '_ {
+    type Guard = DynGuard<T>;
+
+    fn load(&self) -> Self::Guard {
+        self.load()
+    }
+}
+
+impl<T> Access<T> for dyn DynAccess<T> + '_ + Send {
+    type Guard = DynGuard<T>;
+
+    fn load(&self) -> Self::Guard {
+        self.load()
+    }
+}
+
+impl<T> Access<T> for dyn DynAccess<T> + '_ + Sync + Send {
+    type Guard = DynGuard<T>;
+
+    fn load(&self) -> Self::Guard {
+        self.load()
     }
 }
 
@@ -206,8 +230,19 @@ where
 
 /// [DynAccess] to [Access] wrapper.
 ///
-/// A workaround to allow double-dyn mapping, since `Box<dyn DynAccess>` doesn't implement [Access]
-/// and [Map] needs that.
+/// In previous versions, `Box<dyn DynAccess>` didn't implement [Access], to use inside [Map] one
+/// could use this wrapper. Since then, a way was found to solve it. In most cases, this wrapper is
+/// no longer necessary.
+///
+/// This is left in place for two reasons:
+/// * Backwards compatibility.
+/// * Corner-cases not covered by the found solution. For example, trait inheritance in the form of
+///   `Box<dyn SomeTrait>` where `SomeTrait: Access` doesn't work out of the box and still needs
+///   this wrapper.
+///
+/// # Examples
+///
+/// The example is for the simple case (which is no longer needed, but may help as an inspiration).
 ///
 /// ```rust
 /// use std::sync::Arc;
@@ -461,5 +496,49 @@ mod tests {
         assert_eq!(0, *Access::load(&map));
         a.store(Arc::new(Cfg { value: 42 }));
         assert_eq!(42, *Access::load(&map));
+    }
+
+    // Compile tests for dynamic access
+    fn _expect_access<T>(_: impl Access<T>) {}
+
+    fn _dyn_access<T>(x: Box<dyn DynAccess<T> + '_>) {
+        _expect_access(x)
+    }
+
+    fn _dyn_access_send<T>(x: Box<dyn DynAccess<T> + '_ + Send>) {
+        _expect_access(x)
+    }
+
+    fn _dyn_access_send_sync<T>(x: Box<dyn DynAccess<T> + '_ + Send + Sync>) {
+        _expect_access(x)
+    }
+
+    #[test]
+    fn double_dyn_access_complex() {
+        struct Inner {
+            val: usize,
+        }
+
+        struct Middle {
+            inner: Inner,
+        }
+
+        struct Outer {
+            middle: Middle,
+        }
+
+        let outer = Arc::new(ArcSwap::from_pointee(Outer {
+            middle: Middle {
+                inner: Inner { val: 42 },
+            },
+        }));
+
+        let middle: Arc<dyn DynAccess<Middle>> =
+            Arc::new(Map::new(outer, |outer: &Outer| &outer.middle));
+        let inner: Arc<dyn DynAccess<Inner>> =
+            Arc::new(Map::new(middle, |middle: &Middle| &middle.inner));
+        // Damn. We have the DynAccess wrapper in scope and need to disambiguate the inner.load()
+        let guard = Access::load(&inner);
+        assert_eq!(42, guard.val);
     }
 }
