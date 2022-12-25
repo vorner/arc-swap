@@ -263,7 +263,7 @@ jobs:
         #
         # Running the tests multiple times increase the chances that data races are found
         # by the thread sanitizer.
-        for _ in $(seq 1 10); do cargo +nightly test -Z build-std --target --target $(uname -m)-apple-darwin; done
+        for _ in $(seq 1 10); do cargo +nightly test -Z build-std --target $(uname -m)-apple-darwin; done
       env:
         RUSTDOCFLAGS: "-Zsanitizer=thread"
         RUSTFLAGS: "-Zsanitizer=thread"
