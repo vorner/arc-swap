@@ -75,7 +75,7 @@
 //! }).unwrap();
 //! ```
 //!
-//! See that ArcSwapAny<Rc> really isn't Send.
+//! See that `ArcSwapAny<Rc>` really isn't Send.
 //! ```rust
 //! use std::sync::Arc;
 //! use arc_swap::ArcSwapAny;

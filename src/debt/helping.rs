@@ -309,7 +309,7 @@ impl Slots {
         // Put the slot there and consider it acquire of a „lock“. For that we need swap, not store
         // only (we need Acquire and Acquire works only on loads). Release is to make sure control
         // is observable by the other thread (but that's probably not necessary anyway?)
-        let prev = self.slot.0.swap(ptr as usize, SeqCst);
+        let prev = self.slot.0.swap(ptr, SeqCst);
         debug_assert_eq!(Debt::NONE, prev);
 
         // Confirm by writing to the control (or discover that we got helped). We stop anyone else

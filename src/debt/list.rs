@@ -156,7 +156,7 @@ impl Node {
         })
         // If that didn't work, create a new one and prepend to the list.
         .unwrap_or_else(|| {
-            let node = Box::leak(Box::new(Node::default()));
+            let node = Box::leak(Box::<Node>::default());
             node.helping.init();
             // We don't want to read any data in addition to the head, Relaxed is fine
             // here.
