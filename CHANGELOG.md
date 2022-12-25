@@ -1,3 +1,4 @@
+* Fix a data race reported by MIRI.
 * Avoid violating stacked borrows (AFAIK these are still experimental and not
   normative, but better safe than sorry). (#80).
 * The `AccessConvert` wrapper is needed less often in practice (#77).
