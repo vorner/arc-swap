@@ -23,113 +23,110 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{ArcSwap, ArcSwapOption};
+    use crate::{ArcSwap, ArcSwapAny, ArcSwapOption, RefCnt};
     use serde_derive::{Deserialize, Serialize};
+    use serde_test::{assert_tokens, Token};
+    use std::sync::Arc;
 
-    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    #[derive(Debug, Serialize, Deserialize)]
+    #[serde(transparent)]
+    struct ArcSwapAnyEq<T: RefCnt>(ArcSwapAny<T>);
+    impl<T: RefCnt + PartialEq> PartialEq for ArcSwapAnyEq<T> {
+        fn eq(&self, other: &Self) -> bool {
+            self.0.load().eq(&other.0.load())
+        }
+    }
+    impl<T: RefCnt + PartialEq> Eq for ArcSwapAnyEq<T> {}
+
+    #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
     struct Foo {
-        field0: usize,
+        field0: u64,
         field1: String,
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
+    #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
     struct Bar {
-        field0: ArcSwap<usize>,
-        field1: ArcSwapOption<String>,
+        field0: ArcSwapAnyEq<Arc<u64>>,
+        field1: ArcSwapAnyEq<Option<Arc<String>>>,
     }
 
     #[test]
-    fn test_serialize() {
+    fn test_serialize_deserialize() {
+        let field0 = u64::MAX;
+        let field1 = "FOO_-0123456789";
+
         let data_orig = Foo {
-            field0: usize::MAX,
-            field1: format!("FOO_{}", i128::MIN),
+            field0,
+            field1: field1.to_string(),
         };
-        let data = ArcSwap::from_pointee(data_orig.clone());
-        let data_str = serde_json::to_string(&data).unwrap();
-        let data_deser = serde_json::from_str::<Foo>(&data_str).unwrap();
-        assert_eq!(data_deser, data_orig);
+        let data = ArcSwapAnyEq(ArcSwap::from_pointee(data_orig));
+        assert_tokens(
+            &data,
+            &[
+                Token::Struct {
+                    name: "Foo",
+                    len: 2,
+                },
+                Token::Str("field0"),
+                Token::U64(u64::MAX),
+                Token::Str("field1"),
+                Token::String(field1),
+                Token::StructEnd,
+            ],
+        );
 
-        let data_orig = Bar {
-            field0: ArcSwap::from_pointee(usize::MAX),
-            field1: ArcSwapOption::from_pointee(format!("FOO_{}", i128::MIN)),
+        let data = Bar {
+            field0: ArcSwapAnyEq(ArcSwap::from_pointee(field0)),
+            field1: ArcSwapAnyEq(ArcSwapOption::from_pointee(field1.to_string())),
         };
-        let data_str = serde_json::to_string(&data_orig).unwrap();
-        let data_deser = serde_json::from_str::<Bar>(&data_str).unwrap();
-        assert_eq!(data_deser.field0.load_full(), data_orig.field0.load_full());
-        assert_eq!(data_deser.field1.load_full(), data_orig.field1.load_full());
-
-        let data_orig = Bar {
-            field0: ArcSwap::from_pointee(usize::MAX),
-            field1: ArcSwapOption::from_pointee(None),
-        };
-        let data_str = serde_json::to_string(&data_orig).unwrap();
-        let data_deser = serde_json::from_str::<Bar>(&data_str).unwrap();
-        assert_eq!(data_deser.field0.load_full(), data_orig.field0.load_full());
-        assert_eq!(data_deser.field1.load_full(), data_orig.field1.load_full());
+        assert_tokens(
+            &data,
+            &[
+                Token::Struct {
+                    name: "Bar",
+                    len: 2,
+                },
+                Token::Str("field0"),
+                Token::U64(u64::MAX),
+                Token::Str("field1"),
+                Token::Some,
+                Token::String(field1),
+                Token::StructEnd,
+            ],
+        );
     }
 
     #[test]
-    fn test_deserialize() {
-        let field0 = usize::MAX;
-        let field1 = format!("FOO_{}", usize::MIN);
+    fn test_serialize_deserialize_option() {
+        let field0 = u64::MAX;
+        let field1 = "FOO_-0123456789";
 
-        let str = format!(r#"{{"field0":{},"field1":"{}"}}"#, field0, field1);
-        let data = serde_json::from_str::<ArcSwap<Foo>>(&str).unwrap();
-        assert_eq!(data.load().field0, field0);
-        assert_eq!(data.load().field1, field1);
-
-        let str = format!(r#"{{"field0":{},"field1":"{}"}}"#, field0, field1);
-        let data = serde_json::from_str::<Bar>(&str).unwrap();
-        assert_eq!(data.field0.load_full().as_ref(), &field0);
-        assert_eq!(data.field1.load_full().as_deref(), Some(&field1));
-
-        let str = format!(r#"{{"field0":{}}}"#, field0);
-        let data = serde_json::from_str::<Bar>(&str).unwrap();
-        assert_eq!(data.field0.load_full().as_ref(), &field0);
-        assert_eq!(data.field1.load_full().as_deref(), None);
-    }
-
-    #[test]
-    fn test_serialize_option() {
         let data_orig = Foo {
-            field0: usize::MAX,
-            field1: format!("FOO_{}", i128::MIN),
+            field0,
+            field1: field1.to_string(),
         };
-        let data = ArcSwapOption::from_pointee(data_orig.clone());
-
-        let data_str = serde_json::to_string(&data).unwrap();
-        let data_deser = serde_json::from_str::<Foo>(&data_str).unwrap();
-
-        assert_eq!(data_deser, data_orig);
+        let data = ArcSwapAnyEq(ArcSwapOption::from_pointee(data_orig));
+        assert_tokens(
+            &data,
+            &[
+                Token::Some,
+                Token::Struct {
+                    name: "Foo",
+                    len: 2,
+                },
+                Token::Str("field0"),
+                Token::U64(u64::MAX),
+                Token::Str("field1"),
+                Token::String(field1),
+                Token::StructEnd,
+            ],
+        );
     }
 
     #[test]
-    fn test_deserialize_option() {
-        let field0 = usize::MAX;
-        let field1 = format!("FOO_{}", usize::MIN);
+    fn test_serialize_deserialize_option_none() {
+        let data = ArcSwapAnyEq(ArcSwapOption::<Foo>::from_pointee(None));
 
-        let str = format!(r#"{{"field0":{},"field1":"{}"}}"#, field0, field1);
-        let data = serde_json::from_str::<ArcSwapOption<Foo>>(&str).unwrap();
-
-        assert_eq!(data.load_full().unwrap().field0, field0);
-        assert_eq!(data.load_full().unwrap().field1, field1);
-    }
-
-    #[test]
-    fn test_serialize_option_none() {
-        let data = ArcSwapOption::<Foo>::from_pointee(None);
-
-        let data_str = serde_json::to_string(&data).unwrap();
-        let data_deser = serde_json::from_str::<Option<Foo>>(&data_str).unwrap();
-
-        assert_eq!(data_deser, None);
-    }
-
-    #[test]
-    fn test_deserialize_option_none() {
-        let str = "null";
-        let data = serde_json::from_str::<ArcSwapOption<Foo>>(str).unwrap();
-
-        assert_eq!(data.load_full(), None);
+        assert_tokens(&data, &[Token::None]);
     }
 }
