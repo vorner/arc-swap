@@ -58,7 +58,12 @@ pub(crate) struct Node {
     fast: FastSlots,
     helping: HelpingSlots,
     in_use: AtomicUsize,
-    next: Option<&'static Node>,
+    // Next node in the list.
+    //
+    // It is a pointer because we touch it before synchronization (we don't _dereference_ it before
+    // synchronization, only manipulate the pointer itself). That is illegal according to strict
+    // interpretation of the rules by MIRI on references.
+    next: *const Node,
     active_writers: AtomicUsize,
 }
 
@@ -68,7 +73,7 @@ impl Default for Node {
             fast: FastSlots::default(),
             helping: HelpingSlots::default(),
             in_use: AtomicUsize::new(NODE_USED),
-            next: None,
+            next: ptr::null(),
             active_writers: AtomicUsize::new(0),
         }
     }
@@ -94,7 +99,7 @@ impl Node {
             if result.is_some() {
                 return result;
             }
-            current = node.next;
+            current = unsafe { node.next.as_ref() };
         }
         None
     }
@@ -165,7 +170,7 @@ impl Node {
             // compare_exchange below.
             let mut head = LIST_HEAD.load(Relaxed);
             loop {
-                node.next = unsafe { head.as_ref() };
+                node.next = head;
                 if let Err(old) = LIST_HEAD.compare_exchange_weak(
                     head, node,
                     // We need to release *the whole chain* here. For that, we need to

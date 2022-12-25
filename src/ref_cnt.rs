@@ -1,3 +1,4 @@
+use std::mem;
 use std::ptr;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -92,7 +93,29 @@ unsafe impl<T> RefCnt for Arc<T> {
         Arc::into_raw(me) as *mut T
     }
     fn as_ptr(me: &Arc<T>) -> *mut T {
-        me as &T as *const T as *mut T
+        // Slightly convoluted way to do this, but this avoids stacked borrows violations. The same
+        // intention as
+        //
+        // me as &T as *const T as *mut T
+        //
+        // We first create a "shallow copy" of me - one that doesn't really own its ref count
+        // (that's OK, me _does_ own it, so it can't be destroyed in the meantime).
+        // Then we can use into_raw (which preserves not having the ref count).
+        //
+        // We need to "revert" the changes we did. In current std implementation, the combination
+        // of from_raw and forget is no-op. But formally, into_raw shall be paired with from_raw
+        // and that read shall be paired with forget to properly "close the brackets". In future
+        // versions of STD, these may become something else that's not really no-op (unlikely, but
+        // possible), so we future-proof it a bit.
+
+        // SAFETY: &T cast to *const T will always be aligned, initialised and valid for reads
+        let ptr = Arc::into_raw(unsafe { std::ptr::read(me) });
+        let ptr = ptr as *mut T;
+
+        // SAFETY: We got the pointer from into_raw just above
+        mem::forget(unsafe { Arc::from_raw(ptr) });
+
+        ptr
     }
     unsafe fn from_ptr(ptr: *const T) -> Arc<T> {
         Arc::from_raw(ptr)
@@ -105,7 +128,9 @@ unsafe impl<T> RefCnt for Rc<T> {
         Rc::into_raw(me) as *mut T
     }
     fn as_ptr(me: &Rc<T>) -> *mut T {
-        me as &T as *const T as *mut T
+        // SAFETY: &T cast to *const T will always be aligned, initialised and valid for reads
+        let ptr = Rc::into_raw(unsafe { std::ptr::read(me) });
+        ptr as *mut T
     }
     unsafe fn from_ptr(ptr: *const T) -> Rc<T> {
         Rc::from_raw(ptr)
