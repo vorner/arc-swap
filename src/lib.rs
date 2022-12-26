@@ -290,6 +290,12 @@ where
 /// assert_eq!(0, **arc_swap.load());
 /// ```
 ///
+/// # Known bugs
+///
+/// Currently, things like `ArcSwapAny<Option<Option<Arc<_>>>>` (notice the double Option) don't
+/// work properly. A proper solution is being looked into
+/// ([#81](https://github.com/vorner/arc-swap/issues)).
+///
 /// [`Arc`]: https://doc.rust-lang.org/std/sync/struct.Arc.html
 /// [`from`]: https://doc.rust-lang.org/nightly/std/convert/trait.From.html#tymethod.from
 /// [`RefCnt`]: trait.RefCnt.html
