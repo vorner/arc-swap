@@ -26,11 +26,16 @@
 //! at least as up to date value of the writers as when the cooldown started. That we if we see 0,
 //! we know it must have happened since then.
 
-use std::cell::Cell;
-use std::ptr;
-use std::slice::Iter;
-use std::sync::atomic::Ordering::*;
-use std::sync::atomic::{AtomicPtr, AtomicUsize};
+use core::cell::Cell;
+use core::ptr;
+use core::slice::Iter;
+use core::sync::atomic::Ordering::*;
+use core::sync::atomic::{AtomicPtr, AtomicUsize};
+
+#[cfg(feature = "no-std")]
+use core::cell::LazyCell;
+
+use alloc::boxed::Box;
 
 use super::fast::{Local as FastLocal, Slots as FastSlots};
 use super::helping::{Local as HelpingLocal, Slots as HelpingSlots};
@@ -214,6 +219,7 @@ pub(crate) struct LocalNode {
 }
 
 impl LocalNode {
+    #[cfg(not(feature = "no-std"))]
     pub(crate) fn with<R, F: FnOnce(&LocalNode) -> R>(f: F) -> R {
         let f = Cell::new(Some(f));
         THREAD_HEAD
@@ -240,6 +246,14 @@ impl LocalNode {
                 f(&tmp_node)
                 // Drop of tmp_node -> sends the node we just used into cooldown.
             })
+    }
+
+    #[cfg(feature = "no-std")]
+    pub(crate) fn with<R, F: FnOnce(&LocalNode) -> R>(f: F) -> R {
+        if THREAD_HEAD.node.get().is_none() {
+            THREAD_HEAD.node.set(Some(Node::get()));
+        }
+        f(&THREAD_HEAD)
     }
 
     /// Creates a new debt.
@@ -313,6 +327,7 @@ impl Drop for LocalNode {
     }
 }
 
+#[cfg(not(feature = "no-std"))]
 thread_local! {
     /// A debt node assigned to this thread.
     static THREAD_HEAD: LocalNode = LocalNode {
@@ -321,6 +336,15 @@ thread_local! {
         helping: HelpingLocal::default(),
     };
 }
+
+#[cfg(feature = "no-std")]
+#[thread_local]
+/// A debt node assigned to this thread.
+static THREAD_HEAD: LazyCell<LocalNode> = LazyCell::new(|| LocalNode {
+    node: Cell::new(None),
+    fast: FastLocal::default(),
+    helping: HelpingLocal::default(),
+});
 
 #[cfg(test)]
 mod tests {

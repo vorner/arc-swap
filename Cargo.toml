@@ -21,6 +21,8 @@ weak = []
 internal-test-strategies = []
 # Possibly some strategies we are experimenting with. Currently empty. No stability guarantees are included about them.
 experimental-strategies = []
+# Allow running in no_std environments (no support for RwLock, Rust Nightly only)
+no-std = []
 
 [dependencies]
 serde = { version = "1", features = ["rc"], optional = true }

@@ -1,6 +1,7 @@
-use std::ptr;
-use std::rc::Weak as RcWeak;
-use std::sync::Weak;
+use core::ptr;
+
+use alloc::rc::Weak as RcWeak;
+use alloc::sync::Weak;
 
 use crate::RefCnt;
 

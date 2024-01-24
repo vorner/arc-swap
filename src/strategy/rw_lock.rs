@@ -1,4 +1,5 @@
-use std::sync::atomic::{AtomicPtr, Ordering};
+use core::sync::atomic::{AtomicPtr, Ordering};
+
 use std::sync::RwLock;
 
 use super::sealed::{CaS, InnerStrategy, Protected};

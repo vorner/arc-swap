@@ -1,7 +1,8 @@
-use std::mem;
-use std::ptr;
-use std::rc::Rc;
-use std::sync::Arc;
+use core::mem;
+use core::ptr;
+
+use alloc::rc::Rc;
+use alloc::sync::Arc;
 
 /// A trait describing smart reference counted pointers.
 ///
@@ -109,7 +110,7 @@ unsafe impl<T> RefCnt for Arc<T> {
         // possible), so we future-proof it a bit.
 
         // SAFETY: &T cast to *const T will always be aligned, initialised and valid for reads
-        let ptr = Arc::into_raw(unsafe { std::ptr::read(me) });
+        let ptr = Arc::into_raw(unsafe { ptr::read(me) });
         let ptr = ptr as *mut T;
 
         // SAFETY: We got the pointer from into_raw just above
@@ -144,7 +145,7 @@ unsafe impl<T> RefCnt for Rc<T> {
         // possible), so we future-proof it a bit.
 
         // SAFETY: &T cast to *const T will always be aligned, initialised and valid for reads
-        let ptr = Rc::into_raw(unsafe { std::ptr::read(me) });
+        let ptr = Rc::into_raw(unsafe { ptr::read(me) });
         let ptr = ptr as *mut T;
 
         // SAFETY: We got the pointer from into_raw just above
