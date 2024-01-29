@@ -33,7 +33,7 @@ use core::sync::atomic::Ordering::*;
 use core::sync::atomic::{AtomicPtr, AtomicUsize};
 
 #[cfg(feature = "experimental-thread-local")]
-use core::cell::LazyCell;
+use core::cell::RefCell;
 
 use alloc::boxed::Box;
 
@@ -250,10 +250,21 @@ impl LocalNode {
 
     #[cfg(feature = "experimental-thread-local")]
     pub(crate) fn with<R, F: FnOnce(&LocalNode) -> R>(f: F) -> R {
-        if THREAD_HEAD.node.get().is_none() {
-            THREAD_HEAD.node.set(Some(Node::get()));
+        let mut thread_head_opt = THREAD_HEAD.borrow_mut();
+        if thread_head_opt.is_none() {
+            *thread_head_opt = Some(LocalNode {
+                node: Cell::new(None),
+                fast: FastLocal::default(),
+                helping: HelpingLocal::default(),
+            });
         }
-        f(&THREAD_HEAD)
+        let thread_head = thread_head_opt
+            .as_mut()
+            .expect("THREAD_HEAD should not be None");
+        if thread_head.node.get().is_none() {
+            thread_head.node.set(Some(Node::get()));
+        }
+        f(&thread_head)
     }
 
     /// Creates a new debt.
@@ -340,11 +351,7 @@ thread_local! {
 #[cfg(feature = "experimental-thread-local")]
 #[thread_local]
 /// A debt node assigned to this thread.
-static THREAD_HEAD: LazyCell<LocalNode> = LazyCell::new(|| LocalNode {
-    node: Cell::new(None),
-    fast: FastLocal::default(),
-    helping: HelpingLocal::default(),
-});
+static THREAD_HEAD: RefCell<Option<LocalNode>> = RefCell::new(None);
 
 #[cfg(test)]
 mod tests {

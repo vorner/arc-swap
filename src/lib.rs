@@ -4,7 +4,6 @@
 #![allow(deprecated)]
 #![cfg_attr(feature = "experimental-thread-local", no_std)]
 #![cfg_attr(feature = "experimental-thread-local", feature(thread_local))]
-#![cfg_attr(feature = "experimental-thread-local", feature(lazy_cell))]
 
 //! Making [`Arc`][Arc] itself atomic
 //!
