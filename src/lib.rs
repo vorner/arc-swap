@@ -2,9 +2,9 @@
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![allow(deprecated)]
-#![cfg_attr(feature = "no-std", no_std)]
-#![cfg_attr(feature = "no-std", feature(thread_local))]
-#![cfg_attr(feature = "no-std", feature(lazy_cell))]
+#![cfg_attr(feature = "experimental-thread-local", no_std)]
+#![cfg_attr(feature = "experimental-thread-local", feature(thread_local))]
+#![cfg_attr(feature = "experimental-thread-local", feature(lazy_cell))]
 
 //! Making [`Arc`][Arc] itself atomic
 //!

@@ -32,7 +32,7 @@ use core::slice::Iter;
 use core::sync::atomic::Ordering::*;
 use core::sync::atomic::{AtomicPtr, AtomicUsize};
 
-#[cfg(feature = "no-std")]
+#[cfg(feature = "experimental-thread-local")]
 use core::cell::LazyCell;
 
 use alloc::boxed::Box;
@@ -219,7 +219,7 @@ pub(crate) struct LocalNode {
 }
 
 impl LocalNode {
-    #[cfg(not(feature = "no-std"))]
+    #[cfg(not(feature = "experimental-thread-local"))]
     pub(crate) fn with<R, F: FnOnce(&LocalNode) -> R>(f: F) -> R {
         let f = Cell::new(Some(f));
         THREAD_HEAD
@@ -248,7 +248,7 @@ impl LocalNode {
             })
     }
 
-    #[cfg(feature = "no-std")]
+    #[cfg(feature = "experimental-thread-local")]
     pub(crate) fn with<R, F: FnOnce(&LocalNode) -> R>(f: F) -> R {
         if THREAD_HEAD.node.get().is_none() {
             THREAD_HEAD.node.set(Some(Node::get()));
@@ -327,7 +327,7 @@ impl Drop for LocalNode {
     }
 }
 
-#[cfg(not(feature = "no-std"))]
+#[cfg(not(feature = "experimental-thread-local"))]
 thread_local! {
     /// A debt node assigned to this thread.
     static THREAD_HEAD: LocalNode = LocalNode {
@@ -337,7 +337,7 @@ thread_local! {
     };
 }
 
-#[cfg(feature = "no-std")]
+#[cfg(feature = "experimental-thread-local")]
 #[thread_local]
 /// A debt node assigned to this thread.
 static THREAD_HEAD: LazyCell<LocalNode> = LazyCell::new(|| LocalNode {
