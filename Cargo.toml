@@ -22,7 +22,6 @@ internal-test-strategies = []
 # Possibly some strategies we are experimenting with. Currently empty. No stability guarantees are included about them.
 experimental-strategies = []
 # Use the nightly "thread_local" feature, to allow no_std builds.
-# Also makes use of nightly feature "lazy_cell". Drops support for std::sync::RwLock.
 experimental-thread-local = []
 
 [dependencies]

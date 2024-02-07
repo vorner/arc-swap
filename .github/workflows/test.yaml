@@ -210,6 +210,26 @@ jobs:
       - name: Run check
         run: rm Cargo.lock && cargo check
 
+  experimental_thread_local:
+    name: Build with experimental-thread-local
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          profile: minimal
+          default: true
+
+      - name: Restore cache
+        uses: Swatinem/rust-cache@v1
+
+      - name: Build
+        run: cargo build --no-default-features --features weak,experimental-thread-local
+
   miri:
     name: Miri checks
     runs-on: ubuntu-latest

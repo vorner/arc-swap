@@ -42,7 +42,7 @@ use core::sync::atomic::AtomicPtr;
 use crate::ref_cnt::RefCnt;
 
 pub(crate) mod hybrid;
-#[cfg(not(feature = "experimental-thread-local"))]
+#[cfg(feature = "internal-test-strategies")]
 mod rw_lock;
 // Do not use from outside of the crate.
 #[cfg(feature = "internal-test-strategies")]
