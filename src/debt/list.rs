@@ -251,16 +251,11 @@ impl LocalNode {
     #[cfg(feature = "experimental-thread-local")]
     pub(crate) fn with<R, F: FnOnce(&LocalNode) -> R>(f: F) -> R {
         let mut thread_head_opt = THREAD_HEAD.borrow_mut();
-        if thread_head_opt.is_none() {
-            *thread_head_opt = Some(LocalNode {
-                node: Cell::new(None),
-                fast: FastLocal::default(),
-                helping: HelpingLocal::default(),
-            });
-        }
-        let thread_head = thread_head_opt
-            .as_mut()
-            .expect("THREAD_HEAD should not be None");
+        let thread_head = thread_head_opt.get_or_insert_with(|| LocalNode {
+            node: Cell::new(None),
+            fast: FastLocal::default(),
+            helping: HelpingLocal::default(),
+        });
         if thread_head.node.get().is_none() {
             thread_head.node.set(Some(Node::get()));
         }
