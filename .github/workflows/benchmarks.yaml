@@ -30,7 +30,7 @@ jobs:
           profile: minimal
 
       - name: Restore compile cache
-        uses: Swatinem/rust-cache@v1
+        uses: Swatinem/rust-cache@v2
 
       - name: Restore previous benchmark data
         uses: actions/cache@v2
