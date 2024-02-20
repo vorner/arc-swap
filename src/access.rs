@@ -514,6 +514,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::arc_with_non_send_sync)] // Whatever, it's tests...
     fn double_dyn_access_complex() {
         struct Inner {
             val: usize,

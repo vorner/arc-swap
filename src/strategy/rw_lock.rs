@@ -42,7 +42,7 @@ impl<T: RefCnt> CaS<T> for RwLock<()> {
         new: T,
     ) -> Self::Protected {
         let _lock = self.write();
-        let cur = current.as_raw() as *mut T::Base;
+        let cur = current.as_raw();
         let new = T::into_ptr(new);
         let swapped = storage.compare_exchange(cur, new, Ordering::AcqRel, Ordering::Relaxed);
         let old = match swapped {
