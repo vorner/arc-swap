@@ -33,7 +33,7 @@ use core::sync::atomic::Ordering::*;
 use core::sync::atomic::{AtomicPtr, AtomicUsize};
 
 #[cfg(feature = "experimental-thread-local")]
-use core::cell::RefCell;
+use core::cell::OnceCell;
 
 use alloc::boxed::Box;
 
@@ -250,8 +250,7 @@ impl LocalNode {
 
     #[cfg(feature = "experimental-thread-local")]
     pub(crate) fn with<R, F: FnOnce(&LocalNode) -> R>(f: F) -> R {
-        let mut thread_head_opt = THREAD_HEAD.borrow_mut();
-        let thread_head = thread_head_opt.get_or_insert_with(|| LocalNode {
+        let thread_head = THREAD_HEAD.get_or_init(|| LocalNode {
             node: Cell::new(None),
             fast: FastLocal::default(),
             helping: HelpingLocal::default(),
@@ -346,7 +345,7 @@ thread_local! {
 #[cfg(feature = "experimental-thread-local")]
 #[thread_local]
 /// A debt node assigned to this thread.
-static THREAD_HEAD: RefCell<Option<LocalNode>> = RefCell::new(None);
+static THREAD_HEAD: OnceCell<LocalNode> = OnceCell::new();
 
 #[cfg(test)]
 mod tests {
