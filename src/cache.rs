@@ -272,7 +272,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use alloc::sync::Arc;
 
     use super::*;
     use crate::{ArcSwap, ArcSwapOption};

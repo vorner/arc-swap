@@ -355,7 +355,7 @@ mod tests {
     impl Node {
         fn is_empty(&self) -> bool {
             self.fast_slots()
-                .chain(std::iter::once(self.helping_slot()))
+                .chain(core::iter::once(self.helping_slot()))
                 .all(|d| d.0.load(Relaxed) == Debt::NONE)
         }
 

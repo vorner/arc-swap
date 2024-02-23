@@ -810,8 +810,10 @@ macro_rules! t {
     ($name: ident, $strategy: ty) => {
         #[cfg(test)]
         mod $name {
-            use std::panic;
-            use std::sync::atomic::{self, AtomicUsize};
+            use alloc::borrow::ToOwned;
+            use alloc::string::String;
+            use alloc::vec::Vec;
+            use core::sync::atomic::{self, AtomicUsize};
 
             use adaptive_barrier::{Barrier, PanicMode};
             use crossbeam_utils::thread;
@@ -1126,7 +1128,9 @@ macro_rules! t {
 
             /// A panic from within the rcu callback should not change anything.
             #[test]
+            #[cfg(not(feature = "experimental-thread-local"))]
             fn rcu_panic() {
+                use std::panic;
                 let shared = ArcSwap::from(Arc::new(0));
                 assert!(panic::catch_unwind(|| shared.rcu(|_| -> usize { panic!() })).is_err());
                 assert_eq!(1, Arc::strong_count(&shared.swap(Arc::new(42))));
@@ -1244,6 +1248,8 @@ mod internal_strategies {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use alloc::vec::Vec;
 
     /// Accessing the value inside ArcSwap with Guards (and checks for the reference
     /// counts).
