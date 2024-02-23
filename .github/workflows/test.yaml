@@ -39,7 +39,7 @@ jobs:
           profile: minimal
 
       - name: Restore cache
-        uses: Swatinem/rust-cache@v1
+        uses: Swatinem/rust-cache@v2
 
       - name: Build & test
         env:
@@ -63,7 +63,7 @@ jobs:
           profile: minimal
 
       - name: Restore cache
-        uses: Swatinem/rust-cache@v1
+        uses: Swatinem/rust-cache@v2
 
       - name: Build & test
         env:
@@ -86,7 +86,7 @@ jobs:
           target: x86_64-unknown-linux-musl
 
       - name: Restore cache
-        uses: Swatinem/rust-cache@v1
+        uses: Swatinem/rust-cache@v2
 
       - name: Build & test
         env:
@@ -124,7 +124,7 @@ jobs:
           default: true
 
       - name: Restore cache
-        uses: Swatinem/rust-cache@v1
+        uses: Swatinem/rust-cache@v2
 
       - name: Check links
         run: cargo rustdoc --all-features -- -D warnings
@@ -145,7 +145,7 @@ jobs:
           components: clippy
 
       - name: Restore cache
-        uses: Swatinem/rust-cache@v1
+        uses: Swatinem/rust-cache@v2
 
       - name: Run clippy linter
         run: cargo clippy --all --all-features --tests -- -D clippy::all -D warnings
@@ -165,7 +165,7 @@ jobs:
           default: true
 
       - name: Restore cache
-        uses: Swatinem/rust-cache@v1
+        uses: Swatinem/rust-cache@v2
 
       - name: Run clippy linter
         run: cargo test --all --release --benches --all-features
@@ -185,7 +185,7 @@ jobs:
           default: true
 
       - name: Restore cache
-        uses: Swatinem/rust-cache@v1
+        uses: Swatinem/rust-cache@v2
 
       - name: Run check
         run: rm Cargo.lock && cargo check --all-features
@@ -205,7 +205,7 @@ jobs:
           default: true
 
       - name: Restore cache
-        uses: Swatinem/rust-cache@v1
+        uses: Swatinem/rust-cache@v2
 
       - name: Run check
         run: rm Cargo.lock && cargo check
@@ -226,7 +226,7 @@ jobs:
           components: "miri"
 
       - name: Restore cache
-        uses: Swatinem/rust-cache@v1
+        uses: Swatinem/rust-cache@v2
 
       - name: Run miri
         env:

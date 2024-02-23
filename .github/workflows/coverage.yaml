@@ -26,7 +26,7 @@ jobs:
           default: true
 
       - name: Restore cache
-        uses: Swatinem/rust-cache@v1
+        uses: Swatinem/rust-cache@v2
 
       - name: Run cargo-tarpaulin
         uses: actions-rs/tarpaulin@v0.1
