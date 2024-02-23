@@ -211,7 +211,7 @@ jobs:
         run: rm Cargo.lock && cargo check
 
   experimental_thread_local:
-    name: Build with experimental-thread-local
+    name: Test with experimental-thread-local
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -227,8 +227,10 @@ jobs:
       - name: Restore cache
         uses: Swatinem/rust-cache@v1
 
-      - name: Build
-        run: cargo build --no-default-features --features weak,experimental-thread-local
+      - name: Build & test
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo test --no-default-features --features weak,experimental-thread-local
 
   miri:
     name: Miri checks

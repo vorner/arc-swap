@@ -59,7 +59,7 @@ macro_rules! t {
     ($name: ident, $strategy: ty) => {
         #[cfg(test)]
         mod $name {
-            use std::sync::{Arc, Weak};
+            use alloc::sync::{Arc, Weak};
 
             use crate::ArcSwapAny;
 
