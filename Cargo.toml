@@ -44,7 +44,7 @@ serde_test = "1.0.130"
 debug = true
 
 [package.metadata.docs.rs]
-all-features = true
+features = ["serde", "weak"]
 
 [[bench]]
 name = "background"
