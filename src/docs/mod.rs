@@ -21,6 +21,19 @@
 //! **are not** part of the API stability guarantees and they may be changed, renamed or removed at
 //! any time.
 //!
+//! The `experimental-thread-local` feature can be used to build arc-swap for `no_std` targets, by
+//! replacing occurences of [`std::thread_local!`] with the `#[thread_local]` directive. This
+//! requires a nightly Rust compiler as it makes use of the experimental
+//! [`thread_local`](https://doc.rust-lang.org/unstable-book/language-features/thread-local.html)
+//! feature. Using this features, thread-local variables are compiled using LLVM built-ins, which
+//! have [several underlying modes of
+//! operation](https://doc.rust-lang.org/beta/unstable-book/compiler-flags/tls-model.html).  To add
+//! support for thread-local variables on a platform that does not have OS or linker support, the
+//! easiest way is to use `-Ztls-model=emulated` and to implement `__emutls_get_address` by hand,
+//! as in [this
+//! example](https://opensource.apple.com/source/clang/clang-800.0.38/src/projects/compiler-rt/lib/builtins/emutls.c.auto.html)
+//! from Clang.
+//!
 //! # Minimal compiler version
 //!
 //! The `1` versions will compile on all compilers supporting the 2018 edition. Note that this

@@ -26,11 +26,16 @@
 //! at least as up to date value of the writers as when the cooldown started. That we if we see 0,
 //! we know it must have happened since then.
 
-use std::cell::Cell;
-use std::ptr;
-use std::slice::Iter;
-use std::sync::atomic::Ordering::*;
-use std::sync::atomic::{AtomicPtr, AtomicUsize};
+use core::cell::Cell;
+use core::ptr;
+use core::slice::Iter;
+use core::sync::atomic::Ordering::*;
+use core::sync::atomic::{AtomicPtr, AtomicUsize};
+
+#[cfg(feature = "experimental-thread-local")]
+use core::cell::OnceCell;
+
+use alloc::boxed::Box;
 
 use super::fast::{Local as FastLocal, Slots as FastSlots};
 use super::helping::{Local as HelpingLocal, Slots as HelpingSlots};
@@ -214,6 +219,7 @@ pub(crate) struct LocalNode {
 }
 
 impl LocalNode {
+    #[cfg(not(feature = "experimental-thread-local"))]
     pub(crate) fn with<R, F: FnOnce(&LocalNode) -> R>(f: F) -> R {
         let f = Cell::new(Some(f));
         THREAD_HEAD
@@ -240,6 +246,19 @@ impl LocalNode {
                 f(&tmp_node)
                 // Drop of tmp_node -> sends the node we just used into cooldown.
             })
+    }
+
+    #[cfg(feature = "experimental-thread-local")]
+    pub(crate) fn with<R, F: FnOnce(&LocalNode) -> R>(f: F) -> R {
+        let thread_head = THREAD_HEAD.get_or_init(|| LocalNode {
+            node: Cell::new(None),
+            fast: FastLocal::default(),
+            helping: HelpingLocal::default(),
+        });
+        if thread_head.node.get().is_none() {
+            thread_head.node.set(Some(Node::get()));
+        }
+        f(&thread_head)
     }
 
     /// Creates a new debt.
@@ -313,6 +332,7 @@ impl Drop for LocalNode {
     }
 }
 
+#[cfg(not(feature = "experimental-thread-local"))]
 thread_local! {
     /// A debt node assigned to this thread.
     static THREAD_HEAD: LocalNode = LocalNode {
@@ -322,6 +342,11 @@ thread_local! {
     };
 }
 
+#[cfg(feature = "experimental-thread-local")]
+#[thread_local]
+/// A debt node assigned to this thread.
+static THREAD_HEAD: OnceCell<LocalNode> = OnceCell::new();
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,7 +354,7 @@ mod tests {
     impl Node {
         fn is_empty(&self) -> bool {
             self.fast_slots()
-                .chain(std::iter::once(self.helping_slot()))
+                .chain(core::iter::once(self.helping_slot()))
                 .all(|d| d.0.load(Relaxed) == Debt::NONE)
         }
 

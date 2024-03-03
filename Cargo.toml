@@ -21,6 +21,8 @@ weak = []
 internal-test-strategies = []
 # Possibly some strategies we are experimenting with. Currently empty. No stability guarantees are included about them.
 experimental-strategies = []
+# Use the nightly "thread_local" feature, to allow no_std builds.
+experimental-thread-local = []
 
 [dependencies]
 serde = { version = "1", features = ["rc"], optional = true }

@@ -46,7 +46,7 @@ jobs:
           RUST_VERSION: ${{ matrix.rust }}
           OS: ${{ matrix.os }}
           RUSTFLAGS: -D warnings
-        run: cargo test --all-features
+        run: cargo test --features weak,internal-test-strategies,experimental-strategies
 
   big-tests:
     name: Run the big ignored tests
@@ -68,7 +68,7 @@ jobs:
       - name: Build & test
         env:
           RUSTFLAGS: -D warnings
-        run: cargo test --all-features --release -- --ignored
+        run: cargo test --features weak,internal-test-strategies,experimental-strategies --release -- --ignored
 
   bits32:
     name: 32bit tests
@@ -91,7 +91,7 @@ jobs:
       - name: Build & test
         env:
           RUSTFLAGS: -D warnings
-        run: cargo test --all-features --target x86_64-unknown-linux-musl
+        run: cargo test --features weak,internal-test-strategies,experimental-strategies --target x86_64-unknown-linux-musl
 
   rustfmt:
     name: Check formatting
@@ -127,7 +127,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Check links
-        run: cargo rustdoc --all-features -- -D warnings
+        run: cargo rustdoc --features weak,internal-test-strategies,experimental-strategies -- -D warnings
 
   clippy:
     name: Clippy lints
@@ -148,7 +148,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run clippy linter
-        run: cargo clippy --all --all-features --tests -- -D clippy::all -D warnings
+        run: cargo clippy --all --features weak,internal-test-strategies,experimental-strategies --tests -- -D clippy::all -D warnings
 
   bench:
     name: Verify benchmarks compile
@@ -168,7 +168,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run clippy linter
-        run: cargo test --all --release --benches --all-features
+        run: cargo test --all --release --benches --features weak,internal-test-strategies,experimental-strategies
 
   semi-ancient:
     name: Check it compiles on old Rust (1.45.0)
@@ -188,7 +188,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run check
-        run: rm Cargo.lock && cargo check --all-features
+        run: rm Cargo.lock && cargo check --features weak,internal-test-strategies,experimental-strategies
 
   ancient:
     name: Check it compiles on old Rust (1.31.0)
@@ -209,6 +209,28 @@ jobs:
 
       - name: Run check
         run: rm Cargo.lock && cargo check
+
+  experimental_thread_local:
+    name: Test with experimental-thread-local
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          profile: minimal
+          default: true
+
+      - name: Restore cache
+        uses: Swatinem/rust-cache@v1
+
+      - name: Build & test
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo test --no-default-features --features weak,experimental-thread-local
 
   miri:
     name: Miri checks
@@ -232,7 +254,7 @@ jobs:
         env:
           PROPTEST_CASES: "10"
           MIRIFLAGS: "-Zmiri-disable-isolation -Zmiri-permissive-provenance"
-        run: cargo miri test --all-features
+        run: cargo miri test --features weak,internal-test-strategies,experimental-strategies
 
   thread_sanitizer-MacOS:
     name: Thread Sanitizer checks MacOS

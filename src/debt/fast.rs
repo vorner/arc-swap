@@ -14,9 +14,9 @@
 //! before the change and before any cleanup of the old pointer happened (in which case we know the
 //! writer will see our debt).
 
-use std::cell::Cell;
-use std::slice::Iter;
-use std::sync::atomic::Ordering::*;
+use core::cell::Cell;
+use core::slice::Iter;
+use core::sync::atomic::Ordering::*;
 
 use super::Debt;
 

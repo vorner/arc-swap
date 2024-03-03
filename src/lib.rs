@@ -2,6 +2,8 @@
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![allow(deprecated)]
+#![cfg_attr(feature = "experimental-thread-local", no_std)]
+#![cfg_attr(feature = "experimental-thread-local", feature(thread_local))]
 
 //! Making [`Arc`][Arc] itself atomic
 //!
@@ -122,6 +124,10 @@
 //!
 //! [RwLock]: https://doc.rust-lang.org/std/sync/struct.RwLock.html
 
+#[allow(unused_imports)]
+#[macro_use]
+extern crate alloc;
+
 pub mod access;
 mod as_raw;
 pub mod cache;
@@ -135,14 +141,15 @@ pub mod strategy;
 #[cfg(feature = "weak")]
 mod weak;
 
-use std::borrow::Borrow;
-use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
-use std::marker::PhantomData;
-use std::mem;
-use std::ops::Deref;
-use std::ptr;
-use std::sync::atomic::{AtomicPtr, Ordering};
-use std::sync::Arc;
+use core::borrow::Borrow;
+use core::fmt::{Debug, Display, Formatter, Result as FmtResult};
+use core::marker::PhantomData;
+use core::mem;
+use core::ops::Deref;
+use core::ptr;
+use core::sync::atomic::{AtomicPtr, Ordering};
+
+use alloc::sync::Arc;
 
 use crate::access::{Access, Map};
 pub use crate::as_raw::AsRaw;
@@ -797,14 +804,16 @@ pub type IndependentArcSwap<T> = ArcSwapAny<Arc<T>, IndependentStrategy>;
 ///
 /// [Weak]: std::sync::Weak
 #[cfg(feature = "weak")]
-pub type ArcSwapWeak<T> = ArcSwapAny<std::sync::Weak<T>>;
+pub type ArcSwapWeak<T> = ArcSwapAny<alloc::sync::Weak<T>>;
 
 macro_rules! t {
     ($name: ident, $strategy: ty) => {
         #[cfg(test)]
         mod $name {
-            use std::panic;
-            use std::sync::atomic::{self, AtomicUsize};
+            use alloc::borrow::ToOwned;
+            use alloc::string::String;
+            use alloc::vec::Vec;
+            use core::sync::atomic::{self, AtomicUsize};
 
             use adaptive_barrier::{Barrier, PanicMode};
             use crossbeam_utils::thread;
@@ -1119,7 +1128,9 @@ macro_rules! t {
 
             /// A panic from within the rcu callback should not change anything.
             #[test]
+            #[cfg(not(feature = "experimental-thread-local"))]
             fn rcu_panic() {
+                use std::panic;
                 let shared = ArcSwap::from(Arc::new(0));
                 assert!(panic::catch_unwind(|| shared.rcu(|_| -> usize { panic!() })).is_err());
                 assert_eq!(1, Arc::strong_count(&shared.swap(Arc::new(42))));
@@ -1237,6 +1248,8 @@ mod internal_strategies {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use alloc::vec::Vec;
 
     /// Accessing the value inside ArcSwap with Guards (and checks for the reference
     /// counts).

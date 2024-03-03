@@ -1,6 +1,7 @@
-use std::ptr;
-use std::rc::Weak as RcWeak;
-use std::sync::Weak;
+use core::ptr;
+
+use alloc::rc::Weak as RcWeak;
+use alloc::sync::Weak;
 
 use crate::RefCnt;
 
@@ -58,7 +59,7 @@ macro_rules! t {
     ($name: ident, $strategy: ty) => {
         #[cfg(test)]
         mod $name {
-            use std::sync::{Arc, Weak};
+            use alloc::sync::{Arc, Weak};
 
             use crate::ArcSwapAny;
 

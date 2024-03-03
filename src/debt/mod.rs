@@ -14,8 +14,8 @@
 //! Each node has some fast (but fallible) nodes and a fallback node, with different algorithms to
 //! claim them (see the relevant submodules).
 
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering::*;
+use core::sync::atomic::AtomicUsize;
+use core::sync::atomic::Ordering::*;
 
 pub(crate) use self::list::{LocalNode, Node};
 use super::RefCnt;
@@ -96,7 +96,7 @@ impl Debt {
 
                 let all_slots = node
                     .fast_slots()
-                    .chain(std::iter::once(node.helping_slot()));
+                    .chain(core::iter::once(node.helping_slot()));
                 for slot in all_slots {
                     // Note: Release is enough even here. That makes sure the increment is
                     // visible to whoever might acquire on this slot and can't leak below this.
@@ -116,7 +116,7 @@ impl Debt {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use alloc::sync::Arc;
 
     /// Checks the assumption that arcs to ZSTs have different pointer values.
     #[test]

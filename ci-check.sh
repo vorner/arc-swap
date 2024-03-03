@@ -12,5 +12,5 @@ fi
 # Allow some warnings on the very old compiler.
 export RUSTFLAGS="-D warnings"
 
-cargo test --release --all-features
-cargo test --release --all-features -- --ignored
+cargo test --release --features weak,internal-test-strategies,experimental-strategies
+cargo test --release --features weak,internal-test-strategies,experimental-strategies -- --ignored
