@@ -1,3 +1,8 @@
+# 1.7.1
+
+* Support for no-std builds with the `experimental-thread-local`. Needs nightly
+  compiler. No stability guarantees with this feature (#93).
+
 # 1.6.0
 
 * Fix a data race reported by MIRI.
