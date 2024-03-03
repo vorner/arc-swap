@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1708704348800,
+  "lastUpdate": 1709470380206,
   "repoUrl": "https://github.com/vorner/arc-swap",
   "entries": {
     "Track benchmarks": [
@@ -5566,6 +5566,126 @@ window.BENCHMARK_DATA = {
           {
             "name": "concurrent_store/store",
             "value": 607,
+            "range": "± 4",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/cache",
+            "value": 1,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "utilities/access-map",
+            "value": 6,
+            "range": "± 0",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "alex@adnab.me",
+            "name": "Alex Auvolat",
+            "username": "Alexis211"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "229c7eeef9f4d5b5c664444a478f4aed6e71f18e",
+          "message": "no_std support, more minimal and less intrusive version (#93)\n\n* Support building for no_std using nightly Rust compiler\r\n\r\n- Adds a new feature `experimental-thread-local` that enables building for no_std targets.\r\n  If this feature is not enabled, the crate is identical as before,\r\n  still allowing for compilation using Rust stable >= 1.38.0.\r\n\r\n- The `experimental-thread-local` feature makes use of experimental features `thread_local`\r\n  and `lazy_cell`, thus requiring a nightly Rust compiler.\r\n\r\n- Support for `std::sync::RwLock` is dropped in no_std builds.",
+          "timestamp": "2024-03-03T13:48:46+01:00",
+          "tree_id": "5d50c3f10873a883b15a1ee6ace0e50bf7bebf60",
+          "url": "https://github.com/vorner/arc-swap/commit/229c7eeef9f4d5b5c664444a478f4aed6e71f18e"
+        },
+        "date": 1709470379568,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "uncontended/load",
+            "value": 6,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/load_full",
+            "value": 9,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/load_many",
+            "value": 14,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/store",
+            "value": 53,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/cache",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/load",
+            "value": 6,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/load_full",
+            "value": 12,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/load_many",
+            "value": 14,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/store",
+            "value": 595,
+            "range": "± 60",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/cache",
+            "value": 1,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/load",
+            "value": 51,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/load_full",
+            "value": 66,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/load_many",
+            "value": 86,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/store",
+            "value": 615,
             "range": "± 4",
             "unit": "ns/iter"
           },
