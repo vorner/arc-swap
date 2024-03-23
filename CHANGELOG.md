@@ -1,5 +1,9 @@
 # 1.7.1
 
+* Fix docs build (mutually exclusive features, #112).
+
+# 1.7.0
+
 * Support for no-std builds with the `experimental-thread-local`. Needs nightly
   compiler. No stability guarantees with this feature (#93).
 
