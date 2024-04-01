@@ -225,7 +225,7 @@ jobs:
           default: true
 
       - name: Restore cache
-        uses: Swatinem/rust-cache@v1
+        uses: Swatinem/rust-cache@v2
 
       - name: Build & test
         env:
