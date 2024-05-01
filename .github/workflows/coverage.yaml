@@ -35,7 +35,7 @@ jobs:
           timeout: 120
 
       - name: Upload to codecov.io
-        uses: codecov/codecov-action@5a8bb4701eca7ba3673f21664b887f652c58d0a3
+        uses: codecov/codecov-action@5ecb98a3c6b747ed38dc09f787459979aebb39be
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
 
