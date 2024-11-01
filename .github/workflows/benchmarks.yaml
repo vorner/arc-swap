@@ -47,7 +47,7 @@ jobs:
         run: cargo bench --bench track -- --output-format bencher | grep -v 'Gnuplot not found' | tee benches.out
 
       - name: Compare benchmarks
-        uses: rhysd/github-action-benchmark@cc9ac13ce81036c9b67fcfe2cb95ca366684b9ea
+        uses: rhysd/github-action-benchmark@d48d326b4ca9ba73ca0cd0d59f108f9e02a381c7
         with:
           name: Track benchmarks
           tool: cargo
