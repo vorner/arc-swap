@@ -455,6 +455,25 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
         Guard { inner: protected }
     }
 
+    /// Provides a mutable access to the object inside but requires mutable access to the container
+    ///
+    /// This is useful when faster access to the internal object is needed, but the container is
+    /// not shared between threads. This is a bit faster than [`load`](#method.load) because no
+    /// swap operation will be required to replace it.
+    ///
+    /// If the object has been cloned, a guard exists or the load_full method has been called, this
+    /// method will return None.
+    #[inline]
+    pub fn try_mut<'a>(&'a mut self) -> Option<&'a mut <T as RefCnt>::Base> {
+        let ptr: *mut <T as RefCnt>::Base = *self.ptr.get_mut();
+        // To pay all the debts
+        unsafe { self.strategy.wait_for_readers(ptr, &self.ptr) };
+        if unsafe { T::ref_cnt(ptr) } > 1 {
+            return None;
+        }
+        Some(unsafe { ptr.as_mut().unwrap() })
+    }
+
     /// Replaces the value inside this instance.
     ///
     /// Further loads will yield the new value. Uses [`swap`](#method.swap) internally.
@@ -1278,6 +1297,67 @@ mod tests {
         assert_eq!(2, Arc::strong_count(&a));
         let guard = shared.load();
         assert_eq!(1, **guard);
+        drop(shared);
+        // We can still use the guard after the shared disappears
+        assert_eq!(1, **guard);
+        let ptr = Arc::clone(&guard);
+        // One in shared, one in guard
+        assert_eq!(2, Arc::strong_count(&ptr));
+        drop(guard);
+        assert_eq!(1, Arc::strong_count(&ptr));
+    }
+
+    /// Accessing the value inside ArcSwap with Guards (and checks for the reference
+    /// counts).
+    #[test]
+    fn load_mut_cnt() {
+        let mut shared = ArcSwap::from(Arc::new(0));
+
+        let guard = shared.load();
+        assert_eq!(0, **guard);
+        drop(guard);
+
+        // One in shared, one in a
+        assert_eq!(1, Arc::strong_count(shared.load().deref()));
+        {
+            let guard = shared.try_mut().unwrap();
+            assert_eq!(0, *guard);
+            *guard = 1;
+            assert_eq!(1, *guard);
+        }
+        let guard = shared.load();
+        assert_eq!(1, **guard);
+        drop(guard);
+        assert_eq!(1, Arc::strong_count(shared.load().deref()));
+        {
+            let guard = shared.try_mut().unwrap();
+            *guard = 0;
+            assert_eq!(0, *guard);
+        }
+        let a = shared.load_full();
+        assert_eq!(2, Arc::strong_count(&a));
+
+        // we should not be able to load it as mutable anymore
+        assert_eq!(shared.try_mut().is_some(), false);
+
+        let guard = shared.load();
+        assert_eq!(0, **guard);
+        // The guard doesn't have its own ref count now
+        assert_eq!(2, Arc::strong_count(&a));
+        let guard_2 = shared.load();
+        // Unlike with guard, this does not deadlock
+        shared.store(Arc::new(1));
+        // But now, each guard got a full Arc inside it
+        assert_eq!(3, Arc::strong_count(&a));
+        // And when we get rid of them, they disappear
+        drop(guard_2);
+        assert_eq!(2, Arc::strong_count(&a));
+        let _b = Arc::clone(&guard);
+        assert_eq!(3, Arc::strong_count(&a));
+        // We can drop the guard it came from
+        drop(guard);
+        assert_eq!(2, Arc::strong_count(&a));
+        let guard = shared.load();
         drop(shared);
         // We can still use the guard after the shared disappears
         assert_eq!(1, **guard);
