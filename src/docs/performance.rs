@@ -5,8 +5,8 @@
 //! ## Lock-free readers
 //!
 //! All the read operations are always [lock-free]. Most of the time, they are actually
-//! [wait-free]. They are [lock-free] from time to time, with at least `usize::MAX / 4` accesses
-//! that are [wait-free] in between.
+//! [wait-free]. They may wait from time to time, with at least `usize::MAX / 4` [wait-free]
+//! accesses in between waits.
 //!
 //! Writers are [lock-free].
 //!
