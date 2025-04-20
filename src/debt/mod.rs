@@ -18,6 +18,8 @@ use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering::*;
 
 pub(crate) use self::list::{LocalNode, Node};
+#[cfg(feature = "internal-test-traps")]
+pub use self::list::traps::TrapGuard;
 use super::RefCnt;
 
 mod fast;

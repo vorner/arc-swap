@@ -44,7 +44,7 @@
 //! * Then it tries to pass the already fully protected/paid pointer to the reader. It writes it to
 //!   an envelope and CaS-replaces it into the control, instead of the generation (if it fails,
 //!   someone has been faster and it rolls back). We need the envelope because the pointer itself
-//!   doesn't have to be aligned to 4 bytes and we need the space for tags to distinguish the types
+//!   doesn't have to be aligned to 2 bytes and we need the space for tags to distinguish the types
 //!   of info in control; we can ensure the envelope is).
 //! * The reader then finds the generation got replaced by a pointer to the envelope and uses that
 //!   pointer inside the envelope. It aborts its own debt. This effectively exchanges the envelopes
@@ -195,6 +195,14 @@ impl Default for Slots {
 }
 
 impl Slots {
+    #[cfg(feature = "internal-test-traps")]
+    pub(super) fn test_traps(&self) -> (usize, usize) {
+        assert_eq!(self.slot.0.load(Relaxed), Debt::NONE);
+        assert_eq!(self.control.load(Relaxed), IDLE);
+        assert_eq!(self.handover.0.load(Relaxed), ptr::null_mut());
+        ((&self.handover as *const Handover).addr(), self.space_offer.load(Relaxed).addr())
+    }
+
     pub(super) fn slot(&self) -> &Debt {
         &self.slot
     }
@@ -276,8 +284,15 @@ impl Slots {
                     let my_space = self.space_offer.load(SeqCst);
                     // Relaxed is fine, we'll sync by the next compare-exchange. If we don't, the
                     // value won't ever be read anyway.
+                    let old;
                     unsafe {
-                        (*my_space).0.store(replace_addr, SeqCst);
+                        // Just for debug assert, but later. We don't want to leave stuff in
+                        // mayhem.
+                        old = (*my_space).0.swap(replace_addr, SeqCst);
+                    }
+                    #[cfg(feature = "internal-test-traps")]
+                    if !old.is_null() {
+                        std::process::abort();
                     }
                     // Ensured by the align annotation at the type.
                     assert_eq!(my_space.addr() & TAG_MASK, NO_TAG);
@@ -299,6 +314,13 @@ impl Slots {
                             break;
                         }
                         Err(new_control) => {
+                            // Empty our envelope, we are not using it.
+                            //
+                            // Just for the traps.
+                            #[cfg(feature = "internal-test-traps")]
+                            unsafe {
+                                (*my_space).0.swap(ptr::null_mut(), Relaxed);
+                            }
                             // Something has changed in between. Let's try again, nothing changed
                             // (the replacement will get dropped at the end of scope, we didn't do
                             // anything with the spaces, etc.
@@ -335,7 +357,7 @@ impl Slots {
             // Strip off the tag while keeping the provenance.
             let handover = control;
 
-            let replacement = unsafe { &*handover }.0.load(SeqCst);
+            let replacement = unsafe { &*handover }.0.swap(ptr::null_mut(), SeqCst);
             // Make sure we advertise the right envelope when we set it to generation next time.
             self.space_offer.store(handover, SeqCst);
             // Note we've left the debt in place. The caller should pay it back (without ever

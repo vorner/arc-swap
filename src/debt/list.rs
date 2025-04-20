@@ -347,6 +347,54 @@ thread_local! {
 /// A debt node assigned to this thread.
 static THREAD_HEAD: OnceCell<LocalNode> = OnceCell::new();
 
+#[cfg(feature = "internal-test-traps")]
+#[doc(hidden)]
+pub mod traps {
+    use std::collections::HashSet;
+    use std::sync::atomic::Ordering;
+    use std::sync::{Mutex, MutexGuard};
+
+    use super::*;
+
+    static MUTEX: Mutex<()> = Mutex::new(());
+
+    #[doc(hidden)]
+    pub struct TrapGuard {
+        _guard: MutexGuard<'static, ()>
+    }
+
+    impl TrapGuard {
+        pub fn new() -> Self {
+            let lock = MUTEX.lock().unwrap_or_else(|e| {
+                MUTEX.clear_poison();
+                e.into_inner()
+            });
+            TrapGuard { _guard: lock }
+        }
+    }
+
+    impl Drop for TrapGuard {
+        fn drop(&mut self) {
+            let mut handovers = HashSet::new();
+            let mut spaces = HashSet::new();
+            Node::traverse(|node| {
+                assert_eq!(node.active_writers.load(Ordering::Relaxed), 0);
+                for slot in node.fast_slots() {
+                    assert_eq!(slot.0.load(Ordering::Relaxed), Debt::NONE);
+                }
+
+                let (h, s) = node.helping.test_traps();
+                assert!(handovers.insert(h));
+                assert!(spaces.insert(s));
+
+                None::<()>
+            });
+
+            assert_eq!(handovers, spaces);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

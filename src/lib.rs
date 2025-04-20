@@ -160,6 +160,9 @@ use crate::strategy::sealed::Protected;
 use crate::strategy::{CaS, Strategy};
 pub use crate::strategy::{DefaultStrategy, IndependentStrategy};
 
+#[cfg(feature = "internal-test-traps")]
+pub use crate::debt::TrapGuard;
+
 /// A temporary storage of the pointer.
 ///
 /// This guard object is returned from most loading methods (with the notable exception of

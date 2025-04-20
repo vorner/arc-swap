@@ -13,11 +13,18 @@ use crossbeam_utils::thread;
 use itertools::Itertools;
 use once_cell::sync::Lazy;
 
+#[cfg(not(feature = "internal-test-traps"))]
 static LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 /// We want to prevent these tests from running concurrently, because they run multi-threaded.
+#[cfg(not(feature = "internal-test-traps"))]
 fn lock() -> MutexGuard<'static, ()> {
     LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(feature = "internal-test-traps")]
+fn lock() -> arc_swap::TrapGuard {
+    arc_swap::TrapGuard::new()
 }
 
 struct LLNode<S: Strategy<Option<Arc<LLNode<S>>>>> {
