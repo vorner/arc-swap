@@ -114,10 +114,11 @@ use core::sync::atomic::{AtomicPtr, AtomicUsize};
 use super::Debt;
 use crate::RefCnt;
 
-pub const REPLACEMENT_TAG: usize = 0b01;
-pub const GEN_TAG: usize = 0b10;
-pub const TAG_MASK: usize = 0b11;
-pub const IDLE: usize = 0;
+/// We want something like a void pointer.
+///
+/// We create a "pointer to byte", but incompatible to anything we have outside of the crate, just
+/// to make sure we don't mix things up.
+struct Anonymous { _unused: u8 }
 
 /// Thread local data for the helping strategy.
 #[derive(Default)]
@@ -128,8 +129,16 @@ pub(super) struct Local {
 
 // Make sure the pointers have 2 empty bits. Always.
 #[derive(Default)]
-#[repr(align(4))]
-struct Handover(AtomicUsize);
+#[repr(align(2))]
+struct Handover(AtomicPtr<Anonymous>);
+
+pub(crate) struct Generation(usize);
+
+const GEN_TAG: usize = 0b1;
+const NO_TAG: usize = 0b0; // There's a replacement handover envelope.
+const TAG_MASK: usize = 0b1;
+const IDLE: *mut Handover = ptr::null_mut();
+const IDLE_TAG: usize = 0;
 
 /// The slots for the helping strategy.
 pub(super) struct Slots {
@@ -140,24 +149,26 @@ pub(super) struct Slots {
     /// * `IDLE` (nothing is happening, and there may or may not be an active debt).
     /// * a generation, tagged with GEN_TAG. The reader is trying to acquire a slot right now and a
     ///   writer might try to help out.
-    /// * A replacement pointer, tagged with REPLACEMENT_TAG. This pointer points to an Handover,
+    /// * A replacement pointer, not tagged (tag is 0). This pointer points to an Handover,
     ///   containing an already protected value, provided by the writer for the benefit of the
     ///   reader. The reader should abort its own debt and use this instead. This indirection
     ///   (storing pointer to the envelope with the actual pointer) is to make sure there's a space
-    ///   for the tag ‒ there is no guarantee the real pointer is aligned to at least 4 bytes, we
+    ///   for the tag ‒ there is no guarantee the real pointer is aligned to at least 2 bytes, we
     ///   can however force that for the Handover type.
-    control: AtomicUsize,
+    control: AtomicPtr<Handover>,
     /// A possibly active debt.
     slot: Debt,
     /// If there's a generation in control, this signifies what address the reader is trying to
     /// load from.
+    ///
+    /// We don't ever use whatever we read there as a pointer, so it's OK to keep just the address
+    /// as usize.
     active_addr: AtomicUsize,
     /// A place where a writer can put a replacement value.
     ///
     /// Note that this is simply an allocation, and every participating slot contributes one, but
     /// they may be passed around through the lifetime of the program. It is not accessed directly,
     /// but through the space_offer thing.
-    ///
     handover: Handover,
     /// A pointer to a handover envelope this node currently owns.
     ///
@@ -169,7 +180,7 @@ pub(super) struct Slots {
 impl Default for Slots {
     fn default() -> Self {
         Slots {
-            control: AtomicUsize::new(IDLE),
+            control: AtomicPtr::new(IDLE),
             slot: Debt::default(),
             // Doesn't matter yet
             active_addr: AtomicUsize::new(0),
@@ -188,14 +199,14 @@ impl Slots {
         &self.slot
     }
 
-    pub(super) fn get_debt(&self, ptr: usize, local: &Local) -> (usize, bool) {
+    pub(super) fn get_debt(&self, ptr: usize, local: &Local) -> (Generation, bool) {
         // Incrementing by 4 ensures we always have enough space for 2 bit of tags.
         let gen = local.generation.get().wrapping_add(4);
         debug_assert_eq!(gen & GEN_TAG, 0);
         local.generation.set(gen);
         // Signal the caller that the node should be sent to a cooldown.
         let discard = gen == 0;
-        let gen = gen | GEN_TAG;
+        let gen = ptr::without_provenance_mut(gen | GEN_TAG);
         // We will sync by the write to the control. But we also sync the value of the previous
         // generation/released slot. That way we may re-confirm in the writer that the reader is
         // not in between here and the compare_exchange below with a stale gen (eg. if we are in
@@ -209,7 +220,7 @@ impl Slots {
         let prev = self.control.swap(gen, SeqCst);
         debug_assert_eq!(IDLE, prev, "Left control in wrong state");
 
-        (gen, discard)
+        (Generation(gen.addr()), discard)
     }
 
     pub(super) fn help<R, T>(&self, who: &Self, storage_addr: usize, replacement: &R)
@@ -221,11 +232,11 @@ impl Slots {
         // Also acquires the auxiliary data in other variables.
         let mut control = who.control.load(SeqCst);
         loop {
-            match control & TAG_MASK {
+            match control.addr() & TAG_MASK {
                 // Nothing to help with
-                IDLE if control == IDLE => break,
+                IDLE_TAG if control == IDLE => break,
                 // Someone has already helped out with that, so we have nothing to do here
-                REPLACEMENT_TAG => break,
+                NO_TAG => break,
                 // Something is going on, let's have a better look.
                 GEN_TAG => {
                     debug_assert!(
@@ -256,7 +267,7 @@ impl Slots {
                     // This actually does a full-featured load under the hood, but we are currently
                     // idle and the load doesn't re-enter write, so that's all fine.
                     let replacement = replacement();
-                    let replace_addr = T::as_ptr(&replacement) as usize;
+                    let replace_addr = T::as_ptr(&replacement).cast();
                     // If we succeed in helping the other thread, we take their empty space in
                     // return for us that we pass to them. It's already there, the value is synced
                     // to us by Acquire on control.
@@ -269,15 +280,14 @@ impl Slots {
                         (*my_space).0.store(replace_addr, SeqCst);
                     }
                     // Ensured by the align annotation at the type.
-                    assert_eq!(my_space as usize & TAG_MASK, 0);
-                    let space_addr = (my_space as usize) | REPLACEMENT_TAG;
+                    assert_eq!(my_space.addr() & TAG_MASK, NO_TAG);
                     // Acquire on failure -> same reason as at the top, reading the value.
                     // Release on success -> we send data to that thread through here. Must be
                     // AcqRel, because success must be superset of failure. Also, load to get their
                     // space (it won't have changed, it does when the control is set to IDLE).
                     match who
                         .control
-                        .compare_exchange(control, space_addr, SeqCst, SeqCst)
+                        .compare_exchange(control, my_space, SeqCst, SeqCst)
                     {
                         Ok(_) => {
                             // We have successfully sent our replacement out (Release) and got
@@ -296,7 +306,7 @@ impl Slots {
                         }
                     }
                 }
-                _ => unreachable!("Invalid control value {:X}", control),
+                _ => unreachable!("Invalid control value {:X}", control.addr()),
             }
         }
     }
@@ -305,7 +315,7 @@ impl Slots {
         *self.space_offer.get_mut() = &mut self.handover;
     }
 
-    pub(super) fn confirm(&self, gen: usize, ptr: usize) -> Result<(), usize> {
+    pub(super) fn confirm<T: RefCnt>(&self, gen: Generation, ptr: usize) -> Result<(), *mut T::Base> {
         // Put the slot there and consider it acquire of a „lock“. For that we need swap, not store
         // only (we need Acquire and Acquire works only on loads). Release is to make sure control
         // is observable by the other thread (but that's probably not necessary anyway?)
@@ -315,20 +325,34 @@ impl Slots {
         // Confirm by writing to the control (or discover that we got helped). We stop anyone else
         // from helping by setting it to IDLE.
         let control = self.control.swap(IDLE, SeqCst);
-        if control == gen {
+        if control.addr() == gen.0 {
             // Nobody interfered, we have our debt in place and can proceed.
             Ok(())
         } else {
             // Someone put a replacement in there.
-            debug_assert_eq!(control & TAG_MASK, REPLACEMENT_TAG);
-            let handover = (control & !TAG_MASK) as *mut Handover;
+            debug_assert_eq!(control.addr() & TAG_MASK, NO_TAG);
+            debug_assert!(!control.is_null());
+            // Strip off the tag while keeping the provenance.
+            let handover = control;
+
             let replacement = unsafe { &*handover }.0.load(SeqCst);
             // Make sure we advertise the right envelope when we set it to generation next time.
             self.space_offer.store(handover, SeqCst);
             // Note we've left the debt in place. The caller should pay it back (without ever
             // taking advantage of it) to make sure any extra is actually dropped (it is possible
             // someone provided the replacement *and* paid the debt and we need just one of them).
-            Err(replacement)
+            Err(replacement.cast())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn anonymous_layout() {
+        assert_eq!(size_of::<Anonymous>(), 1);
+        assert_eq!(align_of::<Anonymous>(), 1);
     }
 }

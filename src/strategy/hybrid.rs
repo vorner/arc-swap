@@ -43,7 +43,7 @@ impl<T: RefCnt> HybridProtection<T> {
         // Relaxed is good enough here, see the Acquire below
         let ptr = storage.load(Relaxed);
         // Try to get a debt slot. If not possible, fail.
-        let debt = node.new_fast(ptr as usize)?;
+        let debt = node.new_fast(ptr.addr())?;
 
         // Acquire to get the data.
         //
@@ -67,7 +67,7 @@ impl<T: RefCnt> HybridProtection<T> {
     fn fallback(node: &LocalNode, storage: &AtomicPtr<T::Base>) -> Self {
         // First, we claim a debt slot and store the address of the atomic pointer there, so the
         // writer can optionally help us out with loading and protecting something.
-        let gen = node.new_helping(storage as *const _ as usize);
+        let gen = node.new_helping((storage as *const AtomicPtr<T::Base>).addr());
         // We already synchronized the start of the sequence by SeqCst in the new_helping vs swap on
         // the pointer. We just need to make sure to bring the pointee in (this can be newer than
         // what we got in the Debt)
@@ -75,7 +75,7 @@ impl<T: RefCnt> HybridProtection<T> {
 
         // Try to replace the debt with our candidate. If it works, we get the debt slot to use. If
         // not, we get a replacement value, already protected and a debt to take care of.
-        match node.confirm_helping(gen, candidate as usize) {
+        match node.confirm_helping::<T>(gen, candidate as usize) {
             Ok(debt) => {
                 // The fast path -> we got the debt confirmed alright.
                 Self::from_inner(unsafe { Self::new(candidate, Some(debt)).into_inner() })
@@ -88,7 +88,7 @@ impl<T: RefCnt> HybridProtection<T> {
                 }
                 // We got a (possibly) different pointer out. But that one is already protected and
                 // the slot is paid back.
-                unsafe { Self::new(replacement as *mut _, None) }
+                unsafe { Self::new(replacement, None) }
             }
         }
     }
@@ -199,7 +199,7 @@ where
         // does not hold a slot and the reader doesn't recurse back into writer, so we won't run
         // out of slots.
         let replacement = || self.load(storage).into_inner();
-        Debt::pay_all::<T, _>(old, storage as *const _ as usize, replacement);
+        Debt::pay_all::<T, _>(old, (storage as *const AtomicPtr<T::Base>).addr(), replacement);
     }
 }
 

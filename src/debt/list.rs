@@ -38,7 +38,7 @@ use core::cell::OnceCell;
 use alloc::boxed::Box;
 
 use super::fast::{Local as FastLocal, Slots as FastSlots};
-use super::helping::{Local as HelpingLocal, Slots as HelpingSlots};
+use super::helping::{Generation, Local as HelpingLocal, Slots as HelpingSlots};
 use super::Debt;
 use crate::RefCnt;
 
@@ -275,7 +275,7 @@ impl LocalNode {
     /// Initializes a helping slot transaction.
     ///
     /// Returns the generation (with tag).
-    pub(crate) fn new_helping(&self, ptr: usize) -> usize {
+    pub(crate) fn new_helping(&self, ptr: usize) -> Generation {
         let node = &self.node.get().expect("LocalNode::with ensures it is set");
         debug_assert_eq!(node.in_use.load(Relaxed), NODE_USED);
         let (gen, discard) = node.helping.get_debt(ptr, &self.helping);
@@ -294,16 +294,16 @@ impl LocalNode {
     ///
     /// Will either return a debt with the pointer, or a debt to pay and a replacement (already
     /// protected) address.
-    pub(crate) fn confirm_helping(
+    pub(crate) fn confirm_helping<T: RefCnt>(
         &self,
-        gen: usize,
+        gen: Generation,
         ptr: usize,
-    ) -> Result<&'static Debt, (&'static Debt, usize)> {
+    ) -> Result<&'static Debt, (&'static Debt, *mut T::Base)> {
         let node = &self.node.get().expect("LocalNode::with ensures it is set");
         debug_assert_eq!(node.in_use.load(Relaxed), NODE_USED);
         let slot = node.helping_slot();
         node.helping
-            .confirm(gen, ptr)
+            .confirm::<T>(gen, ptr)
             .map(|()| slot)
             .map_err(|repl| (slot, repl))
     }
