@@ -27,8 +27,6 @@ experimental-thread-local = []
 # Extended test traps. Used internally, *DO NOT USE* (no stability guarantees)
 internal-test-traps = []
 
-default = ["weak","internal-test-strategies","internal-test-traps"]
-
 [dependencies]
 serde = { version = "1", features = ["rc"], optional = true }
 

@@ -41,7 +41,7 @@ impl<T: RefCnt> HybridProtection<T> {
     #[inline]
     fn attempt(node: &LocalNode, storage: &AtomicPtr<T::Base>) -> Option<Self> {
         // Relaxed is good enough here, see the Acquire below
-        let ptr = storage.load(Relaxed);
+        let ptr = storage.load(SeqCst);
         // Try to get a debt slot. If not possible, fail.
         let debt = node.new_fast(ptr.addr())?;
 
@@ -84,6 +84,7 @@ impl<T: RefCnt> HybridProtection<T> {
                 // The debt is on the candidate we provided and it is unused, we so we just pay it
                 // back right away.
                 if !unused_debt.pay::<T>(candidate) {
+                    // XXX Here?
                     unsafe { T::dec(candidate) };
                 }
                 // We got a (possibly) different pointer out. But that one is already protected and

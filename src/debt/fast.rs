@@ -58,7 +58,7 @@ impl Slots {
                 let old = slot.0.swap(ptr, SeqCst);
                 debug_assert_eq!(Debt::NONE, old);
                 local.offset.set(i + 1);
-                return Some(&self.0[i]);
+                return Some(&slot);
             }
         }
         None

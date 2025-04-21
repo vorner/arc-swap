@@ -75,6 +75,11 @@
 //!
 //! # Orderings
 //!
+//! Note: While the proof should hopefully be correct, we are not 100% sure in here. The whole
+//! module is rather complex and used only rarely. Therefore, we opt to using SeqCst in here.
+//! However, the old reasoning why weaker ones should be enough is left in place, for future
+//! reference and if someone is brave enough to deal with it.
+//!
 //! The linked lists/nodes are already provided for us. So we just need to make sure the debt
 //! juggling is done right. We assume that the local node is ours to write to (others have only
 //! limited right to write to certain fields under certain conditions) and that we are counted into
@@ -195,21 +200,17 @@ impl Default for Slots {
 }
 
 impl Slots {
-    #[cfg(feature = "internal-test-traps")]
-    pub(super) fn test_traps(&self) -> (usize, usize) {
-        assert_eq!(self.slot.0.load(Relaxed), Debt::NONE);
-        assert_eq!(self.control.load(Relaxed), IDLE);
-        assert_eq!(self.handover.0.load(Relaxed), ptr::null_mut());
-        ((&self.handover as *const Handover).addr(), self.space_offer.load(Relaxed).addr())
+    pub(super) fn init(&mut self) {
+        *self.space_offer.get_mut() = &mut self.handover;
     }
-
+    
     pub(super) fn slot(&self) -> &Debt {
         &self.slot
     }
 
     pub(super) fn get_debt(&self, ptr: usize, local: &Local) -> (Generation, bool) {
-        // Incrementing by 4 ensures we always have enough space for 2 bit of tags.
-        let gen = local.generation.get().wrapping_add(4);
+        // Incrementing by 2 ensures we always have enough space for 1 bit of tags.
+        let gen = local.generation.get().wrapping_add(2);
         debug_assert_eq!(gen & GEN_TAG, 0);
         local.generation.set(gen);
         // Signal the caller that the node should be sent to a cooldown.
@@ -229,6 +230,37 @@ impl Slots {
         debug_assert_eq!(IDLE, prev, "Left control in wrong state");
 
         (Generation(gen.addr()), discard)
+    }
+
+    pub(super) fn confirm<T: RefCnt>(&self, gen: Generation, ptr: usize) -> Result<(), *mut T::Base> {
+        // Put the slot there and consider it acquire of a „lock“. For that we need swap, not store
+        // only (we need Acquire and Acquire works only on loads). Release is to make sure control
+        // is observable by the other thread (but that's probably not necessary anyway?)
+        let prev = self.slot.0.swap(ptr, SeqCst);
+        debug_assert_eq!(Debt::NONE, prev);
+
+        // Confirm by writing to the control (or discover that we got helped). We stop anyone else
+        // from helping by setting it to IDLE.
+        let control = self.control.swap(IDLE, SeqCst);
+        if control.addr() == gen.0 {
+            // Nobody interfered, we have our debt in place and can proceed.
+            Ok(())
+        } else {
+            // Someone put a replacement in there.
+            debug_assert_eq!(control.addr() & TAG_MASK, NO_TAG);
+            debug_assert!(!control.is_null());
+            // Strip off the tag while keeping the provenance.
+            let handover = control;
+
+            let replacement = unsafe { &*handover }.0.swap(ptr::null_mut(), SeqCst);
+            debug_assert!(!replacement.is_null());
+            // Make sure we advertise the right envelope when we set it to generation next time.
+            self.space_offer.store(handover, SeqCst);
+            // Note we've left the debt in place. The caller should pay it back (without ever
+            // taking advantage of it) to make sure any extra is actually dropped (it is possible
+            // someone provided the replacement *and* paid the debt and we need just one of them).
+            Err(replacement.cast())
+        }
     }
 
     pub(super) fn help<R, T>(&self, who: &Self, storage_addr: usize, replacement: &R)
@@ -271,6 +303,8 @@ impl Slots {
                         }
                     }
 
+                    debug_assert!(active_addr == storage_addr);
+
                     // Now we know this work is for us. Try to create a replacement and offer it.
                     // This actually does a full-featured load under the hood, but we are currently
                     // idle and the load doesn't re-enter write, so that's all fine.
@@ -307,7 +341,9 @@ impl Slots {
                         Ok(_) => {
                             // We have successfully sent our replacement out (Release) and got
                             // their space in return (Acquire on that load above).
-                            self.space_offer.store(their_space, SeqCst);
+                            // XXX This one?
+                            let old_space = self.space_offer.swap(their_space, SeqCst);
+                            debug_assert_eq!(my_space, old_space);
                             // The ref count went with it, so forget about it here.
                             T::into_ptr(replacement);
                             // We have successfully helped out, so we are done.
@@ -319,7 +355,7 @@ impl Slots {
                             // Just for the traps.
                             #[cfg(feature = "internal-test-traps")]
                             unsafe {
-                                (*my_space).0.swap(ptr::null_mut(), Relaxed);
+                                (*my_space).0.store(ptr::null_mut(), Relaxed);
                             }
                             // Something has changed in between. Let's try again, nothing changed
                             // (the replacement will get dropped at the end of scope, we didn't do
@@ -333,38 +369,12 @@ impl Slots {
         }
     }
 
-    pub(super) fn init(&mut self) {
-        *self.space_offer.get_mut() = &mut self.handover;
-    }
-
-    pub(super) fn confirm<T: RefCnt>(&self, gen: Generation, ptr: usize) -> Result<(), *mut T::Base> {
-        // Put the slot there and consider it acquire of a „lock“. For that we need swap, not store
-        // only (we need Acquire and Acquire works only on loads). Release is to make sure control
-        // is observable by the other thread (but that's probably not necessary anyway?)
-        let prev = self.slot.0.swap(ptr, SeqCst);
-        debug_assert_eq!(Debt::NONE, prev);
-
-        // Confirm by writing to the control (or discover that we got helped). We stop anyone else
-        // from helping by setting it to IDLE.
-        let control = self.control.swap(IDLE, SeqCst);
-        if control.addr() == gen.0 {
-            // Nobody interfered, we have our debt in place and can proceed.
-            Ok(())
-        } else {
-            // Someone put a replacement in there.
-            debug_assert_eq!(control.addr() & TAG_MASK, NO_TAG);
-            debug_assert!(!control.is_null());
-            // Strip off the tag while keeping the provenance.
-            let handover = control;
-
-            let replacement = unsafe { &*handover }.0.swap(ptr::null_mut(), SeqCst);
-            // Make sure we advertise the right envelope when we set it to generation next time.
-            self.space_offer.store(handover, SeqCst);
-            // Note we've left the debt in place. The caller should pay it back (without ever
-            // taking advantage of it) to make sure any extra is actually dropped (it is possible
-            // someone provided the replacement *and* paid the debt and we need just one of them).
-            Err(replacement.cast())
-        }
+    #[cfg(feature = "internal-test-traps")]
+    pub(super) fn test_traps(&self) -> (usize, usize) {
+        assert_eq!(self.slot.0.load(Relaxed), Debt::NONE);
+        assert_eq!(self.control.load(Relaxed), IDLE);
+        assert_eq!(self.handover.0.load(Relaxed), ptr::null_mut());
+        ((&self.handover as *const Handover).addr(), self.space_offer.load(Relaxed).addr())
     }
 }
 

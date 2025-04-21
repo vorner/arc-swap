@@ -896,8 +896,8 @@ macro_rules! t {
             fn multi_writers() {
                 let first_value = Arc::new((0, 0));
                 let shared = As::from(Arc::clone(&first_value));
-                const WRITER_CNT: usize = 2;
-                const READER_CNT: usize = 3;
+                const WRITER_CNT: usize = 5;
+                const READER_CNT: usize = 8;
                 #[cfg(miri)]
                 const ITERATIONS: usize = 5;
                 #[cfg(not(miri))]
@@ -1159,7 +1159,7 @@ macro_rules! t {
             #[test]
             /// Multiple RCUs interacting.
             fn rcu() {
-                const ITERATIONS: usize = 50;
+                const ITERATIONS: usize = 500;
                 const THREADS: usize = 10;
                 let shared = ArcSwap::from(Arc::new(0));
                 thread::scope(|scope| {
