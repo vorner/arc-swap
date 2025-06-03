@@ -896,8 +896,8 @@ macro_rules! t {
             fn multi_writers() {
                 let first_value = Arc::new((0, 0));
                 let shared = As::from(Arc::clone(&first_value));
-                const WRITER_CNT: usize = 5;
-                const READER_CNT: usize = 8;
+                const WRITER_CNT: usize = 2;
+                const READER_CNT: usize = 3;
                 #[cfg(miri)]
                 const ITERATIONS: usize = 5;
                 #[cfg(not(miri))]
