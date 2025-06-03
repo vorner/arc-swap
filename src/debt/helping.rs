@@ -355,7 +355,7 @@ impl Slots {
                             // Just for the traps.
                             #[cfg(feature = "internal-test-traps")]
                             unsafe {
-                                (*my_space).0.store(ptr::null_mut(), Relaxed);
+                                (*my_space).0.swap(ptr::null_mut(), SeqCst);
                             }
                             // Something has changed in between. Let's try again, nothing changed
                             // (the replacement will get dropped at the end of scope, we didn't do

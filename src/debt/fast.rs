@@ -51,7 +51,7 @@ impl Slots {
             // Note: the indexing check is almost certainly optimised out because the len
             // is used above. And using .get_unchecked was actually *slower*.
             let slot = &self.0[i];
-            if slot.0.load(Relaxed) == Debt::NONE {
+            if slot.0.load(SeqCst) == Debt::NONE {
                 // We are allowed to split into the check and acquiring the debt. That's because we
                 // are the only ones allowed to change NONE to something else. But we still need a
                 // read-write operation wit SeqCst on it :-(

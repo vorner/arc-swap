@@ -53,7 +53,7 @@ pub struct NodeReservation<'a>(&'a Node);
 
 impl Drop for NodeReservation<'_> {
     fn drop(&mut self) {
-        self.0.active_writers.fetch_sub(1, Release);
+        self.0.active_writers.fetch_sub(1, SeqCst);
     }
 }
 
@@ -114,7 +114,7 @@ impl Node {
         // Trick: Make sure we have an up to date value of the active_writers in this thread, so we
         // can properly release it below.
         let _reservation = self.reserve_writer();
-        assert_eq!(NODE_USED, self.in_use.swap(NODE_COOLDOWN, Release));
+        assert_eq!(NODE_USED, self.in_use.swap(NODE_COOLDOWN, SeqCst));
     }
 
     /// Perform a cooldown if the node is ready.
@@ -126,21 +126,21 @@ impl Node {
         // * More importantly, sync the value of active_writers to be at least the value when the
         //   cooldown started. That way we know the 0 we observe happened some time after
         //   start_cooldown.
-        if self.in_use.load(Acquire) == NODE_COOLDOWN {
+        if self.in_use.load(SeqCst) == NODE_COOLDOWN {
             // The rest can be nicely relaxed ‒ no memory is being synchronized by these
             // operations. We just see an up to date 0 and allow someone (possibly us) to claim the
             // node later on.
-            if self.active_writers.load(Relaxed) == 0 {
+            if self.active_writers.load(SeqCst) == 0 {
                 let _ = self
                     .in_use
-                    .compare_exchange(NODE_COOLDOWN, NODE_UNUSED, Relaxed, Relaxed);
+                    .compare_exchange(NODE_COOLDOWN, NODE_UNUSED, SeqCst, SeqCst);
             }
         }
     }
 
     /// Mark this node that a writer is currently playing with it.
     pub fn reserve_writer(&self) -> NodeReservation {
-        self.active_writers.fetch_add(1, Acquire);
+        self.active_writers.fetch_add(1, SeqCst);
         NodeReservation(self)
     }
 
@@ -156,7 +156,7 @@ impl Node {
                 .in_use
                 // We claim a unique control over the generation and the right to write to slots if
                 // they are NO_DEPT
-                .compare_exchange(NODE_UNUSED, NODE_USED, SeqCst, Relaxed)
+                .compare_exchange(NODE_UNUSED, NODE_USED, SeqCst, SeqCst)
                 .is_ok()
             {
                 Some(node)
@@ -173,7 +173,7 @@ impl Node {
             //
             // We do need to release the data to others, but for that, we acquire in the
             // compare_exchange below.
-            let mut head = LIST_HEAD.load(Relaxed);
+            let mut head = LIST_HEAD.load(SeqCst);
             loop {
                 node.next = head;
                 if let Err(old) = LIST_HEAD.compare_exchange_weak(
@@ -183,7 +183,7 @@ impl Node {
                     //
                     // SeqCst because we need to make sure it is properly set "before" we do
                     // anything to the debts.
-                    SeqCst, Relaxed, // Nothing changed, go next round of the loop.
+                    SeqCst, SeqCst, // Nothing changed, go next round of the loop.
                 ) {
                     head = old;
                 } else {
@@ -378,9 +378,9 @@ pub mod traps {
             let mut handovers = HashSet::new();
             let mut spaces = HashSet::new();
             Node::traverse(|node| {
-                assert_eq!(node.active_writers.load(Ordering::Relaxed), 0);
+                assert_eq!(node.active_writers.load(Ordering::SeqCst), 0);
                 for slot in node.fast_slots() {
-                    assert_eq!(slot.0.load(Ordering::Relaxed), Debt::NONE);
+                    assert_eq!(slot.0.load(Ordering::SeqCst), Debt::NONE);
                 }
 
                 let (h, s) = node.helping.test_traps();
@@ -403,7 +403,7 @@ mod tests {
         fn is_empty(&self) -> bool {
             self.fast_slots()
                 .chain(core::iter::once(self.helping_slot()))
-                .all(|d| d.0.load(Relaxed) == Debt::NONE)
+                .all(|d| d.0.load(SeqCst) == Debt::NONE)
         }
 
         fn get_thread() -> &'static Self {
