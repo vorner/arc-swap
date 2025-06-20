@@ -20,6 +20,7 @@ use core::sync::atomic::Ordering::*;
 pub(crate) use self::list::{LocalNode, Node};
 use super::RefCnt;
 
+mod atomic_list;
 mod fast;
 mod helping;
 mod list;
