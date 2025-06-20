@@ -156,7 +156,7 @@ impl Node {
                 .in_use
                 // We claim a unique control over the generation and the right to write to slots if
                 // they are NO_DEPT
-                .compare_exchange(NODE_UNUSED, NODE_USED, SeqCst, Relaxed)
+                .compare_exchange(NODE_UNUSED, NODE_USED, SeqCst, SeqCst)
                 .is_ok()
             {
                 Some(node)
@@ -173,7 +173,7 @@ impl Node {
             //
             // We do need to release the data to others, but for that, we acquire in the
             // compare_exchange below.
-            let mut head = LIST_HEAD.load(Relaxed);
+            let mut head = LIST_HEAD.load(SeqCst);
             loop {
                 node.next = head;
                 if let Err(old) = LIST_HEAD.compare_exchange_weak(
@@ -183,7 +183,7 @@ impl Node {
                     //
                     // SeqCst because we need to make sure it is properly set "before" we do
                     // anything to the debts.
-                    SeqCst, Relaxed, // Nothing changed, go next round of the loop.
+                    SeqCst, SeqCst, // Nothing changed, go next round of the loop.
                 ) {
                     head = old;
                 } else {
