@@ -82,6 +82,6 @@
 //! [`Arc`]: std::sync::Arc
 //! [`Mutex`]: std::sync::Mutex
 //! [`RwLock`]: std::sync::RwLock
-//! [benchmarks]: https://github.com/vorner/arc-swap/tree/master/benchmarks
+//! [benchmarks]: https://github.com/vorner/arc-swap/tree/master/benches
 //! [lock-free]: https://en.wikipedia.org/wiki/Non-blocking_algorithm#Lock-freedom
 //! [wait-free]: https://en.wikipedia.org/wiki/Non-blocking_algorithm#Wait-freedom
