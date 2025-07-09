@@ -42,6 +42,7 @@ use core::sync::atomic::AtomicPtr;
 use crate::ref_cnt::RefCnt;
 
 pub(crate) mod hybrid;
+pub(crate) mod new;
 
 #[cfg(all(
     feature = "internal-test-strategies",

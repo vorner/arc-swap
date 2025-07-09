@@ -22,6 +22,7 @@ use super::RefCnt;
 
 mod atomic_list;
 mod fast;
+mod hazard;
 mod helping;
 mod list;
 mod local;
