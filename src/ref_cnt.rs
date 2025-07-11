@@ -1,4 +1,5 @@
 use core::mem;
+use core::mem::ManuallyDrop;
 use core::ptr;
 
 use alloc::rc::Rc;
@@ -67,6 +68,9 @@ pub unsafe trait RefCnt: Clone {
     /// This must not be called by code outside of this crate.
     unsafe fn from_ptr(ptr: *const Self::Base) -> Self;
 
+    /// Returns the reference count of the pointer.
+    unsafe fn ref_cnt(ptr: *const Self::Base) -> usize;
+
     /// Increments the reference count by one.
     ///
     /// Return the pointer to the inner thing as a side effect.
@@ -121,6 +125,10 @@ unsafe impl<T> RefCnt for Arc<T> {
     unsafe fn from_ptr(ptr: *const T) -> Arc<T> {
         Arc::from_raw(ptr)
     }
+    unsafe fn ref_cnt(ptr: *const T) -> usize {
+        let val = ManuallyDrop::new(Arc::from_raw(ptr));
+        Arc::strong_count(&val)
+    }
 }
 
 unsafe impl<T> RefCnt for Rc<T> {
@@ -156,6 +164,10 @@ unsafe impl<T> RefCnt for Rc<T> {
     unsafe fn from_ptr(ptr: *const T) -> Rc<T> {
         Rc::from_raw(ptr)
     }
+    unsafe fn ref_cnt(ptr: *const T) -> usize {
+        let val = ManuallyDrop::new(Rc::from_raw(ptr));
+        Rc::strong_count(&val)
+    }
 }
 
 unsafe impl<T: RefCnt> RefCnt for Option<T> {
@@ -171,6 +183,13 @@ unsafe impl<T: RefCnt> RefCnt for Option<T> {
             None
         } else {
             Some(T::from_ptr(ptr))
+        }
+    }
+    unsafe fn ref_cnt(ptr: *const T::Base) -> usize {
+        if ptr.is_null() {
+            0
+        } else {
+            1
         }
     }
 }
