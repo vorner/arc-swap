@@ -24,9 +24,11 @@ experimental-strategies = []
 # Use the nightly "thread_local" feature, to allow no_std builds. No stability
 # guarantees with this feature.
 experimental-thread-local = []
+shuttle = ["dep:shuttle"]
 
 [dependencies]
 serde = { version = "1", features = ["rc"], optional = true }
+shuttle = { version = "0.8.1", optional = true }
 
 [dev-dependencies]
 adaptive-barrier = "~1"
@@ -44,7 +46,7 @@ serde_test = "1.0.177"
 debug = true
 
 [package.metadata.docs.rs]
-features = ["serde", "weak"]
+features = ["serde", "weak", "shuttle"]
 
 [[bench]]
 name = "background"

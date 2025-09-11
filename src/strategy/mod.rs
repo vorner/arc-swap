@@ -49,12 +49,18 @@ pub(crate) mod hybrid;
 ))]
 compile_error!("experimental-thread-local is incompatible with internal-test-strategies as it enables #[no_std]");
 
-#[cfg(feature = "internal-test-strategies")]
+#[cfg(any(feature="shuttle", feature = "internal-test-strategies"))]
 mod rw_lock;
 // Do not use from outside of the crate.
 #[cfg(feature = "internal-test-strategies")]
 #[doc(hidden)]
 pub mod test_strategies;
+
+#[cfg(feature="shuttle")]
+mod shuttle;
+
+#[cfg(feature="shuttle")]
+pub use shuttle::ShuttleStrategy;
 
 use self::hybrid::{DefaultConfig, HybridStrategy};
 
