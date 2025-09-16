@@ -44,22 +44,22 @@ use crate::ref_cnt::RefCnt;
 pub(crate) mod hybrid;
 
 #[cfg(all(
-    feature = "internal-test-strategies",
+    any(feature = "experimental-shuttle", feature = "internal-test-strategies"),
     feature = "experimental-thread-local"
 ))]
-compile_error!("experimental-thread-local is incompatible with internal-test-strategies as it enables #[no_std]");
+compile_error!("experimental-thread-local is incompatible with experimental-shuttle and internal-test-strategies as it enables #[no_std]");
 
-#[cfg(any(feature="shuttle", feature = "internal-test-strategies"))]
+#[cfg(any(feature = "experimental-shuttle", feature = "internal-test-strategies"))]
 mod rw_lock;
 // Do not use from outside of the crate.
 #[cfg(feature = "internal-test-strategies")]
 #[doc(hidden)]
 pub mod test_strategies;
 
-#[cfg(feature="shuttle")]
+#[cfg(feature = "experimental-shuttle")]
 mod shuttle;
 
-#[cfg(feature="shuttle")]
+#[cfg(feature = "experimental-shuttle")]
 pub use shuttle::ShuttleStrategy;
 
 use self::hybrid::{DefaultConfig, HybridStrategy};
