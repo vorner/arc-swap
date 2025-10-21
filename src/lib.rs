@@ -886,7 +886,7 @@ macro_rules! t {
             }
 
             /// Two different writers publish two series of values. The readers check that it is
-            /// always increasing in each serie.
+            /// always increasing in each series.
             ///
             /// For performance, we try to reuse the threads here.
             #[test]
