@@ -33,7 +33,7 @@
 //! There are some (very unscientific) [benchmarks] within the source code of the library, and the
 //! [`DefaultStrategy`][crate::DefaultStrategy] has some numbers measured on my computer.
 //!
-//! The exact numbers are highly dependant on the machine used (both absolute numbers and relative
+//! The exact numbers are highly dependent on the machine used (both absolute numbers and relative
 //! between different data structures). Not only architectures have a huge impact (eg. x86 vs ARM),
 //! but even AMD vs. Intel or two different Intel processors. Therefore, if what matters is more
 //! the speed than the wait-free guarantees, you're advised to do your own measurements.
