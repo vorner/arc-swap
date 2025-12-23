@@ -5,7 +5,7 @@
 #![cfg_attr(feature = "experimental-thread-local", no_std)]
 #![cfg_attr(feature = "experimental-thread-local", feature(thread_local))]
 
-//! Making [`Arc`][Arc] itself atomic
+//! Making [`Arc`] itself atomic
 //!
 //! The [`ArcSwap`] type is a container for an `Arc` that can be changed atomically. Semantically,
 //! it is similar to something like `Atomic<Arc<T>>` (if there was such a thing) or
