@@ -124,8 +124,9 @@
 //!
 //! [RwLock]: https://doc.rust-lang.org/std/sync/struct.RwLock.html
 
+#[rustversion::since(1.36.0)]
 #[allow(unused_imports)]
-#[macro_use]
+#[cfg_attr(feature = "experimental-thread-local", macro_use)]
 extern crate alloc;
 
 pub mod access;
@@ -141,6 +142,16 @@ pub mod strategy;
 #[cfg(feature = "weak")]
 mod weak;
 
+// Hack to not rely on std on newer compilers (where alloc is stabilized) but still fall back to
+// std on old compilers.
+mod imports {
+    #[rustversion::since(1.36.0)]
+    pub use alloc::{boxed::Box, rc::Rc, sync::Arc};
+
+    #[rustversion::before(1.36.0)]
+    pub use std::{boxed::Box, rc::Rc, sync::Arc};
+}
+
 use core::borrow::Borrow;
 use core::fmt::{Debug, Display, Formatter, Result as FmtResult};
 use core::marker::PhantomData;
@@ -149,7 +160,7 @@ use core::ops::Deref;
 use core::ptr;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
-use alloc::sync::Arc;
+use crate::imports::Arc;
 
 use crate::access::{Access, Map};
 pub use crate::as_raw::AsRaw;

@@ -3,8 +3,7 @@ use core::mem;
 use core::pin::Pin;
 use core::ptr;
 
-use alloc::rc::Rc;
-use alloc::sync::Arc;
+use crate::imports::{Arc, Rc};
 
 /// A trait describing smart reference counted pointers.
 ///

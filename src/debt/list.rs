@@ -35,7 +35,7 @@ use core::sync::atomic::{AtomicPtr, AtomicUsize};
 #[cfg(feature = "experimental-thread-local")]
 use core::cell::OnceCell;
 
-use alloc::boxed::Box;
+use crate::imports::Box;
 
 use super::fast::{Local as FastLocal, Slots as FastSlots};
 use super::helping::{Local as HelpingLocal, Slots as HelpingSlots};

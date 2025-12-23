@@ -86,9 +86,7 @@
 use core::marker::PhantomData;
 use core::ops::Deref;
 
-use alloc::boxed::Box;
-use alloc::rc::Rc;
-use alloc::sync::Arc;
+use crate::imports::{Arc, Box, Rc};
 
 use super::ref_cnt::RefCnt;
 use super::strategy::Strategy;
