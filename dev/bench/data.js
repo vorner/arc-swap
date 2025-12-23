@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1766334242840,
+  "lastUpdate": 1766483693841,
   "repoUrl": "https://github.com/vorner/arc-swap",
   "entries": {
     "Track benchmarks": [
@@ -10258,6 +10258,126 @@ window.BENCHMARK_DATA = {
           {
             "name": "utilities/access-map",
             "value": 4,
+            "range": "± 0",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "vorner@vorner.cz",
+            "name": "Michal 'vorner' Vaner",
+            "username": "vorner"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "57aa5224c19124ad2fa26eae70fa7778dd2224ac",
+          "message": "Merge pull request #185 from SpriteOvO/pin\n\nImplement `RefCnt` for `Pin<Arc>` and `Pin<Rc>`",
+          "timestamp": "2025-12-23T10:50:45+01:00",
+          "tree_id": "ba9d0c06256c7d171bd124b6f628cd26c98f2023",
+          "url": "https://github.com/vorner/arc-swap/commit/57aa5224c19124ad2fa26eae70fa7778dd2224ac"
+        },
+        "date": 1766483693262,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "uncontended/load",
+            "value": 4,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/load_full",
+            "value": 9,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/load_many",
+            "value": 14,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/store",
+            "value": 39,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/cache",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/load",
+            "value": 9,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/load_full",
+            "value": 9,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/load_many",
+            "value": 21,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/store",
+            "value": 522,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/cache",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/load",
+            "value": 46,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/load_full",
+            "value": 67,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/load_many",
+            "value": 83,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/store",
+            "value": 446,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/cache",
+            "value": 1,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "utilities/access-map",
+            "value": 5,
             "range": "± 0",
             "unit": "ns/iter"
           }
