@@ -188,7 +188,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run check
-        run: rm Cargo.lock && cargo check --features weak,internal-test-strategies,experimental-strategies
+        run: mv Cargo.lock.old Cargo.lock && cargo check --features weak,internal-test-strategies,experimental-strategies
 
   ancient:
     name: Check it compiles on old Rust (1.31.0)
@@ -208,7 +208,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run check
-        run: rm Cargo.lock && cargo check
+        run: mv Cargo.lock.old Cargo.lock && cargo check
 
   experimental_thread_local:
     name: Test with experimental-thread-local
