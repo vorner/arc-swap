@@ -41,6 +41,7 @@ dependencies = [
  "once_cell",
  "parking_lot",
  "proptest",
+ "rustversion",
  "serde",
  "serde_derive",
  "serde_test",
@@ -574,6 +575,12 @@ dependencies = [
  "linux-raw-sys",
  "windows-sys",
 ]
+
+[[package]]
+name = "rustversion"
+version = "1.0.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "rusty-fork"

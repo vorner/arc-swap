@@ -26,6 +26,7 @@ experimental-strategies = []
 experimental-thread-local = []
 
 [dependencies]
+rustversion = "1"
 serde = { version = "1", features = ["rc"], optional = true }
 
 [dev-dependencies]
