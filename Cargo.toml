@@ -31,7 +31,7 @@ serde = { version = "1", features = ["rc"], optional = true }
 
 [dev-dependencies]
 adaptive-barrier = "~1"
-criterion = "~0.7"
+criterion = "~0.8"
 crossbeam-utils = "~0.8"
 itertools = "0.14"
 num_cpus = "~1"
