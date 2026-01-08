@@ -64,16 +64,17 @@ impl Debt {
     #[inline]
     pub(crate) fn pay<T: RefCnt>(&self, ptr: *const T::Base) -> bool {
         self.0
-            // If we don't change anything because there's something else, Relaxed is fine.
+            // On failure, we have observed that the debt has been paid, but we need to establish a
+            // happens-before relationship with that debt being paid before we do anything that
+            // relies on the Arc's strong counter being incremented, so we need to Acquire.
+            // Arc does not sufficiently take care of this, as the memory model permits its Drop's
+            // `fetch_sub` to observe itself to be last remaining instance before the `fetch_add`s
+            // from the debt being repaid, and only after that observation does Arc have an Acquire
+            // fence.
             //
             // The Release works as kind of Mutex. We make sure nothing from the debt-protected
             // sections leaks below this point.
-            //
-            // Note that if it got paid already, it is inside the reference count. We don't
-            // necessarily observe that increment, but whoever destroys the pointer *must* see the
-            // up to date value, with all increments already counted in (the Arc takes care of that
-            // part).
-            .compare_exchange(ptr as usize, Self::NONE, Release, Relaxed)
+            .compare_exchange(ptr as usize, Self::NONE, Release, Acquire)
             .is_ok()
     }
 
