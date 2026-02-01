@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1766565302076,
+  "lastUpdate": 1769971072882,
   "repoUrl": "https://github.com/vorner/arc-swap",
   "entries": {
     "Track benchmarks": [
@@ -10607,6 +10607,126 @@ window.BENCHMARK_DATA = {
             "name": "concurrent_store/store",
             "value": 562,
             "range": "± 8",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/cache",
+            "value": 1,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "utilities/access-map",
+            "value": 4,
+            "range": "± 0",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "vorner@vorner.cz",
+            "name": "Michal 'vorner' Vaner",
+            "username": "vorner"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e94df5511ab2eb0b04959af2505ea1be51e67242",
+          "message": "Merge pull request #195 from 0xfMel/master\n\nFix Debt::pay failure ordering",
+          "timestamp": "2026-02-01T19:33:44+01:00",
+          "tree_id": "366ea983ec84650acbc05819115cf39480e8d5ba",
+          "url": "https://github.com/vorner/arc-swap/commit/e94df5511ab2eb0b04959af2505ea1be51e67242"
+        },
+        "date": 1769971072618,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "uncontended/load",
+            "value": 4,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/load_full",
+            "value": 9,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/load_many",
+            "value": 15,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/store",
+            "value": 54,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/cache",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/load",
+            "value": 9,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/load_full",
+            "value": 10,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/load_many",
+            "value": 20,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/store",
+            "value": 569,
+            "range": "± 5",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/cache",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/load",
+            "value": 46,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/load_full",
+            "value": 74,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/load_many",
+            "value": 86,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/store",
+            "value": 353,
+            "range": "± 4",
             "unit": "ns/iter"
           },
           {
