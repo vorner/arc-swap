@@ -1,3 +1,7 @@
+# 1.8.1
+
+* Some more careful orderings (#195).
+
 # 1.8.0
 
 * Support for Pin (#185, #183).
