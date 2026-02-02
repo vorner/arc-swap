@@ -73,8 +73,8 @@ impl Debt {
             // fence.
             //
             // The Release works as kind of Mutex. We make sure nothing from the debt-protected
-            // sections leaks below this point.
-            .compare_exchange(ptr as usize, Self::NONE, Release, Acquire)
+            // sections leaks below this point. Upgraded to AcqRel for transitivity.
+            .compare_exchange(ptr as usize, Self::NONE, AcqRel, Acquire)
             .is_ok()
     }
 
