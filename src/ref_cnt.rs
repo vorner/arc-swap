@@ -1,5 +1,5 @@
 use core::mem;
-#[rustversion::since(1.33)]
+#[rustversion::since(1.39)]
 use core::pin::Pin;
 use core::ptr;
 
@@ -176,8 +176,8 @@ unsafe impl<T: RefCnt> RefCnt for Option<T> {
     }
 }
 
-// Pin is only available since Rust 1.33.
-#[rustversion::since(1.33)]
+// Pin is only available since Rust 1.33, but Pin::into_inner is from 1.39.
+#[rustversion::since(1.39)]
 unsafe impl<T> RefCnt for Pin<Arc<T>> {
     type Base = T;
 
@@ -219,8 +219,8 @@ unsafe impl<T> RefCnt for Pin<Arc<T>> {
     }
 }
 
-// Pin is only available since Rust 1.33.
-#[rustversion::since(1.33)]
+// Pin is only available since Rust 1.33, but Pin::into_inner is from 1.39.
+#[rustversion::since(1.39)]
 unsafe impl<T> RefCnt for Pin<Rc<T>> {
     type Base = T;
 
@@ -283,8 +283,8 @@ mod tests {
         let _: Arc<Data> = unsafe { RefCnt::from_ptr(ptr) };
     }
 
-    // Pin is only available since Rust 1.33.
-    #[rustversion::since(1.33)]
+    // Pin is only available since Rust 1.33, but Pin::into_inner is from 1.39.
+    #[rustversion::since(1.39)]
     mod pin {
         use super::*;
         use core::marker::PhantomPinned;

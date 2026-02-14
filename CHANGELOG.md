@@ -1,3 +1,8 @@
+# 1.8.2
+
+* Proper gate of `Pin` (since 1.39 - we are not using only `Pin`, but also
+  `Pin::into_inner`, #197).
+
 # 1.8.1
 
 * Some more careful orderings (#195).
