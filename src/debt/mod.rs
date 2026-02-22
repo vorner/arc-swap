@@ -14,7 +14,7 @@
 //! Each node has some fast (but fallible) nodes and a fallback node, with different algorithms to
 //! claim them (see the relevant submodules).
 
-use core::sync::atomic::AtomicUsize;
+use core::sync::atomic::{self, AtomicUsize};
 use core::sync::atomic::Ordering::*;
 
 pub(crate) use self::list::{LocalNode, Node};
@@ -62,7 +62,7 @@ impl Debt {
     ///   something like that, but that sounds like a reasonable assumption. Someone storing it
     ///   through `ArcSwap<T>` and someone else with `ArcSwapOption<T>` will work.
     #[inline]
-    pub(crate) fn pay<T: RefCnt>(&self, ptr: *const T::Base) -> bool {
+    pub(crate) fn pay<T: RefCnt>(&self, ptr: *const T::Base, success_ordering: Ordering) -> bool {
         self.0
             // On failure, we have observed that the debt has been paid, but we need to establish a
             // happens-before relationship with that debt being paid before we do anything that
@@ -72,9 +72,8 @@ impl Debt {
             // from the debt being repaid, and only after that observation does Arc have an Acquire
             // fence.
             //
-            // The Release works as kind of Mutex. We make sure nothing from the debt-protected
-            // sections leaks below this point. Upgraded to AcqRel for transitivity.
-            .compare_exchange(ptr as usize, Self::NONE, AcqRel, Acquire)
+            // Unfortunately, we need SeqCst on the success
+            .compare_exchange(ptr as usize, Self::NONE, success_ordering, Acquire)
             .is_ok()
     }
 
@@ -102,7 +101,7 @@ impl Debt {
                     // Note: Release is enough even here. That makes sure the increment is
                     // visible to whoever might acquire on this slot and can't leak below this.
                     // And we are the ones doing decrements anyway.
-                    if slot.pay::<T>(ptr) {
+                    if slot.pay::<T>(ptr, SeqCst) {
                         // Pre-pay one more, for another future slot
                         T::inc(&val);
                     }

@@ -55,7 +55,7 @@ impl<T: RefCnt> HybridProtection<T> {
             // but they could have different provenance, if the pointer is freed and then
             // subsequently reused.
             Some(unsafe { Self::new(confirm, Some(debt)) })
-        } else if debt.pay::<T>(ptr) {
+        } else if debt.pay::<T>(ptr, AcqRel) {
             // It changed in the meantime, we return the debt (that is on the outdated pointer,
             // possibly destroyed) and fail.
             None
@@ -71,10 +71,9 @@ impl<T: RefCnt> HybridProtection<T> {
         // First, we claim a debt slot and store the address of the atomic pointer there, so the
         // writer can optionally help us out with loading and protecting something.
         let gen = node.new_helping(storage as *const _ as usize);
-        // We already synchronized the start of the sequence by SeqCst in the new_helping vs swap on
-        // the pointer. We just need to make sure to bring the pointee in (this can be newer than
-        // what we got in the Debt)
-        let candidate = storage.load(Acquire);
+        // Need SeqCst to make sure the candidate is not outdated and already freed. Otherwise, we
+        // could "successfully" protect an already freed pointer.
+        let candidate = storage.load(SeqCst);
 
         // Try to replace the debt with our candidate. If it works, we get the debt slot to use. If
         // not, we get a replacement value, already protected and a debt to take care of.
@@ -86,7 +85,7 @@ impl<T: RefCnt> HybridProtection<T> {
             Err((unused_debt, replacement)) => {
                 // The debt is on the candidate we provided and it is unused, we so we just pay it
                 // back right away.
-                if !unused_debt.pay::<T>(candidate) {
+                if !unused_debt.pay::<T>(candidate, AcqRel) {
                     unsafe { T::dec(candidate) };
                 }
                 // We got a (possibly) different pointer out. But that one is already protected and
@@ -113,7 +112,7 @@ impl<T: RefCnt> Drop for HybridProtection<T> {
             // nothing to release.
             Some(debt) => {
                 let ptr = T::as_ptr(&self.ptr);
-                if debt.pay::<T>(ptr) {
+                if debt.pay::<T>(ptr, AcqRel) {
                     return;
                 }
                 // But if the debt was already paid for us, we need to release the pointer, as we
@@ -142,7 +141,7 @@ impl<T: RefCnt> Protected<T> for HybridProtection<T> {
             None => (), // We have a fully loaded ref-counted pointer.
             Some(debt) => {
                 let ptr = T::inc(&self.ptr);
-                if !debt.pay::<T>(ptr) {
+                if !debt.pay::<T>(ptr, AcqRel) {
                     unsafe { T::dec(ptr) };
                 }
             }
