@@ -72,9 +72,8 @@ impl Debt {
             // from the debt being repaid, and only after that observation does Arc have an Acquire
             // fence.
             //
-            // The Release works as kind of Mutex. We make sure nothing from the debt-protected
-            // sections leaks below this point. Upgraded to AcqRel for transitivity.
-            .compare_exchange(ptr as usize, Self::NONE, AcqRel, Acquire)
+            // Unfortunately, we need SeqCst on the success
+            .compare_exchange(ptr as usize, Self::NONE, SeqCst, Acquire)
             .is_ok()
     }
 

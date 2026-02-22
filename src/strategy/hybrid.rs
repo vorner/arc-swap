@@ -40,8 +40,9 @@ impl<T: RefCnt> HybridProtection<T> {
     /// Try getting a dept into a fast slot.
     #[inline]
     fn attempt(node: &LocalNode, storage: &AtomicPtr<T::Base>) -> Option<Self> {
-        // Relaxed is good enough here, see the Acquire below
-        let ptr = storage.load(Relaxed);
+        // SeqCst needed, because of we potentially use it in the "Debt already paid" scenario. And
+        // we need to timeline it before the debt gets paid.
+        let ptr = storage.load(SeqCst);
         // Try to get a debt slot. If not possible, fail.
         let debt = node.new_fast(ptr as usize)?;
 
@@ -71,10 +72,9 @@ impl<T: RefCnt> HybridProtection<T> {
         // First, we claim a debt slot and store the address of the atomic pointer there, so the
         // writer can optionally help us out with loading and protecting something.
         let gen = node.new_helping(storage as *const _ as usize);
-        // We already synchronized the start of the sequence by SeqCst in the new_helping vs swap on
-        // the pointer. We just need to make sure to bring the pointee in (this can be newer than
-        // what we got in the Debt)
-        let candidate = storage.load(Acquire);
+        // Need SeqCst to make sure the candidate is not outdated and already freed. Otherwise, we
+        // could "successfully" protect an already freed pointer.
+        let candidate = storage.load(SeqCst);
 
         // Try to replace the debt with our candidate. If it works, we get the debt slot to use. If
         // not, we get a replacement value, already protected and a debt to take care of.
