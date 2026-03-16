@@ -71,10 +71,11 @@ impl<T: RefCnt> HybridProtection<T> {
         // First, we claim a debt slot and store the address of the atomic pointer there, so the
         // writer can optionally help us out with loading and protecting something.
         let gen = node.new_helping(storage as *const _ as usize);
-        // We already synchronized the start of the sequence by SeqCst in the new_helping vs swap on
-        // the pointer. We just need to make sure to bring the pointee in (this can be newer than
-        // what we got in the Debt)
-        let candidate = storage.load(Acquire);
+        // SeqCst is needed here (not just Acquire) so this load participates in the
+        // single total order with the writer's SeqCst swap on the same variable.
+        // With Acquire, this load can return a stale pointer that the writer has
+        // already replaced and freed, leading to use-after-free.
+        let candidate = storage.load(SeqCst);
 
         // Try to replace the debt with our candidate. If it works, we get the debt slot to use. If
         // not, we get a replacement value, already protected and a debt to take care of.
