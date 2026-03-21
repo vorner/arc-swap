@@ -94,6 +94,14 @@
 //! You can also get an inspiration about what's possible in the [common patterns][docs::patterns]
 //! section.
 //!
+//! # Release 1.9
+//!
+//! Unfortunately, several orderings were too weak in the original code (proofs based on wrong
+//! assumptions / wrong reading of the standard). The 1.9 version should fix them, but probably
+//! introduces some performance degradation.
+//!
+//! I hope to re-design and rewrite from scratch eventually, with less amount of SeqCst needed.
+//!
 //! # Examples
 //!
 //! ```rust

@@ -1,3 +1,8 @@
+# 1.9.0
+
+* Promote certain orderings to SeqCst. Original proofs based on wrong reading of
+  standard :-(. Expect some performance degradation (#198, #200).
+
 # 1.8.2
 
 * Proper gate of `Pin` (since 1.39 - we are not using only `Pin`, but also
