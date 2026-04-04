@@ -73,7 +73,7 @@ impl Debt {
             // fence.
             //
             // Unfortunately, we need SeqCst on the success
-            .compare_exchange(ptr as usize, Self::NONE, SeqCst, Acquire)
+            .compare_exchange(ptr as usize, Self::NONE, SeqCst, SeqCst)
             .is_ok()
     }
 
