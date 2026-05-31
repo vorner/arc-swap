@@ -1,4 +1,4 @@
-use std:: sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
 use arc_swap::ArcSwap;
@@ -12,10 +12,15 @@ impl SpinBarrier {
 
     fn wait(&self) {
         self.0.fetch_sub(1, Ordering::Relaxed);
-        while self.0.load(Ordering::Relaxed) != 0 {}
+        while self.0.load(Ordering::Relaxed) != 0 {
+            std::hint::spin_loop();
+        }
     }
 
-    fn wrap<R: Send, F: FnOnce() -> R + Send>(&self, f: F) -> impl FnOnce() -> R + Send + use<'_, R, F> {
+    fn wrap<R: Send, F: FnOnce() -> R + Send>(
+        &self,
+        f: F,
+    ) -> impl FnOnce() -> R + Send + use<'_, R, F> {
         move || {
             self.wait();
             f()
