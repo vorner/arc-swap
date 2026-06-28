@@ -1,6 +1,10 @@
-# 1.9.1
+# 1.9.2
 
 * Document RefCnt must not panic (#208).
+
+# 1.9.1
+
+* One more SeqCst :-| (#204).
 
 # 1.9.0
 
