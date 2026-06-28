@@ -31,6 +31,8 @@ use crate::imports::{Arc, Rc};
 /// value. It would be fine to point to a type-erased version of the same object, though (if one
 /// could use this trait with unsized types in the first place).
 ///
+/// Methods in this trait must not panic nor unwind.
+///
 /// Furthermore, the type should be Pin (eg. if the type is cloned or moved, it should still
 /// point/deref to the same place in memory).
 ///
