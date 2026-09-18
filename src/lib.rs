@@ -638,6 +638,39 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
         }
     }
 
+    /// Like [`Self::rcu`], but allows the update closure to abort the operation
+    /// by returning an error.
+    ///
+    /// The closure receives a reference to the current value and returns either
+    /// a new value, or an error. If another thread modifies the value before the
+    /// update is committed, the closure is called again with the latest value.
+    ///
+    /// Therefore, `f` may be called multiple times and should not perform
+    /// non-idempotent side effects.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// #
+    /// # use arc_swap::ArcSwap;
+    /// #
+    /// # let value = ArcSwap::new(Arc::new(0));
+    /// #
+    /// let prev = value.try_rcu(|current| {
+    ///     if **current >= 10 {
+    ///         return Err("value is already too large");
+    ///     }
+    ///
+    ///     Ok(Arc::new(**current + 1))
+    /// });
+    ///
+    /// # assert_eq!(prev.map(|value| *value), Ok(0));
+    /// # assert_eq!(**value.load(), 1);
+    /// ```
+    ///
+    /// If `f` returns an error, no update is committed and the error is returned
+    /// immediately.
     pub fn try_rcu<R, F, E>(&self, mut f: F) -> Result<T, E>
     where
         F: FnMut(&T) -> Result<R, E>,
