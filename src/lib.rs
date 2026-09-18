@@ -638,6 +638,25 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
         }
     }
 
+    pub fn try_rcu<R, F, E>(&self, mut f: F) -> Result<T, E>
+    where
+        F: FnMut(&T) -> Result<R, E>,
+        R: Into<T>,
+        S: CaS<T>,
+    {
+        let mut cur = self.load();
+        loop {
+            let new = f(&cur)?.into();
+            let prev = self.compare_and_swap(&*cur, new);
+            let swapped = ptr_eq(&*cur, &*prev);
+            if swapped {
+                return Ok(Guard::into_inner(prev));
+            } else {
+                cur = prev;
+            }
+        }
+    }
+
     /// Provides an access to an up to date projection of the carried data.
     ///
     /// # Motivation
