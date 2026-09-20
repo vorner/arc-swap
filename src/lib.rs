@@ -650,13 +650,13 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```rust
     /// # use std::sync::Arc;
     /// #
     /// # use arc_swap::ArcSwap;
     /// #
-    /// # let value = ArcSwap::new(Arc::new(0));
-    /// #
+    /// let value = ArcSwap::new(Arc::new(0));
+    ///
     /// let prev = value.try_rcu(|current| {
     ///     if **current >= 10 {
     ///         return Err("value is already too large");
@@ -665,8 +665,8 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
     ///     Ok(Arc::new(**current + 1))
     /// });
     ///
-    /// # assert_eq!(prev.map(|value| *value), Ok(0));
-    /// # assert_eq!(**value.load(), 1);
+    /// assert_eq!(prev.map(|value| *value), Ok(0));
+    /// assert_eq!(**value.load(), 1);
     /// ```
     ///
     /// If `f` returns an error, no update is committed and the error is returned
