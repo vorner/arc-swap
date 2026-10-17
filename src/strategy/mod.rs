@@ -67,7 +67,9 @@ pub(crate) mod hybrid;
 compile_error!("experimental-thread-local is incompatible with internal-test-strategies as it enables #[no_std]");
 
 #[cfg(all(feature = "rwlock-strategy", feature = "experimental-thread-local"))]
-compile_error!("experimental-thread-local is incompatible with rwlock-strategy as it enables #[no_std]");
+compile_error!(
+    "experimental-thread-local is incompatible with rwlock-strategy as it enables #[no_std]"
+);
 
 #[cfg(feature = "rwlock-strategy")]
 mod rw_lock;
