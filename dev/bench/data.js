@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782669291584,
+  "lastUpdate": 1792308170487,
   "repoUrl": "https://github.com/vorner/arc-swap",
   "entries": {
     "Track benchmarks": [
@@ -11447,6 +11447,126 @@ window.BENCHMARK_DATA = {
             "name": "concurrent_store/store",
             "value": 518,
             "range": "± 8",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/cache",
+            "value": 1,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "utilities/access-map",
+            "value": 5,
+            "range": "± 0",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "katopz@gmail.com",
+            "name": "Todsaporn Banjerdkit",
+            "username": "katopz"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "769fef5bde2492a4edb05a52caaf347c73d96fbd",
+          "message": "Expose RwLock<()> as a public opt-in strategy (rwlock-strategy) (#211)\n\nAdd rwlock-strategy feature: RwLock<()> as an opt-in per-instance strategy\n\nExposes the existing RwLock<()> strategy (previously reachable only via\ninternal-test-strategies) behind a dedicated feature. Users who own their\nArcSwapAny instances can choose it explicitly:\n\n    ArcSwapAny<Arc<T>, RwLock<()>>\n\nDefaultStrategy is untouched, so enabling the feature anywhere in a\ndependency graph cannot change behaviour for other dependents (the\nobjection to the global-flip approach in #211). internal-test-strategies\nnow implies rwlock-strategy; experimental-thread-local stays incompatible.\n\nRefs #210, #211.\n\nCo-authored-by: katopz <katopz@maxion.game>\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-10-18T09:18:42+02:00",
+          "tree_id": "902422cd828ce80788bfac12be0f0f1c156cecd4",
+          "url": "https://github.com/vorner/arc-swap/commit/769fef5bde2492a4edb05a52caaf347c73d96fbd"
+        },
+        "date": 1792308170087,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "uncontended/load",
+            "value": 4,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/load_full",
+            "value": 9,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/load_many",
+            "value": 14,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/store",
+            "value": 52,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/cache",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/load",
+            "value": 9,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/load_full",
+            "value": 9,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/load_many",
+            "value": 20,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/store",
+            "value": 549,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/cache",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/load",
+            "value": 51,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/load_full",
+            "value": 69,
+            "range": "± 3",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/load_many",
+            "value": 87,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/store",
+            "value": 605,
+            "range": "± 7",
             "unit": "ns/iter"
           },
           {
