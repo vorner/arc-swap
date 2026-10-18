@@ -2,6 +2,7 @@
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![allow(deprecated)]
+#![allow(unused_imports)]
 #![cfg_attr(feature = "experimental-thread-local", no_std)]
 #![cfg_attr(feature = "experimental-thread-local", feature(thread_local))]
 
@@ -133,7 +134,6 @@
 //! [RwLock]: https://doc.rust-lang.org/std/sync/struct.RwLock.html
 
 #[rustversion::since(1.36.0)]
-#[allow(unused_imports)]
 #[cfg_attr(feature = "experimental-thread-local", macro_use)]
 extern crate alloc;
 
