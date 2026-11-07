@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1792308170487,
+  "lastUpdate": 1794070320744,
   "repoUrl": "https://github.com/vorner/arc-swap",
   "entries": {
     "Track benchmarks": [
@@ -11578,6 +11578,126 @@ window.BENCHMARK_DATA = {
           {
             "name": "utilities/access-map",
             "value": 5,
+            "range": "± 0",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "vorner@vorner.cz",
+            "name": "Michal 'vorner' Vaner",
+            "username": "vorner"
+          },
+          "committer": {
+            "email": "vorner@vorner.cz",
+            "name": "Michal 'vorner' Vaner",
+            "username": "vorner"
+          },
+          "distinct": true,
+          "id": "3fc4273930e3851a47b9b7f3aaca4f4896220052",
+          "message": "Release 1.9.4",
+          "timestamp": "2026-11-07T17:44:40+01:00",
+          "tree_id": "9e58f1b4db0fc57297127af1fd5ee5b4edd37e02",
+          "url": "https://github.com/vorner/arc-swap/commit/3fc4273930e3851a47b9b7f3aaca4f4896220052"
+        },
+        "date": 1794070320508,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "uncontended/load",
+            "value": 4,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/load_full",
+            "value": 8,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/load_many",
+            "value": 12,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/store",
+            "value": 44,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "uncontended/cache",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/load",
+            "value": 4,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/load_full",
+            "value": 9,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/load_many",
+            "value": 18,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/store",
+            "value": 387,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_loads/cache",
+            "value": 0,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/load",
+            "value": 29,
+            "range": "± 1",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/load_full",
+            "value": 52,
+            "range": "± 2",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/load_many",
+            "value": 69,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/store",
+            "value": 947,
+            "range": "± 24",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "concurrent_store/cache",
+            "value": 1,
+            "range": "± 0",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "utilities/access-map",
+            "value": 4,
             "range": "± 0",
             "unit": "ns/iter"
           }
