@@ -1,3 +1,9 @@
+# Unreleased
+
+* Fix use-after-free when strong and weak pointers to the same allocation are stored in
+  different instances (#214). Adds `RefCnt::TAG` (defaults to 0, so existing implementations still
+  compile); storing a pointer with the tag bits set panics.
+
 # 1.9.3
 
 * `rwlock-strategy` feature: `RwLock<()>` as an explicit, opt-in strategy

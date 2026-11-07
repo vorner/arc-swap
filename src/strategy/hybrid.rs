@@ -44,7 +44,7 @@ impl<T: RefCnt> HybridProtection<T> {
         // we need to timeline it before the debt gets paid.
         let ptr = storage.load(SeqCst);
         // Try to get a debt slot. If not possible, fail.
-        let debt = node.new_fast(ptr as usize)?;
+        let debt = node.new_fast(Debt::encode::<T>(ptr))?;
 
         // Acquire to get the data.
         //
@@ -78,7 +78,7 @@ impl<T: RefCnt> HybridProtection<T> {
 
         // Try to replace the debt with our candidate. If it works, we get the debt slot to use. If
         // not, we get a replacement value, already protected and a debt to take care of.
-        match node.confirm_helping(gen, candidate as usize) {
+        match node.confirm_helping(gen, Debt::encode::<T>(candidate)) {
             Ok(debt) => {
                 // The fast path -> we got the debt confirmed alright.
                 Self::from_inner(unsafe { Self::new(candidate, Some(debt)).into_inner() })

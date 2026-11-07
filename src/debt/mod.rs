@@ -36,7 +36,21 @@ impl Debt {
     /// * It's an odd number, but the pointers we have are likely aligned at least to the word size,
     ///   because the data at the end of the `Arc` has the counters.
     /// * It's in the very first page where NULL lives, so it's not mapped.
+    ///
+    /// Encoded values can't be `3` either (that needs an address 1..=3, in the same page).
     pub(crate) const NONE: usize = 0b11;
+
+    /// The value stored in a debt slot for the given pointer.
+    ///
+    /// NULL stays untagged, because it carries no reference count of any kind.
+    #[inline]
+    pub(crate) fn encode<T: RefCnt>(ptr: *const T::Base) -> usize {
+        if ptr.is_null() {
+            0
+        } else {
+            ptr as usize | T::TAG
+        }
+    }
 }
 
 impl Default for Debt {
@@ -56,11 +70,13 @@ impl Debt {
     ///
     /// * It is possible that someone paid the debt and then someone else put a debt for the same
     ///   pointer in there. This is fine, as we'll just pay the debt for that someone else.
-    /// * This relies on the fact that the same pointer must point to the same object and
-    ///   specifically to the same type ‒ the caller provides the type, it's destructor, etc.
-    /// * It also relies on the fact the same thing is not stuffed both inside an `Arc` and `Rc` or
-    ///   something like that, but that sounds like a reasonable assumption. Someone storing it
-    ///   through `ArcSwap<T>` and someone else with `ArcSwapOption<T>` will work.
+    /// * This relies on the fact that the same pointer with the same `TAG` must point to the same
+    ///   object and specifically to the same type ‒ the caller provides the type, its destructor,
+    ///   etc.
+    /// * The tag lets `Arc` and `Weak` of the same object coexist. It also relies on the fact the
+    ///   same thing is not stuffed both inside an `Arc` and `Rc` or something like that, but that
+    ///   sounds like a reasonable assumption. Someone storing it through `ArcSwap<T>` and someone
+    ///   else with `ArcSwapOption<T>` will work.
     #[inline]
     pub(crate) fn pay<T: RefCnt>(&self, ptr: *const T::Base) -> bool {
         self.0
@@ -73,7 +89,7 @@ impl Debt {
             // fence.
             //
             // Unfortunately, we need SeqCst on the success
-            .compare_exchange(ptr as usize, Self::NONE, SeqCst, SeqCst)
+            .compare_exchange(Self::encode::<T>(ptr), Self::NONE, SeqCst, SeqCst)
             .is_ok()
     }
 

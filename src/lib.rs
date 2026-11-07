@@ -173,6 +173,7 @@ use crate::imports::Arc;
 use crate::access::{Access, Map};
 pub use crate::as_raw::AsRaw;
 pub use crate::cache::Cache;
+use crate::ref_cnt::check_tag;
 pub use crate::ref_cnt::RefCnt;
 use crate::strategy::hybrid::{DefaultConfig, HybridStrategy};
 use crate::strategy::sealed::Protected;
@@ -392,6 +393,7 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
 
     /// Constructs a new storage while customizing the protection strategy.
     pub fn with_strategy(val: T, strategy: S) -> Self {
+        check_tag(&val);
         // The AtomicPtr requires *mut in its interface. We are more like *const, so we cast it.
         // However, we always go back to *const right away when we get the pointer on the other
         // side, so it should be fine.
@@ -483,6 +485,7 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
 
     /// Exchanges the value inside this instance.
     pub fn swap(&self, new: T) -> T {
+        check_tag(&new);
         let new = T::into_ptr(new);
         // AcqRel needed to publish the target of the new pointer and get the target of the old
         // one.
@@ -516,6 +519,7 @@ impl<T: RefCnt, S: Strategy<T>> ArcSwapAny<T, S> {
         C: AsRaw<T::Base>,
         S: CaS<T>,
     {
+        check_tag(&new);
         let protected = unsafe { self.strategy.compare_and_swap(&self.ptr, current, new) };
         Guard { inner: protected }
     }

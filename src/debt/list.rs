@@ -263,8 +263,8 @@ impl LocalNode {
 
     /// Creates a new debt.
     ///
-    /// This stores the debt of the given pointer (untyped, casted into an usize) and returns a
-    /// reference to that slot, or gives up with `None` if all the slots are currently full.
+    /// This stores the debt of the given pointer (encoded by `Debt::encode`) and returns
+    /// a reference to that slot, or gives up with `None` if all the slots are currently full.
     #[inline]
     pub(crate) fn new_fast(&self, ptr: usize) -> Option<&'static Debt> {
         let node = &self.node.get().expect("LocalNode::with ensures it is set");
