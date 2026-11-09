@@ -1,3 +1,5 @@
+//! Regression test for #198.
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
@@ -28,7 +30,8 @@ impl SpinBarrier {
     }
 }
 
-fn main() {
+#[test]
+fn bug_198() {
     let arcswap = ArcSwap::<usize>::new(0.into());
     let _guards = std::array::from_fn::<_, 8, _>(|_| arcswap.load());
     let barrier = SpinBarrier::new(3);
