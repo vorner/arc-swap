@@ -1,4 +1,4 @@
-# Unreleased
+# 1.9.5
 
 * Fix `load` returning a value stored into a different instance (type confusion)
   after the address of a freed value is reused by another instance (#210). This
