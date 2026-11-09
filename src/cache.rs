@@ -150,13 +150,24 @@ where
         self.load_no_revalidate()
     }
 
+    /// Loads a new value if available
+    ///
+    /// This first checks if the cached value is up to date. This check is very cheap.
+    ///
+    /// If it is up to date, `None` is returned. If it is outdated, a load is done on the underlying shared storage. The newly loaded value is then
+    /// stored in the cache and returned as `Some`.
+    #[inline]
+    pub fn load_if_changed(&mut self) -> Option<&T> {
+        self.revalidate().then(move || self.load_no_revalidate())
+    }
+
     #[inline]
     fn load_no_revalidate(&self) -> &T {
         &self.cached
     }
 
     #[inline]
-    fn revalidate(&mut self) {
+    fn revalidate(&mut self) -> bool {
         let cached_ptr = RefCnt::as_ptr(&self.cached);
         // Node: Relaxed here is fine. We do not synchronize any data through this, we already have
         // it synchronized in self.cache. We just want to check if it changed, if it did, the
@@ -164,6 +175,9 @@ where
         let shared_ptr = self.arc_swap.ptr.load(Ordering::Relaxed);
         if cached_ptr != shared_ptr {
             self.cached = self.arc_swap.load_full();
+            true
+        } else {
+            false
         }
     }
 
@@ -285,9 +299,12 @@ mod tests {
 
         assert_eq!(42, **c1.load());
         assert_eq!(42, **c2.load());
-
+        assert_eq!(None, c1.load_if_changed());
+        assert_eq!(None, c2.load_if_changed());
         a.store(Arc::new(43));
         assert_eq!(42, **c1.load_no_revalidate());
+        assert_eq!(43, **c1.load_if_changed().unwrap());
+
         assert_eq!(43, **c1.load());
     }
 
