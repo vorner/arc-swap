@@ -1,3 +1,9 @@
+# Unreleased
+
+* Fix `load` returning a value stored into a different instance (type confusion)
+  after the address of a freed value is reused by another instance (#210). This
+  is the bug the `rwlock-strategy` feature of 1.9.3 worked around.
+
 # 1.9.4
 
 * Fix use-after-free when strong and weak pointers to the same allocation are

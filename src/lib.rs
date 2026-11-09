@@ -1337,4 +1337,37 @@ mod tests {
         let _guard = shared.load();
         assert_eq!(count, Arc::strong_count(&a));
     }
+
+    /// A confirmed debt is paid even if the `ArcSwap` moved (to another address) while the guard
+    /// lives.
+    #[test]
+    fn moved_storage_box() {
+        let x = Arc::new(42usize);
+        let keep = Arc::clone(&x);
+        let a = ArcSwap::from(x);
+        let g = a.load();
+        let b = Box::new(a);
+        b.store(Arc::new(0));
+        // The guard owns the paid reference.
+        assert_eq!(2, Arc::strong_count(&keep));
+        assert_eq!(42, **g);
+        drop(g);
+        assert_eq!(1, Arc::strong_count(&keep));
+    }
+
+    /// Same, moving the other way, by `into_inner` taking the `ArcSwap` by value.
+    #[test]
+    fn moved_storage_into_inner() {
+        let x = Arc::new(42usize);
+        let keep = Arc::clone(&x);
+        let b = Box::new(ArcSwap::from(x));
+        let g = ArcSwap::load(&b);
+        let inner = (*b).into_inner();
+        drop(inner);
+        // The guard owns the paid reference.
+        assert_eq!(2, Arc::strong_count(&keep));
+        assert_eq!(42, **g);
+        drop(g);
+        assert_eq!(1, Arc::strong_count(&keep));
+    }
 }
